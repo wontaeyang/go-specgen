@@ -1,0 +1,286 @@
+openapi: 3.1.0
+info:
+    title: Nested Schemas Example
+    description: |-
+        Demonstrates nested schema references and $ref generation.
+        When a schema field references another @schema type, go-specgen
+        automatically generates $ref references in the OpenAPI output.
+    version: 1.0.0
+paths:
+    /orders/{id}:
+        get:
+            summary: Get an order
+            description: Returns an order with customer, addresses, and items.
+            operationId: getOrder
+            parameters:
+                - name: id
+                  in: path
+                  description: Order ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "200":
+                    description: Order with nested schemas
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Order'
+    /organizations/{id}:
+        get:
+            summary: Get an organization
+            description: Returns an organization with teams, members, and contact.
+            operationId: getOrganization
+            parameters:
+                - name: id
+                  in: path
+                  description: Organization ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "200":
+                    description: Organization with deep nesting
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Organization'
+    /employees/{id}:
+        get:
+            summary: Get an employee
+            description: Returns an employee with manager and direct reports.
+            operationId: getEmployee
+            parameters:
+                - name: id
+                  in: path
+                  description: Employee ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "200":
+                    description: Employee with self-reference
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Employee'
+    /orders:
+        get:
+            summary: List orders
+            description: Returns an array of orders with nested schemas.
+            operationId: listOrders
+            responses:
+                "200":
+                    description: List of orders
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/Order'
+components:
+    schemas:
+        Member:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: Member ID
+                name:
+                    type: string
+                    description: Member name
+                role:
+                    type: string
+                    enum:
+                        - admin
+                        - member
+                        - viewer
+                    description: Member role
+            required:
+                - id
+                - name
+                - role
+        Team:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: Team ID
+                name:
+                    type: string
+                    description: Team name
+                lead:
+                    $ref: '#/components/schemas/Member'
+                members:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/Member'
+                    description: Team members
+            required:
+                - id
+                - name
+                - lead
+                - members
+        Address:
+            type: object
+            properties:
+                street:
+                    type: string
+                    description: Street address
+                city:
+                    type: string
+                    description: City name
+                state:
+                    type: string
+                    description: State or province
+                postal_code:
+                    type: string
+                    description: Postal code
+                country:
+                    type: string
+                    pattern: ^[A-Z]{2}$
+                    description: Country code
+            required:
+                - street
+                - city
+                - state
+                - postal_code
+                - country
+        User:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: User ID
+                email:
+                    type: string
+                    format: email
+                    description: User email
+                name:
+                    type: string
+                    description: User display name
+                home_address:
+                    $ref: '#/components/schemas/Address'
+                work_address:
+                    $ref: '#/components/schemas/Address'
+            required:
+                - id
+                - email
+                - name
+                - home_address
+        OrderItem:
+            type: object
+            properties:
+                product_id:
+                    type: string
+                    format: uuid
+                    description: Product ID
+                product_name:
+                    type: string
+                    description: Product name
+                quantity:
+                    type: integer
+                    minimum: 1
+                    description: Quantity ordered
+                unit_price_cents:
+                    type: integer
+                    minimum: 0
+                    description: Price per unit in cents
+            required:
+                - product_id
+                - product_name
+                - quantity
+                - unit_price_cents
+        Organization:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: Organization ID
+                name:
+                    type: string
+                    description: Organization name
+                headquarters:
+                    $ref: '#/components/schemas/Address'
+                teams:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/Team'
+                    description: Organization teams
+                primary_contact:
+                    $ref: '#/components/schemas/User'
+            required:
+                - id
+                - name
+                - headquarters
+                - teams
+                - primary_contact
+        Employee:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: Employee ID
+                name:
+                    type: string
+                    description: Employee name
+                title:
+                    type: string
+                    description: Employee title
+                manager:
+                    $ref: '#/components/schemas/Employee'
+                direct_reports:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/Employee'
+                    description: Direct reports
+            required:
+                - id
+                - name
+                - title
+        Order:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: Order ID
+                customer:
+                    $ref: '#/components/schemas/User'
+                shipping_address:
+                    $ref: '#/components/schemas/Address'
+                billing_address:
+                    $ref: '#/components/schemas/Address'
+                items:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/OrderItem'
+                    description: Order items (array of nested schema)
+                status:
+                    type: string
+                    enum:
+                        - pending
+                        - processing
+                        - shipped
+                        - delivered
+                    description: Order status
+                total_cents:
+                    type: integer
+                    minimum: 0
+                    description: Total in cents
+            required:
+                - id
+                - customer
+                - shipping_address
+                - billing_address
+                - items
+                - status
+                - total_cents

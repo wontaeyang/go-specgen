@@ -1,0 +1,202 @@
+openapi: 3.1.0
+info:
+    title: Block Syntax Example
+    description: |-
+        Demonstrates multi-line vs inline block syntax.
+        All block annotations support both formats. The key rule is that
+        nested blocks cannot appear within inline format - use multi-line instead.
+    version: 1.0.0
+paths:
+    /users/{id}:
+        get:
+            summary: Get user by ID
+            description: Retrieves a single user by their unique identifier.
+            parameters:
+                - name: id
+                  in: path
+                  description: User ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "200":
+                    description: User found successfully
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/User'
+                "404":
+                    description: User not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        put:
+            summary: Update user
+            parameters:
+                - name: id
+                  in: path
+                  description: User ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/User'
+                required: true
+            responses:
+                "404":
+                    description: User not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                "200":
+                    description: User updated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/User'
+                "400":
+                    description: |-
+                        Invalid input - check the error code for details.
+                        Common errors: INVALID_EMAIL, NAME_TOO_LONG
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        delete:
+            summary: Delete user
+            description: Permanently deletes a user account.
+            parameters:
+                - name: id
+                  in: path
+                  description: User ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "404":
+                    description: User not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                "204":
+                    description: User deleted
+    /users:
+        get:
+            summary: List all users
+            description: Retrieves a paginated list of users.
+            parameters:
+                - name: fields
+                  in: query
+                  description: 'Fields to include (comma-separated: id,email,name,bio)'
+                  required: true
+                  schema:
+                    type: array
+                    items:
+                        type: string
+                - name: include_deleted
+                  in: query
+                  description: Include deleted users
+                  required: true
+                  schema:
+                    type:
+                        - boolean
+                        - "null"
+                    default: false
+            responses:
+                "200":
+                    description: |-
+                        Successfully retrieved list of users.
+                        Pagination info is included in response headers.
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/User'
+        post:
+            summary: Create a new user
+            description: Creates a new user account.
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/User'
+                required: true
+            responses:
+                "409":
+                    description: User with this email already exists
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                "201":
+                    description: User created successfully
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/User'
+                "400":
+                    description: Invalid input data
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+components:
+    schemas:
+        Error:
+            type: object
+            properties:
+                code:
+                    type: string
+                    description: |-
+                        Error code identifying the type of error.
+                        See error codes documentation for possible values.
+                    example: INVALID_INPUT
+                message:
+                    type: string
+                    description: Human-readable error message
+                    example: The provided email address is invalid
+            required:
+                - code
+                - message
+            description: |-
+                Standard error response for all endpoints.
+                This format allows multi-line descriptions and is easier to read
+                when you have many child annotations.
+        User:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: User's unique identifier
+                email:
+                    type: string
+                    format: email
+                    description: User's email address
+                name:
+                    type: string
+                    maxLength: 100
+                    minLength: 1
+                    description: User's display name
+                created_at:
+                    type: string
+                    format: date-time
+                    description: Account creation timestamp
+                bio:
+                    type: string
+            required:
+                - id
+                - email
+                - name
+                - created_at
+            description: User account information

@@ -1,0 +1,124 @@
+openapi: 3.1.0
+info:
+    title: Tag Resolution Example
+    description: |-
+        Demonstrates how field names are resolved from struct tags.
+        For different field names per content type, use separate structs.
+    version: 1.0.0
+paths:
+    /users:
+        post:
+            summary: Create a user
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/CreateUserRequest'
+                required: true
+            responses:
+                "201":
+                    description: User created
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/User'
+    /users/{id}:
+        get:
+            summary: Get user by ID
+            parameters:
+                - name: id
+                  in: path
+                  description: User ID
+                  required: true
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: User found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/User'
+    /users/{id}/xml:
+        get:
+            summary: Get user by ID (XML)
+            parameters:
+                - name: id
+                  in: path
+                  description: User ID
+                  required: true
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: User found
+                    content:
+                        application/xml:
+                            schema:
+                                $ref: '#/components/schemas/XMLUser'
+components:
+    schemas:
+        User:
+            type: object
+            properties:
+                user_id:
+                    type: string
+                    description: User identifier
+                UserName:
+                    type: string
+                    description: User display name
+                email:
+                    type: string
+                    description: User email address
+                Age:
+                    type: integer
+                    description: User age
+            required:
+                - user_id
+                - UserName
+                - email
+                - Age
+        UserEdgeCases:
+            type: object
+            properties:
+                from_xml:
+                    type: string
+                    description: Falls back to xml tag
+                from_xml_omit:
+                    type: string
+                    description: Falls back to xml tag
+                NoXMLFallback:
+                    type: string
+                    description: Uses Go field name
+            required:
+                - from_xml
+        CreateUserRequest:
+            type: object
+            properties:
+                name:
+                    type: string
+                    minLength: 1
+                    description: User name
+                email:
+                    type: string
+                    format: email
+                    description: User email
+            required:
+                - name
+                - email
+        XMLUser:
+            type: object
+            properties:
+                UserID:
+                    type: string
+                    description: User identifier
+                UserName:
+                    type: string
+                    description: User display name
+                EmailAddress:
+                    type: string
+                    description: User email address
+            required:
+                - UserID
+                - UserName
+                - EmailAddress

@@ -1,0 +1,141 @@
+openapi: 3.1.0
+info:
+    title: Security Example
+    description: |-
+        Demonstrates various security scheme configurations.
+        This example shows Bearer JWT, Basic auth, and API key authentication.
+    version: 1.0.0
+paths:
+    /users/me:
+        get:
+            summary: Get current user
+            description: Returns the currently authenticated user. Uses default Bearer auth.
+            operationId: getCurrentUser
+            responses:
+                "200":
+                    description: Current user info
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/User'
+    /auth/login:
+        post:
+            summary: Login with basic auth
+            description: Authenticates using HTTP Basic authentication.
+            operationId: loginWithBasic
+            responses:
+                "200":
+                    description: Login successful
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/User'
+            security:
+                - basicAuth: []
+    /api/data:
+        get:
+            summary: Get data with API key (header)
+            description: Retrieves data using API key passed in X-API-Key header.
+            operationId: getWithApiKeyHeader
+            responses:
+                "200":
+                    description: Data retrieved
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/User'
+            security:
+                - apiKeyHeader: []
+    /api/query-auth:
+        get:
+            summary: Get data with API key (query)
+            description: Retrieves data using API key passed in query string.
+            operationId: getWithApiKeyQuery
+            responses:
+                "200":
+                    description: Data retrieved
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/User'
+            security:
+                - apiKeyQuery: []
+    /api/cookie-auth:
+        get:
+            summary: Get data with API key (cookie)
+            description: Retrieves data using API key passed in cookie.
+            operationId: getWithApiKeyCookie
+            responses:
+                "200":
+                    description: Data retrieved
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/User'
+            security:
+                - apiKeyCookie: []
+    /users:
+        get:
+            summary: List all users
+            description: Returns a list of users. Requires Bearer authentication.
+            operationId: listUsers
+            responses:
+                "200":
+                    description: List of users
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/User'
+components:
+    schemas:
+        User:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: User ID
+                email:
+                    type: string
+                    format: email
+                    description: User email
+                role:
+                    type: string
+                    enum:
+                        - admin
+                        - user
+                        - guest
+                    description: User role
+            required:
+                - id
+                - email
+                - role
+    securitySchemes:
+        apiKeyQuery:
+            type: apiKey
+            description: API key passed in query string
+            name: api_key
+            in: query
+        apiKeyCookie:
+            type: apiKey
+            description: API key passed in cookie
+            name: token
+            in: cookie
+        bearerAuth:
+            type: http
+            description: JWT Bearer token authentication
+            scheme: bearer
+            bearerFormat: JWT
+        basicAuth:
+            type: http
+            description: HTTP Basic authentication
+            scheme: basic
+        apiKeyHeader:
+            type: apiKey
+            description: API key passed in header
+            name: X-API-Key
+            in: header
+security:
+    - bearerAuth: []

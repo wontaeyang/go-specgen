@@ -1,0 +1,116 @@
+openapi: 3.1.0
+info:
+    title: Custom Types Example
+    description: Demonstrates field type resolution for custom types within schemas.
+    version: 1.0.0
+paths:
+    /user:
+        get:
+            summary: Get a user
+            operationId: getUser
+            responses:
+                "200":
+                    description: ""
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/User'
+components:
+    schemas:
+        Address:
+            type: object
+            properties:
+                street:
+                    type: string
+                city:
+                    type: string
+                country:
+                    type: string
+            required:
+                - street
+                - city
+                - country
+        User:
+            type: object
+            properties:
+                id:
+                    type: string
+                    description: User ID
+                status:
+                    type: integer
+                    description: Status code
+                balance:
+                    type: number
+                    format: double
+                    description: Account balance
+                labels:
+                    type: array
+                    items:
+                        type: string
+                    description: User tags
+                work_address:
+                    $ref: '#/components/schemas/Address'
+                all_addresses:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/Address'
+                    description: All addresses
+                address_book:
+                    type: object
+                    additionalProperties:
+                        $ref: '#/components/schemas/Address'
+                    description: Address book
+                inline_address:
+                    type: object
+                    properties:
+                        street:
+                            type: string
+                        city:
+                            type: string
+                    required:
+                        - street
+                        - city
+                location:
+                    type: object
+                    properties:
+                        name:
+                            type: string
+                        address:
+                            type: object
+                            properties:
+                                street:
+                                    type: string
+                                city:
+                                    type: string
+                                country:
+                                    type: string
+                            required:
+                                - street
+                                - city
+                                - country
+                        coordinates:
+                            type: object
+                            properties:
+                                lat:
+                                    type: number
+                                    format: double
+                                lng:
+                                    type: number
+                                    format: double
+                            required:
+                                - lat
+                                - lng
+                    required:
+                        - name
+                        - address
+                        - coordinates
+            required:
+                - id
+                - status
+                - balance
+                - labels
+                - work_address
+                - all_addresses
+                - address_book
+                - inline_address
+                - location

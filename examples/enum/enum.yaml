@@ -1,0 +1,195 @@
+openapi: 3.1.0
+info:
+    title: Enum Example
+    description: Demonstrates enum support for strings, integers, and arrays.
+    version: 1.0.0
+paths:
+    /tasks:
+        get:
+            summary: List tasks
+            description: List tasks with optional enum filters.
+            operationId: listTasks
+            parameters:
+                - name: status
+                  in: query
+                  description: Filter by status
+                  required: true
+                  schema:
+                    type:
+                        - string
+                        - "null"
+                    enum:
+                        - pending
+                        - in_progress
+                        - completed
+                        - cancelled
+                - name: priority
+                  in: query
+                  description: Filter by priority
+                  required: true
+                  schema:
+                    type:
+                        - integer
+                        - "null"
+                    enum:
+                        - 1
+                        - 2
+                        - 3
+                - name: categories
+                  in: query
+                  description: Filter by categories (can specify multiple)
+                  required: true
+                  schema:
+                    type: array
+                    items:
+                        type: string
+                        enum:
+                            - work
+                            - personal
+                            - health
+                            - finance
+                - name: sort
+                  in: query
+                  description: Sort order
+                  required: true
+                  schema:
+                    type:
+                        - string
+                        - "null"
+                    enum:
+                        - asc
+                        - desc
+                    default: asc
+            responses:
+                "200":
+                    description: List of tasks
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/Task'
+        post:
+            summary: Create a task
+            description: Create a new task with enum-constrained fields.
+            operationId: createTask
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/CreateTaskRequest'
+                required: true
+            responses:
+                "201":
+                    description: Task created
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Task'
+    /tasks/{id}:
+        get:
+            summary: Get a task
+            operationId: getTask
+            parameters:
+                - name: id
+                  in: path
+                  description: Task ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "200":
+                    description: Task found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Task'
+components:
+    schemas:
+        Task:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: Task ID
+                title:
+                    type: string
+                    description: Task title
+                status:
+                    type: string
+                    enum:
+                        - pending
+                        - in_progress
+                        - completed
+                        - cancelled
+                    description: Task status
+                priority:
+                    type: integer
+                    enum:
+                        - 1
+                        - 2
+                        - 3
+                    description: Priority level (1=low, 2=medium, 3=high)
+                categories:
+                    type: array
+                    items:
+                        type: string
+                        enum:
+                            - work
+                            - personal
+                            - health
+                            - finance
+                    description: Allowed categories for this task
+                subtask_priorities:
+                    type: array
+                    items:
+                        type: integer
+                        enum:
+                            - 1
+                            - 2
+                            - 3
+                    description: Allowed priority levels for subtasks
+            required:
+                - id
+                - title
+                - status
+                - priority
+                - categories
+                - subtask_priorities
+        CreateTaskRequest:
+            type: object
+            properties:
+                title:
+                    type: string
+                    description: Task title
+                status:
+                    type: string
+                    enum:
+                        - pending
+                        - in_progress
+                    description: Initial status
+                    default: pending
+                priority:
+                    type: integer
+                    enum:
+                        - 1
+                        - 2
+                        - 3
+                    description: Priority level
+                    default: 2
+                categories:
+                    type: array
+                    items:
+                        type: string
+                        enum:
+                            - work
+                            - personal
+                            - health
+                            - finance
+                    description: Task categories
+            required:
+                - title
+                - status
+                - priority

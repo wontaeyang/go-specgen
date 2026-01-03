@@ -1,0 +1,191 @@
+openapi: 3.1.0
+info:
+    title: Generics Example
+    description: |-
+        Demonstrates Go generics for type-safe response wrappers.
+        Generic templates are NOT emitted to components/schemas.
+        Type aliases that instantiate generics ARE emitted.
+    version: 1.0.0
+paths:
+    /users:
+        get:
+            summary: List users
+            description: Returns users wrapped in the type-safe ListResponse[User] wrapper.
+            operationId: listUsers
+            responses:
+                "200":
+                    description: List of users
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/UserListResponse'
+    /posts/{id}:
+        get:
+            summary: Get a post
+            description: Returns a post wrapped in the type-safe Response[Post] wrapper.
+            operationId: getPost
+            parameters:
+                - name: id
+                  in: path
+                  description: Post ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "200":
+                    description: Post found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/PostResponse'
+    /posts:
+        get:
+            summary: List posts
+            description: Returns posts wrapped in the type-safe ListResponse[Post] wrapper.
+            operationId: listPosts
+            responses:
+                "200":
+                    description: List of posts
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/PostListResponse'
+    /users/{id}:
+        get:
+            summary: Get a user
+            description: Returns a user wrapped in the type-safe Response[User] wrapper.
+            operationId: getUser
+            parameters:
+                - name: id
+                  in: path
+                  description: User ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "200":
+                    description: User found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/UserResponse'
+components:
+    schemas:
+        UserResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: Whether the request was successful
+                data:
+                    $ref: '#/components/schemas/User'
+                error:
+                    type:
+                        - string
+                        - "null"
+                    description: Error message if unsuccessful
+            required:
+                - success
+                - data
+        PostResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: Whether the request was successful
+                data:
+                    $ref: '#/components/schemas/Post'
+                error:
+                    type:
+                        - string
+                        - "null"
+                    description: Error message if unsuccessful
+            required:
+                - success
+                - data
+        PostListResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: Whether the request was successful
+                items:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/Post'
+                    description: List of items
+                total:
+                    type: integer
+                    description: Total count of items
+                error:
+                    type:
+                        - string
+                        - "null"
+                    description: Error message if unsuccessful
+            required:
+                - success
+                - items
+                - total
+        UserListResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: Whether the request was successful
+                items:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/User'
+                    description: List of items
+                total:
+                    type: integer
+                    description: Total count of items
+                error:
+                    type:
+                        - string
+                        - "null"
+                    description: Error message if unsuccessful
+            required:
+                - success
+                - items
+                - total
+        User:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: User ID
+                email:
+                    type: string
+                    format: email
+                    description: User email
+                name:
+                    type: string
+                    description: User display name
+            required:
+                - id
+                - email
+                - name
+        Post:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: Post ID
+                title:
+                    type: string
+                    description: Post title
+                content:
+                    type: string
+                    description: Post content
+                author:
+                    $ref: '#/components/schemas/User'
+            required:
+                - id
+                - title
+                - content
+                - author
