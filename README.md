@@ -103,7 +103,13 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 Add to your project's `go.mod`:
 
 ```
-tool github.com/wontaeyang/go-specgen/cmd/specgen
+tool github.com/wontaeyang/go-specgen/cmd/specgen@latest
+```
+
+Or pin to a specific version:
+
+```
+tool github.com/wontaeyang/go-specgen/cmd/specgen@v1.0.0
 ```
 
 Then run:
