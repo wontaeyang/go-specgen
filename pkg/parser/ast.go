@@ -391,6 +391,36 @@ func formatTypeExpr(expr ast.Expr) string {
 	}
 }
 
+// collectGenDecls collects *ast.GenDecl from the top-level statements of a
+// block and from any FuncLit returned via a ReturnStmt. This lets us find
+// inline struct annotations inside handler-factory closures.
+func collectGenDecls(body *ast.BlockStmt) []*ast.GenDecl {
+	var decls []*ast.GenDecl
+
+	for _, stmt := range body.List {
+		switch s := stmt.(type) {
+		case *ast.DeclStmt:
+			if gd, ok := s.Decl.(*ast.GenDecl); ok {
+				decls = append(decls, gd)
+			}
+		case *ast.ReturnStmt:
+			for _, result := range s.Results {
+				if fl, ok := result.(*ast.FuncLit); ok && fl.Body != nil {
+					for _, inner := range fl.Body.List {
+						if ds, ok := inner.(*ast.DeclStmt); ok {
+							if gd, ok := ds.Decl.(*ast.GenDecl); ok {
+								decls = append(decls, gd)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return decls
+}
+
 // extractFuncInlines extracts inline struct declarations from a function body
 // It looks for var/type declarations with @query, @path, @header, @cookie, @request, @response annotations
 func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.BlockStmt) *FuncInlineInfo {
@@ -403,13 +433,8 @@ func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.Bl
 	}
 	hasInlines := false
 
-	for _, stmt := range body.List {
-		decl, ok := stmt.(*ast.DeclStmt)
-		if !ok {
-			continue
-		}
-		genDecl, ok := decl.Decl.(*ast.GenDecl)
-		if !ok || genDecl.Doc == nil {
+	for _, genDecl := range collectGenDecls(body) {
+		if genDecl.Doc == nil {
 			continue
 		}
 

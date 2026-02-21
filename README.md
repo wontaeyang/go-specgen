@@ -263,6 +263,29 @@ func ListUsers(w http.ResponseWriter, r *http.Request) {
 - Inlined in spec (not added to `components/schemas`)
 - Explicit references in `@endpoint` block override auto-discovery
 
+**Handler factory (closure) pattern:**
+
+Inline structs also work inside handler factories that return a closure. Annotations in the outer function body and inside the returned `func` literal are both discovered:
+
+```go
+// @endpoint POST /greet {
+//   @summary Greet a user
+// }
+func HandleGreet() http.HandlerFunc {
+    // @request
+    type request struct {
+        Name string `json:"name"`
+    }
+
+    return func(w http.ResponseWriter, r *http.Request) {
+        // @response 200
+        type response struct {
+            Greeting string `json:"greeting"`
+        }
+    }
+}
+```
+
 ### Response Wrappers
 
 **Using @bind:**
@@ -470,6 +493,7 @@ See the [examples/](examples/) directory for complete working examples:
 - Request/response bodies
 - Security schemes
 - Inline structs
+- Closure handler factories
 - Response wrappers
 - Generics
 

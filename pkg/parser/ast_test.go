@@ -369,3 +369,44 @@ func TestExtractFuncInlines(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractFuncInlines_Closure(t *testing.T) {
+	comments, err := ExtractComments("../../examples/closure")
+	if err != nil {
+		t.Fatalf("ExtractComments() error = %v", err)
+	}
+
+	inlines := comments.FuncInlines["HandleGreet"]
+	if inlines == nil {
+		t.Fatal("HandleGreet should have inline declarations")
+	}
+
+	// @request is in the outer function body
+	if inlines.Request == nil {
+		t.Fatal("HandleGreet should have @request inline")
+	}
+	if inlines.Request.Annotation != "request" {
+		t.Errorf("Request.Annotation = %q, want %q", inlines.Request.Annotation, "request")
+	}
+	if inlines.Request.VarName != "request" {
+		t.Errorf("Request.VarName = %q, want %q", inlines.Request.VarName, "request")
+	}
+	if inlines.Request.FieldComments["Name"] == nil {
+		t.Error("Request should have Name field comment")
+	}
+
+	// @response 200 is inside the returned closure
+	resp := inlines.Responses["200"]
+	if resp == nil {
+		t.Fatal("HandleGreet should have @response 200 inline from returned closure")
+	}
+	if resp.StatusCode != "200" {
+		t.Errorf("Response.StatusCode = %q, want %q", resp.StatusCode, "200")
+	}
+	if resp.VarName != "response" {
+		t.Errorf("Response.VarName = %q, want %q", resp.VarName, "response")
+	}
+	if resp.FieldComments["Greeting"] == nil {
+		t.Error("Response should have Greeting field comment")
+	}
+}

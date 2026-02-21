@@ -1,0 +1,54 @@
+openapi: 3.1.0
+info:
+    title: Closure Handler Example
+    description: Demonstrates handler factory pattern with inline structs.
+    version: 1.0.0
+paths:
+    /greet:
+        post:
+            summary: Greet a user
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                name:
+                                    type: string
+                                    description: Name of the person to greet
+                            required:
+                                - name
+                required: true
+            responses:
+                "200":
+                    description: Response for status 200
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    greeting:
+                                        type: string
+                                        description: Greeting message
+                                required:
+                                    - greeting
+components:
+    schemas:
+        User:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: User ID
+                name:
+                    type: string
+                    description: User name
+                email:
+                    type: string
+                    format: email
+                    description: User email
+            required:
+                - id
+                - name
+                - email
