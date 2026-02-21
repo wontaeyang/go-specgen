@@ -58,7 +58,7 @@ type NestedPath struct {
 // @query
 type SearchQuery struct {
 	// @field { @description Search query string @minLength 1 @maxLength 100 }
-	Q string `query:"q"`
+	Q string `query:"q,required"`
 
 	// @field { @description Maximum results @minimum 1 @maximum 100 @default 20 }
 	Limit *int `query:"limit"`

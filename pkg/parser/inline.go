@@ -39,7 +39,7 @@ func IsInlineFormat(lines []string) bool {
 // Note: All block annotations support inline format, but nested blocks are not allowed.
 func ParseInlineAnnotation(line, annotationName string, node *schema.SchemaNode) (*ParsedAnnotation, error) {
 	// Validate no nested braces - inline blocks cannot contain other blocks
-	if err := schema.ValidateNoNestedBraces(line); err != nil {
+	if err := validateNoNestedBraces(line); err != nil {
 		return nil, err
 	}
 
@@ -156,6 +156,38 @@ func parseInlineChildren(content string, parentNode *schema.SchemaNode, result *
 			}
 			result.Children[annotationName] = parsed
 		}
+	}
+
+	return nil
+}
+
+// validateNoNestedBraces ensures inline content doesn't have nested braces.
+// Escaped braces (\{ and \}) are ignored and don't count as nesting.
+func validateNoNestedBraces(content string) error {
+	depth := 0
+	i := 0
+	for i < len(content) {
+		// Skip escape sequences: \{, \}, \@, \\
+		if i+1 < len(content) && content[i] == '\\' {
+			next := content[i+1]
+			if next == '{' || next == '}' || next == '@' || next == '\\' {
+				i += 2
+				continue
+			}
+		}
+		if content[i] == '{' {
+			depth++
+			if depth > 1 {
+				return fmt.Errorf("nested blocks cannot be inlined, use multi-line format")
+			}
+		} else if content[i] == '}' {
+			depth--
+		}
+		i++
+	}
+
+	if depth != 0 {
+		return fmt.Errorf("unbalanced braces in inline content")
 	}
 
 	return nil

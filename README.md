@@ -207,13 +207,22 @@ type Tags []string      // -> type: array, items: string
 
 ### Required vs Optional
 
-Determined by Go types, not annotations:
+**Schema fields** — determined by Go types:
 
 | Type | Required | Nullable |
 |------|----------|----------|
 | `string` | Yes | No |
 | `*string` | No | Yes |
 | `string` with `omitempty` | No | No |
+
+**Parameter fields** — determined by parameter type:
+
+| Parameter type | Default | Required when |
+|----------------|---------|---------------|
+| `path` | Always required | Always |
+| `query` | Optional | Tag contains `,required` (e.g., `query:"q,required"`) |
+| `header` | Optional | Tag contains `,required` |
+| `cookie` | Optional | Tag contains `,required` |
 
 ### Schema References
 
@@ -559,13 +568,13 @@ Only `@description` supports multi-line values:
 
 ### Parameter Rules
 
-**Path (`@path`):** All fields required, simple types only, no arrays/objects.
+**Path (`@path`):** Always required, simple types only, no arrays/objects.
 
-**Query (`@query`):** Pointers for optional, arrays allowed for repeated params.
+**Query (`@query`):** Optional by default, use `,required` tag to mark required (e.g., `query:"q,required"`). Arrays allowed for repeated params.
 
-**Header (`@header`):** No arrays/objects. Can be request or response headers.
+**Header (`@header`):** Optional by default, use `,required` tag to mark required. No arrays/objects.
 
-**Cookie (`@cookie`):** Pointers for optional, no arrays/objects.
+**Cookie (`@cookie`):** Optional by default, use `,required` tag to mark required. No arrays/objects.
 
 ### Limitations
 

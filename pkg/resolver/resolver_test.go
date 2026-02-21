@@ -322,6 +322,100 @@ func TestResolver_ResolveParameter(t *testing.T) {
 	}
 }
 
+func TestResolveParamRequired(t *testing.T) {
+	tests := []struct {
+		name      string
+		tag       string
+		paramType string
+		want      bool
+	}{
+		// Path parameters are always required
+		{
+			name:      "path param without any flags",
+			tag:       `path:"id"`,
+			paramType: "path",
+			want:      true,
+		},
+		{
+			name:      "path param with omitempty is still required",
+			tag:       `path:"id,omitempty"`,
+			paramType: "path",
+			want:      true,
+		},
+
+		// Query parameters are optional by default
+		{
+			name:      "query param without flags is optional",
+			tag:       `query:"q"`,
+			paramType: "query",
+			want:      false,
+		},
+		{
+			name:      "query param with required flag is required",
+			tag:       `query:"q,required"`,
+			paramType: "query",
+			want:      true,
+		},
+		{
+			name:      "query param with omitempty is optional",
+			tag:       `query:"q,omitempty"`,
+			paramType: "query",
+			want:      false,
+		},
+
+		// Header parameters are optional by default
+		{
+			name:      "header param without flags is optional",
+			tag:       `header:"X-Request-ID"`,
+			paramType: "header",
+			want:      false,
+		},
+		{
+			name:      "header param with required flag is required",
+			tag:       `header:"X-Request-ID,required"`,
+			paramType: "header",
+			want:      true,
+		},
+
+		// Cookie parameters are optional by default
+		{
+			name:      "cookie param without flags is optional",
+			tag:       `cookie:"session_id"`,
+			paramType: "cookie",
+			want:      false,
+		},
+		{
+			name:      "cookie param with required flag is required",
+			tag:       `cookie:"session_id,required"`,
+			paramType: "cookie",
+			want:      true,
+		},
+
+		// Default (schema/json) uses omitempty logic
+		{
+			name:      "json field without omitempty is required",
+			tag:       `json:"name"`,
+			paramType: "json",
+			want:      true,
+		},
+		{
+			name:      "json field with omitempty is optional",
+			tag:       `json:"name,omitempty"`,
+			paramType: "json",
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveParamRequired(tt.tag, tt.paramType)
+			if got != tt.want {
+				t.Errorf("resolveParamRequired(%q, %q) = %v, want %v", tt.tag, tt.paramType, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolver_ResolveEndpoint(t *testing.T) {
 	// Parse the test package first
 	p := parser.NewParser("../parser/testdata")
@@ -746,6 +840,71 @@ func TestContentTypePrecedence(t *testing.T) {
 				if resp.ContentType != tt.expectedResponse {
 					t.Errorf("Response.ContentType = %q, want %q", resp.ContentType, tt.expectedResponse)
 				}
+			}
+		})
+	}
+}
+
+func TestResolver_PointerImpliesNotRequired(t *testing.T) {
+	// Parse the test package
+	p := parser.NewParser("../parser/testdata")
+	parsed, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Failed to parse package: %v", err)
+	}
+
+	// Create resolver
+	resolver, err := NewResolver("../parser/testdata", nil)
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+
+	// Get FieldRequiredTest schema
+	schema, ok := parsed.Schemas["FieldRequiredTest"]
+	if !ok {
+		t.Fatal("FieldRequiredTest schema not found in parsed package")
+	}
+
+	// Build schema names map
+	schemaNames := make(map[string]bool)
+	for name := range parsed.Schemas {
+		schemaNames[name] = true
+	}
+
+	// Resolve it
+	resolved, err := resolver.resolveSchema(schema, schemaNames)
+	if err != nil {
+		t.Fatalf("resolveSchema() error = %v", err)
+	}
+
+	// Build field lookup
+	fields := make(map[string]*ResolvedField)
+	for _, f := range resolved.Fields {
+		fields[f.Name] = f
+	}
+
+	tests := []struct {
+		fieldName    string
+		wantRequired bool
+		wantNullable bool
+	}{
+		{"value", true, false},          // string: required, not nullable
+		{"value_ptr", false, true},      // *string: not required, nullable
+		{"value_omit", false, false},    // string,omitempty: not required, not nullable
+		{"value_ptr_omit", false, true}, // *string,omitempty: not required, nullable
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.fieldName, func(t *testing.T) {
+			f, ok := fields[tt.fieldName]
+			if !ok {
+				t.Fatalf("field %q not found", tt.fieldName)
+			}
+			if f.Required != tt.wantRequired {
+				t.Errorf("field %q Required = %v, want %v", tt.fieldName, f.Required, tt.wantRequired)
+			}
+			if f.Nullable != tt.wantNullable {
+				t.Errorf("field %q Nullable = %v, want %v", tt.fieldName, f.Nullable, tt.wantNullable)
 			}
 		})
 	}

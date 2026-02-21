@@ -832,49 +832,6 @@ func TestGenerator_GenerateInlineWrappedSchema_NoBind(t *testing.T) {
 	}
 }
 
-func TestConvertEnumValues(t *testing.T) {
-	tests := []struct {
-		name        string
-		values      []string
-		openAPIType string
-		want        []any
-	}{
-		{
-			name:        "string enum",
-			values:      []string{"active", "pending", "done"},
-			openAPIType: "string",
-			want:        []any{"active", "pending", "done"},
-		},
-		{
-			name:        "integer enum",
-			values:      []string{"1", "2", "3"},
-			openAPIType: "integer",
-			want:        []any{int64(1), int64(2), int64(3)},
-		},
-		{
-			name:        "integer enum with invalid value",
-			values:      []string{"1", "invalid", "3"},
-			openAPIType: "integer",
-			want:        []any{int64(1), "invalid", int64(3)},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := convertEnumValues(tt.values, tt.openAPIType)
-			if len(got) != len(tt.want) {
-				t.Errorf("convertEnumValues() returned %d values, want %d", len(got), len(tt.want))
-				return
-			}
-			for i, v := range got {
-				if v != tt.want[i] {
-					t.Errorf("convertEnumValues()[%d] = %v (%T), want %v (%T)", i, v, v, tt.want[i], tt.want[i])
-				}
-			}
-		})
-	}
-}
-
 func TestGenerator_GenerateFieldSchema_ArrayEnum(t *testing.T) {
 	gen := NewGenerator("3.0")
 

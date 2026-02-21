@@ -4,196 +4,6 @@ info:
     description: 'Demonstrates all parameter types: path, query, header, and cookie.'
     version: 1.0.0
 paths:
-    /resources/{id}:
-        get:
-            summary: Get a resource by ID
-            description: Retrieves a single resource using path and header parameters.
-            operationId: getResource
-            parameters:
-                - name: id
-                  in: path
-                  description: Resource ID
-                  required: true
-                  schema:
-                    type: string
-                    format: uuid
-                - name: X-Request-ID
-                  in: header
-                  description: Unique request ID for tracing
-                  required: true
-                  schema:
-                    type: string
-                    format: uuid
-                - name: X-API-Version
-                  in: header
-                  description: API version to use
-                  required: true
-                  schema:
-                    type:
-                        - string
-                        - "null"
-                    default: v1
-                - name: X-Correlation-ID
-                  in: header
-                  description: Correlation ID for distributed tracing
-                  required: true
-                  schema:
-                    type:
-                        - string
-                        - "null"
-            responses:
-                "200":
-                    description: Resource found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/Resource'
-    /resources:
-        get:
-            summary: Search resources
-            description: Search and filter resources with various query parameters.
-            operationId: searchResources
-            parameters:
-                - name: q
-                  in: query
-                  description: Search query string
-                  required: true
-                  schema:
-                    type: string
-                    maxLength: 100
-                    minLength: 1
-                - name: limit
-                  in: query
-                  description: Maximum results
-                  required: true
-                  schema:
-                    type:
-                        - integer
-                        - "null"
-                    maximum: 100
-                    minimum: 1
-                    default: 20
-                - name: offset
-                  in: query
-                  description: Page offset
-                  required: true
-                  schema:
-                    type:
-                        - integer
-                        - "null"
-                    minimum: 0
-                    default: 0
-                - name: sort
-                  in: query
-                  description: Sort order
-                  required: true
-                  schema:
-                    type:
-                        - string
-                        - "null"
-                    enum:
-                        - asc
-                        - desc
-                    default: asc
-                - name: tags
-                  in: query
-                  description: Filter by tags (can specify multiple)
-                  required: true
-                  schema:
-                    type: array
-                    items:
-                        type: string
-                - name: include_deleted
-                  in: query
-                  description: Include deleted items
-                  required: true
-                  schema:
-                    type:
-                        - boolean
-                        - "null"
-                - name: status
-                  in: query
-                  description: Filter by status
-                  required: true
-                  schema:
-                    type:
-                        - string
-                        - "null"
-                    enum:
-                        - active
-                        - inactive
-                        - pending
-                - name: type
-                  in: query
-                  description: Filter by type
-                  required: true
-                  schema:
-                    type:
-                        - string
-                        - "null"
-                    enum:
-                        - a
-                        - b
-                        - c
-                - name: created_after
-                  in: query
-                  description: Filter by creation date (ISO 8601)
-                  required: true
-                  schema:
-                    type:
-                        - string
-                        - "null"
-                    format: date
-                - name: ids
-                  in: query
-                  description: Filter by IDs (can specify multiple)
-                  required: true
-                  schema:
-                    type: array
-                    items:
-                        type: string
-                    format: uuid
-            responses:
-                "200":
-                    description: Search results
-                    content:
-                        application/json:
-                            schema:
-                                type: array
-                                items:
-                                    $ref: '#/components/schemas/Resource'
-        post:
-            summary: Create a resource
-            description: Creates a resource with idempotency and session tracking.
-            operationId: createResource
-            parameters:
-                - name: X-Idempotency-Key
-                  in: header
-                  description: Idempotency key for safe retries
-                  required: true
-                  schema:
-                    type: string
-                    format: uuid
-                - name: session_id
-                  in: cookie
-                  description: Session identifier
-                  required: true
-                  schema:
-                    type: string
-                    format: uuid
-            requestBody:
-                content:
-                    application/json:
-                        schema:
-                            $ref: '#/components/schemas/Resource'
-                required: true
-            responses:
-                "201":
-                    description: Resource created
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/Resource'
     /orgs/{orgId}/projects/{projectId}/resources/{resourceId}:
         get:
             summary: Get a nested resource
@@ -237,7 +47,7 @@ paths:
                 - name: theme
                   in: cookie
                   description: User's preferred theme
-                  required: true
+                  required: false
                   schema:
                     type:
                         - string
@@ -249,7 +59,7 @@ paths:
                 - name: lang
                   in: cookie
                   description: User's preferred language
-                  required: true
+                  required: false
                   schema:
                     type:
                         - string
@@ -258,6 +68,196 @@ paths:
             responses:
                 "200":
                     description: Preferences retrieved
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Resource'
+    /resources:
+        get:
+            summary: Search resources
+            description: Search and filter resources with various query parameters.
+            operationId: searchResources
+            parameters:
+                - name: q
+                  in: query
+                  description: Search query string
+                  required: true
+                  schema:
+                    type: string
+                    maxLength: 100
+                    minLength: 1
+                - name: limit
+                  in: query
+                  description: Maximum results
+                  required: false
+                  schema:
+                    type:
+                        - integer
+                        - "null"
+                    maximum: 100
+                    minimum: 1
+                    default: 20
+                - name: offset
+                  in: query
+                  description: Page offset
+                  required: false
+                  schema:
+                    type:
+                        - integer
+                        - "null"
+                    minimum: 0
+                    default: 0
+                - name: sort
+                  in: query
+                  description: Sort order
+                  required: false
+                  schema:
+                    type:
+                        - string
+                        - "null"
+                    enum:
+                        - asc
+                        - desc
+                    default: asc
+                - name: tags
+                  in: query
+                  description: Filter by tags (can specify multiple)
+                  required: false
+                  schema:
+                    type: array
+                    items:
+                        type: string
+                - name: include_deleted
+                  in: query
+                  description: Include deleted items
+                  required: false
+                  schema:
+                    type:
+                        - boolean
+                        - "null"
+                - name: status
+                  in: query
+                  description: Filter by status
+                  required: false
+                  schema:
+                    type:
+                        - string
+                        - "null"
+                    enum:
+                        - active
+                        - inactive
+                        - pending
+                - name: type
+                  in: query
+                  description: Filter by type
+                  required: false
+                  schema:
+                    type:
+                        - string
+                        - "null"
+                    enum:
+                        - a
+                        - b
+                        - c
+                - name: created_after
+                  in: query
+                  description: Filter by creation date (ISO 8601)
+                  required: false
+                  schema:
+                    type:
+                        - string
+                        - "null"
+                    format: date
+                - name: ids
+                  in: query
+                  description: Filter by IDs (can specify multiple)
+                  required: false
+                  schema:
+                    type: array
+                    items:
+                        type: string
+                    format: uuid
+            responses:
+                "200":
+                    description: Search results
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/Resource'
+        post:
+            summary: Create a resource
+            description: Creates a resource with idempotency and session tracking.
+            operationId: createResource
+            parameters:
+                - name: X-Idempotency-Key
+                  in: header
+                  description: Idempotency key for safe retries
+                  required: false
+                  schema:
+                    type: string
+                    format: uuid
+                - name: session_id
+                  in: cookie
+                  description: Session identifier
+                  required: false
+                  schema:
+                    type: string
+                    format: uuid
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/Resource'
+                required: true
+            responses:
+                "201":
+                    description: Resource created
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Resource'
+    /resources/{id}:
+        get:
+            summary: Get a resource by ID
+            description: Retrieves a single resource using path and header parameters.
+            operationId: getResource
+            parameters:
+                - name: id
+                  in: path
+                  description: Resource ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+                - name: X-Request-ID
+                  in: header
+                  description: Unique request ID for tracing
+                  required: false
+                  schema:
+                    type: string
+                    format: uuid
+                - name: X-API-Version
+                  in: header
+                  description: API version to use
+                  required: false
+                  schema:
+                    type:
+                        - string
+                        - "null"
+                    default: v1
+                - name: X-Correlation-ID
+                  in: header
+                  description: Correlation ID for distributed tracing
+                  required: false
+                  schema:
+                    type:
+                        - string
+                        - "null"
+            responses:
+                "200":
+                    description: Resource found
                     content:
                         application/json:
                             schema:

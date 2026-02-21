@@ -374,6 +374,30 @@ func TestDetectInlineAnnotation(t *testing.T) {
 	}
 }
 
+func TestValidateNoNestedBraces(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		wantErr bool
+	}{
+		{"no braces", "simple content", false},
+		{"single level braces", "content { inner }", false},
+		{"nested braces", "content { outer { inner } }", true},
+		{"unbalanced opening", "content { { inner }", true},
+		{"unbalanced closing", "content } }", true},
+		{"multiple single level", "{ one } and { two }", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateNoNestedBraces(tt.content)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateNoNestedBraces(%q) error = %v, wantErr %v", tt.content, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestParseInlineAnnotation_EscapedCharacters(t *testing.T) {
 	fieldNode := schema.AnnotationSchema.GetChild("@field")
 
