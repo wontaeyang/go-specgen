@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/types"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/wontaeyang/go-specgen/pkg/parser"
@@ -421,51 +422,12 @@ func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser
 		resolved.ItemsType = typeInfo.ItemsType
 		resolved.Nullable = typeInfo.IsNullable
 		resolved.IsAnyValue = typeInfo.IsAnyValue
+		if typeInfo.IsNullable {
+			resolved.Required = false
+		}
 	}
 
-	// Apply annotation overrides if present
-	if annotation != nil {
-		if annotation.Description != "" {
-			resolved.Description = annotation.Description
-		}
-		if annotation.Format != "" {
-			resolved.Format = annotation.Format
-		}
-		if annotation.Example != "" {
-			resolved.Example = annotation.Example
-		}
-		if annotation.Default != "" {
-			resolved.Default = annotation.Default
-		}
-		if annotation.Pattern != "" {
-			resolved.Pattern = annotation.Pattern
-		}
-		if len(annotation.Enum) > 0 {
-			resolved.Enum = annotation.Enum
-		}
-		if annotation.MinLength != nil {
-			resolved.MinLength = annotation.MinLength
-		}
-		if annotation.MaxLength != nil {
-			resolved.MaxLength = annotation.MaxLength
-		}
-		if annotation.MinItems != nil {
-			resolved.MinItems = annotation.MinItems
-		}
-		if annotation.MaxItems != nil {
-			resolved.MaxItems = annotation.MaxItems
-		}
-		if annotation.UniqueItems {
-			resolved.UniqueItems = true
-		}
-		if annotation.Minimum != nil {
-			resolved.Minimum = annotation.Minimum
-		}
-		if annotation.Maximum != nil {
-			resolved.Maximum = annotation.Maximum
-		}
-		resolved.Deprecated = annotation.Deprecated
-	}
+	applyAnnotationOverrides(resolved, annotation)
 
 	return resolved, nil
 }
@@ -540,6 +502,9 @@ func (r *Resolver) resolveAnonymousStruct(t types.Type, schemaNames map[string]b
 			resolvedField.ItemsType = typeInfo.ItemsType
 			resolvedField.Nullable = typeInfo.IsNullable
 			resolvedField.IsAnyValue = typeInfo.IsAnyValue
+			if typeInfo.IsNullable {
+				resolvedField.Required = false
+			}
 		}
 
 		fields = append(fields, resolvedField)
@@ -632,6 +597,20 @@ func (r *Resolver) checkUnresolvedStruct(t types.Type, resolved *ResolvedField, 
 	}
 }
 
+// resolveParamRequired determines if a parameter field is required based on the parameter type.
+// Path parameters are always required. Query, header, and cookie parameters are optional by default
+// and only required if the tag contains ",required". Schema/JSON fields use the existing omitempty logic.
+func resolveParamRequired(tag string, paramType string) bool {
+	switch paramType {
+	case "path":
+		return true
+	case "query", "header", "cookie":
+		return strings.Contains(tag, ",required")
+	default:
+		return !strings.Contains(tag, "omitempty")
+	}
+}
+
 // resolveFieldWithParamType resolves a field for a parameter with the appropriate struct tag
 // Returns nil, nil if the field should be skipped (e.g., json:"-" for schema fields or unexported fields)
 func (r *Resolver) resolveFieldWithParamType(field *types.Var, tag string, annotation *parser.Field, paramType string) (*ResolvedField, error) {
@@ -671,8 +650,8 @@ func (r *Resolver) resolveFieldWithParamType(field *types.Var, tag string, annot
 		GoType: field.Type().String(),
 	}
 
-	// Check if field is required/nullable from tag
-	resolved.Required = !strings.Contains(tag, "omitempty")
+	// Check if field is required based on parameter type
+	resolved.Required = resolveParamRequired(tag, paramType)
 
 	// Resolve Go type to OpenAPI type
 	typeInfo := r.resolveType(field.Type())
@@ -683,56 +662,61 @@ func (r *Resolver) resolveFieldWithParamType(field *types.Var, tag string, annot
 	resolved.Nullable = typeInfo.IsNullable
 	resolved.IsAnyValue = typeInfo.IsAnyValue
 
-	// Apply annotation overrides if present
-	if annotation != nil {
-		if annotation.Description != "" {
-			resolved.Description = annotation.Description
-		}
-		if annotation.Format != "" {
-			resolved.Format = annotation.Format
-		}
-		if annotation.Example != "" {
-			resolved.Example = annotation.Example
-		}
-		if annotation.Default != "" {
-			resolved.Default = annotation.Default
-		}
-		if annotation.Pattern != "" {
-			resolved.Pattern = annotation.Pattern
-		}
-		if len(annotation.Enum) > 0 {
-			resolved.Enum = annotation.Enum
-		}
-		if annotation.MinLength != nil {
-			resolved.MinLength = annotation.MinLength
-		}
-		if annotation.MaxLength != nil {
-			resolved.MaxLength = annotation.MaxLength
-		}
-		if annotation.MinItems != nil {
-			resolved.MinItems = annotation.MinItems
-		}
-		if annotation.MaxItems != nil {
-			resolved.MaxItems = annotation.MaxItems
-		}
-		if annotation.UniqueItems {
-			resolved.UniqueItems = true
-		}
-		if annotation.Minimum != nil {
-			resolved.Minimum = annotation.Minimum
-		}
-		if annotation.Maximum != nil {
-			resolved.Maximum = annotation.Maximum
-		}
-		if annotation.Nullable {
-			resolved.Nullable = true
-		}
-		if annotation.Deprecated {
-			resolved.Deprecated = true
-		}
-	}
+	applyAnnotationOverrides(resolved, annotation)
 
 	return resolved, nil
+}
+
+// applyAnnotationOverrides applies @field annotation values onto a resolved field
+func applyAnnotationOverrides(resolved *ResolvedField, annotation *parser.Field) {
+	if annotation == nil {
+		return
+	}
+	if annotation.Description != "" {
+		resolved.Description = annotation.Description
+	}
+	if annotation.Format != "" {
+		resolved.Format = annotation.Format
+	}
+	if annotation.Example != "" {
+		resolved.Example = annotation.Example
+	}
+	if annotation.Default != "" {
+		resolved.Default = annotation.Default
+	}
+	if annotation.Pattern != "" {
+		resolved.Pattern = annotation.Pattern
+	}
+	if len(annotation.Enum) > 0 {
+		resolved.Enum = annotation.Enum
+	}
+	if annotation.MinLength != nil {
+		resolved.MinLength = annotation.MinLength
+	}
+	if annotation.MaxLength != nil {
+		resolved.MaxLength = annotation.MaxLength
+	}
+	if annotation.MinItems != nil {
+		resolved.MinItems = annotation.MinItems
+	}
+	if annotation.MaxItems != nil {
+		resolved.MaxItems = annotation.MaxItems
+	}
+	if annotation.UniqueItems {
+		resolved.UniqueItems = true
+	}
+	if annotation.Minimum != nil {
+		resolved.Minimum = annotation.Minimum
+	}
+	if annotation.Maximum != nil {
+		resolved.Maximum = annotation.Maximum
+	}
+	if annotation.Nullable {
+		resolved.Nullable = true
+	}
+	if annotation.Deprecated {
+		resolved.Deprecated = true
+	}
 }
 
 // resolveType resolves a Go type to OpenAPI type information
@@ -1271,7 +1255,7 @@ func (r *Resolver) resolveInlineStructFields(structType *ast.StructType, fieldCo
 		resolved := &ResolvedField{
 			GoName:   fieldName,
 			Name:     resolvedName,
-			Required: !strings.Contains(tag, "omitempty"),
+			Required: resolveParamRequired(tag, tagType),
 		}
 
 		// Resolve type info
@@ -1306,6 +1290,9 @@ func (r *Resolver) resolveInlineStructFields(structType *ast.StructType, fieldCo
 				resolved.ItemsType = typeInfo.ItemsType
 				resolved.Nullable = typeInfo.IsNullable
 				resolved.IsAnyValue = typeInfo.IsAnyValue
+				if typeInfo.IsNullable {
+					resolved.Required = false
+				}
 			}
 		} else {
 			// Fallback to string if type resolution fails
@@ -1414,14 +1401,10 @@ func (r *Resolver) applyFieldAnnotations(field *ResolvedField, comment *parser.C
 
 // parseFloat parses a string to float64
 func parseFloat(s string) (float64, error) {
-	var val float64
-	_, err := fmt.Sscanf(s, "%f", &val)
-	return val, err
+	return strconv.ParseFloat(s, 64)
 }
 
 // parseInt parses a string to int
 func parseInt(s string) (int, error) {
-	var val int
-	_, err := fmt.Sscanf(s, "%d", &val)
-	return val, err
+	return strconv.Atoi(s)
 }

@@ -6,18 +6,173 @@ info:
         The @bind directive allows wrapping response data in a consistent envelope.
     version: 1.0.0
 paths:
-    /webhooks:
-        post:
-            summary: Handle incoming webhook
-            description: Receives webhook events with dynamic payloads.
-            operationId: handleWebhook
+    /products:
+        get:
+            summary: List products
+            description: Returns a paginated list of products.
+            operationId: listProducts
             responses:
                 "200":
-                    description: Webhook processed
+                    description: List of products
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/WebhookEvent'
+                                type: object
+                                properties:
+                                    status:
+                                        type: string
+                                        description: Response status
+                                    data:
+                                        type: array
+                                        items:
+                                            $ref: '#/components/schemas/Product'
+                                    total:
+                                        type: integer
+                                        description: Total number of items
+                                    page:
+                                        type: integer
+                                        minimum: 1
+                                        description: Current page number
+                                    page_size:
+                                        type: integer
+                                        maximum: 100
+                                        minimum: 1
+                                        description: Items per page
+                                    has_more:
+                                        type: boolean
+                                        description: Whether there are more pages
+                                required:
+                                    - status
+                                    - data
+                                    - total
+                                    - page
+                                    - page_size
+                                    - has_more
+                                description: Paginated response envelope
+    /products/{id}:
+        get:
+            summary: Get a product (no wrapper)
+            description: Returns a product directly without wrapper for comparison.
+            operationId: getProduct
+            parameters:
+                - name: id
+                  in: path
+                  description: Product ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "200":
+                    description: Product found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Product'
+    /settings:
+        get:
+            summary: Get all settings
+            description: Returns a map of settings wrapped in the API response.
+            operationId: getSettings
+            responses:
+                "200":
+                    description: Map of settings
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    status:
+                                        type: string
+                                        description: Response status
+                                    data:
+                                        type: object
+                                        additionalProperties:
+                                            $ref: '#/components/schemas/Setting'
+                                    error:
+                                        type:
+                                            - string
+                                            - "null"
+                                        description: Optional error message
+                                required:
+                                    - status
+                                    - data
+                                description: Standard API response envelope
+    /users:
+        get:
+            summary: List users
+            description: Returns a paginated list of users.
+            operationId: listUsers
+            responses:
+                "200":
+                    description: List of users
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    status:
+                                        type: string
+                                        description: Response status
+                                    data:
+                                        type: array
+                                        items:
+                                            $ref: '#/components/schemas/User'
+                                    total:
+                                        type: integer
+                                        description: Total number of items
+                                    page:
+                                        type: integer
+                                        minimum: 1
+                                        description: Current page number
+                                    page_size:
+                                        type: integer
+                                        maximum: 100
+                                        minimum: 1
+                                        description: Items per page
+                                    has_more:
+                                        type: boolean
+                                        description: Whether there are more pages
+                                required:
+                                    - status
+                                    - data
+                                    - total
+                                    - page
+                                    - page_size
+                                    - has_more
+                                description: Paginated response envelope
+        post:
+            summary: Create a user
+            description: Creates a user and returns it wrapped in the API response.
+            operationId: createUser
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/User'
+                required: true
+            responses:
+                "201":
+                    description: User created
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    status:
+                                        type: string
+                                        description: Response status
+                                    data:
+                                        $ref: '#/components/schemas/User'
+                                    error:
+                                        type:
+                                            - string
+                                            - "null"
+                                        description: Optional error message
+                                required:
+                                    - status
+                                    - data
+                                description: Standard API response envelope
     /users/with-headers:
         get:
             summary: List users with rate limit headers
@@ -148,193 +303,80 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Error'
-    /products:
-        get:
-            summary: List products
-            description: Returns a paginated list of products.
-            operationId: listProducts
-            responses:
-                "200":
-                    description: List of products
-                    content:
-                        application/json:
-                            schema:
-                                type: object
-                                properties:
-                                    status:
-                                        type: string
-                                        description: Response status
-                                    data:
-                                        type: array
-                                        items:
-                                            $ref: '#/components/schemas/Product'
-                                    total:
-                                        type: integer
-                                        description: Total number of items
-                                    page:
-                                        type: integer
-                                        minimum: 1
-                                        description: Current page number
-                                    page_size:
-                                        type: integer
-                                        maximum: 100
-                                        minimum: 1
-                                        description: Items per page
-                                    has_more:
-                                        type: boolean
-                                        description: Whether there are more pages
-                                required:
-                                    - status
-                                    - data
-                                    - total
-                                    - page
-                                    - page_size
-                                    - has_more
-                                description: Paginated response envelope
-    /users:
-        get:
-            summary: List users
-            description: Returns a paginated list of users.
-            operationId: listUsers
-            responses:
-                "200":
-                    description: List of users
-                    content:
-                        application/json:
-                            schema:
-                                type: object
-                                properties:
-                                    status:
-                                        type: string
-                                        description: Response status
-                                    data:
-                                        type: array
-                                        items:
-                                            $ref: '#/components/schemas/User'
-                                    total:
-                                        type: integer
-                                        description: Total number of items
-                                    page:
-                                        type: integer
-                                        minimum: 1
-                                        description: Current page number
-                                    page_size:
-                                        type: integer
-                                        maximum: 100
-                                        minimum: 1
-                                        description: Items per page
-                                    has_more:
-                                        type: boolean
-                                        description: Whether there are more pages
-                                required:
-                                    - status
-                                    - data
-                                    - total
-                                    - page
-                                    - page_size
-                                    - has_more
-                                description: Paginated response envelope
+    /webhooks:
         post:
-            summary: Create a user
-            description: Creates a user and returns it wrapped in the API response.
-            operationId: createUser
-            requestBody:
-                content:
-                    application/json:
-                        schema:
-                            $ref: '#/components/schemas/User'
-                required: true
-            responses:
-                "201":
-                    description: User created
-                    content:
-                        application/json:
-                            schema:
-                                type: object
-                                properties:
-                                    status:
-                                        type: string
-                                        description: Response status
-                                    data:
-                                        $ref: '#/components/schemas/User'
-                                    error:
-                                        type:
-                                            - string
-                                            - "null"
-                                        description: Optional error message
-                                required:
-                                    - status
-                                    - data
-                                description: Standard API response envelope
-    /settings:
-        get:
-            summary: Get all settings
-            description: Returns a map of settings wrapped in the API response.
-            operationId: getSettings
+            summary: Handle incoming webhook
+            description: Receives webhook events with dynamic payloads.
+            operationId: handleWebhook
             responses:
                 "200":
-                    description: Map of settings
+                    description: Webhook processed
                     content:
                         application/json:
                             schema:
-                                type: object
-                                properties:
-                                    status:
-                                        type: string
-                                        description: Response status
-                                    data:
-                                        type: object
-                                        additionalProperties:
-                                            $ref: '#/components/schemas/Setting'
-                                    error:
-                                        type:
-                                            - string
-                                            - "null"
-                                        description: Optional error message
-                                required:
-                                    - status
-                                    - data
-                                description: Standard API response envelope
-    /products/{id}:
-        get:
-            summary: Get a product (no wrapper)
-            description: Returns a product directly without wrapper for comparison.
-            operationId: getProduct
-            parameters:
-                - name: id
-                  in: path
-                  description: Product ID
-                  required: true
-                  schema:
-                    type: string
-                    format: uuid
-            responses:
-                "200":
-                    description: Product found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/Product'
+                                $ref: '#/components/schemas/WebhookEvent'
 components:
     schemas:
-        User:
+        APIResponse:
             type: object
             properties:
-                id:
+                status:
                     type: string
-                    format: uuid
-                    description: User ID
-                email:
-                    type: string
-                    format: email
-                    description: User email
-                name:
-                    type: string
-                    description: User display name
+                    description: Response status
+                data:
+                    description: Response data (varies by endpoint)
+                error:
+                    type:
+                        - string
+                        - "null"
+                    description: Optional error message
             required:
-                - id
-                - email
-                - name
+                - status
+                - data
+            description: Standard API response envelope
+        Error:
+            type: object
+            properties:
+                code:
+                    type: string
+                    description: Error code
+                message:
+                    type: string
+                    description: Error message
+            required:
+                - code
+                - message
+        PaginatedResponse:
+            type: object
+            properties:
+                status:
+                    type: string
+                    description: Response status
+                data:
+                    description: Response data (varies by endpoint)
+                total:
+                    type: integer
+                    description: Total number of items
+                page:
+                    type: integer
+                    minimum: 1
+                    description: Current page number
+                page_size:
+                    type: integer
+                    maximum: 100
+                    minimum: 1
+                    description: Items per page
+                has_more:
+                    type: boolean
+                    description: Whether there are more pages
+            required:
+                - status
+                - data
+                - total
+                - page
+                - page_size
+                - has_more
+            description: Paginated response envelope
         Product:
             type: object
             properties:
@@ -373,18 +415,24 @@ components:
                 - key
                 - value
                 - editable
-        Error:
+        User:
             type: object
             properties:
-                code:
+                id:
                     type: string
-                    description: Error code
-                message:
+                    format: uuid
+                    description: User ID
+                email:
                     type: string
-                    description: Error message
+                    format: email
+                    description: User email
+                name:
+                    type: string
+                    description: User display name
             required:
-                - code
-                - message
+                - id
+                - email
+                - name
         WebhookEvent:
             type: object
             properties:
@@ -404,51 +452,3 @@ components:
                 - type
                 - payload
             description: Webhook event with dynamic payload
-        APIResponse:
-            type: object
-            properties:
-                status:
-                    type: string
-                    description: Response status
-                data:
-                    description: Response data (varies by endpoint)
-                error:
-                    type:
-                        - string
-                        - "null"
-                    description: Optional error message
-            required:
-                - status
-                - data
-            description: Standard API response envelope
-        PaginatedResponse:
-            type: object
-            properties:
-                status:
-                    type: string
-                    description: Response status
-                data:
-                    description: Response data (varies by endpoint)
-                total:
-                    type: integer
-                    description: Total number of items
-                page:
-                    type: integer
-                    minimum: 1
-                    description: Current page number
-                page_size:
-                    type: integer
-                    maximum: 100
-                    minimum: 1
-                    description: Items per page
-                has_more:
-                    type: boolean
-                    description: Whether there are more pages
-            required:
-                - status
-                - data
-                - total
-                - page
-                - page_size
-                - has_more
-            description: Paginated response envelope

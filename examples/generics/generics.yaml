@@ -7,18 +7,18 @@ info:
         Type aliases that instantiate generics ARE emitted.
     version: 1.0.0
 paths:
-    /users:
+    /posts:
         get:
-            summary: List users
-            description: Returns users wrapped in the type-safe ListResponse[User] wrapper.
-            operationId: listUsers
+            summary: List posts
+            description: Returns posts wrapped in the type-safe ListResponse[Post] wrapper.
+            operationId: listPosts
             responses:
                 "200":
-                    description: List of users
+                    description: List of posts
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/UserListResponse'
+                                $ref: '#/components/schemas/PostListResponse'
     /posts/{id}:
         get:
             summary: Get a post
@@ -39,18 +39,18 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/PostResponse'
-    /posts:
+    /users:
         get:
-            summary: List posts
-            description: Returns posts wrapped in the type-safe ListResponse[Post] wrapper.
-            operationId: listPosts
+            summary: List users
+            description: Returns users wrapped in the type-safe ListResponse[User] wrapper.
+            operationId: listUsers
             responses:
                 "200":
-                    description: List of posts
+                    description: List of users
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/PostListResponse'
+                                $ref: '#/components/schemas/UserListResponse'
     /users/{id}:
         get:
             summary: Get a user
@@ -73,38 +73,26 @@ paths:
                                 $ref: '#/components/schemas/UserResponse'
 components:
     schemas:
-        UserResponse:
+        Post:
             type: object
             properties:
-                success:
-                    type: boolean
-                    description: Whether the request was successful
-                data:
+                id:
+                    type: string
+                    format: uuid
+                    description: Post ID
+                title:
+                    type: string
+                    description: Post title
+                content:
+                    type: string
+                    description: Post content
+                author:
                     $ref: '#/components/schemas/User'
-                error:
-                    type:
-                        - string
-                        - "null"
-                    description: Error message if unsuccessful
             required:
-                - success
-                - data
-        PostResponse:
-            type: object
-            properties:
-                success:
-                    type: boolean
-                    description: Whether the request was successful
-                data:
-                    $ref: '#/components/schemas/Post'
-                error:
-                    type:
-                        - string
-                        - "null"
-                    description: Error message if unsuccessful
-            required:
-                - success
-                - data
+                - id
+                - title
+                - content
+                - author
         PostListResponse:
             type: object
             properties:
@@ -128,6 +116,40 @@ components:
                 - success
                 - items
                 - total
+        PostResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: Whether the request was successful
+                data:
+                    $ref: '#/components/schemas/Post'
+                error:
+                    type:
+                        - string
+                        - "null"
+                    description: Error message if unsuccessful
+            required:
+                - success
+                - data
+        User:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: User ID
+                email:
+                    type: string
+                    format: email
+                    description: User email
+                name:
+                    type: string
+                    description: User display name
+            required:
+                - id
+                - email
+                - name
         UserListResponse:
             type: object
             properties:
@@ -151,41 +173,19 @@ components:
                 - success
                 - items
                 - total
-        User:
+        UserResponse:
             type: object
             properties:
-                id:
-                    type: string
-                    format: uuid
-                    description: User ID
-                email:
-                    type: string
-                    format: email
-                    description: User email
-                name:
-                    type: string
-                    description: User display name
-            required:
-                - id
-                - email
-                - name
-        Post:
-            type: object
-            properties:
-                id:
-                    type: string
-                    format: uuid
-                    description: Post ID
-                title:
-                    type: string
-                    description: Post title
-                content:
-                    type: string
-                    description: Post content
-                author:
+                success:
+                    type: boolean
+                    description: Whether the request was successful
+                data:
                     $ref: '#/components/schemas/User'
+                error:
+                    type:
+                        - string
+                        - "null"
+                    description: Error message if unsuccessful
             required:
-                - id
-                - title
-                - content
-                - author
+                - success
+                - data

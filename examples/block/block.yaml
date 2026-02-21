@@ -7,6 +7,67 @@ info:
         nested blocks cannot appear within inline format - use multi-line instead.
     version: 1.0.0
 paths:
+    /users:
+        get:
+            summary: List all users
+            description: Retrieves a paginated list of users.
+            parameters:
+                - name: fields
+                  in: query
+                  description: 'Fields to include (comma-separated: id,email,name,bio)'
+                  required: false
+                  schema:
+                    type: array
+                    items:
+                        type: string
+                - name: include_deleted
+                  in: query
+                  description: Include deleted users
+                  required: false
+                  schema:
+                    type:
+                        - boolean
+                        - "null"
+                    default: false
+            responses:
+                "200":
+                    description: |-
+                        Successfully retrieved list of users.
+                        Pagination info is included in response headers.
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/User'
+        post:
+            summary: Create a new user
+            description: Creates a new user account.
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/User'
+                required: true
+            responses:
+                "201":
+                    description: User created successfully
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/User'
+                "400":
+                    description: Invalid input data
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                "409":
+                    description: User with this email already exists
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
     /users/{id}:
         get:
             summary: Get user by ID
@@ -49,12 +110,6 @@ paths:
                             $ref: '#/components/schemas/User'
                 required: true
             responses:
-                "404":
-                    description: User not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/Error'
                 "200":
                     description: User updated
                     content:
@@ -65,6 +120,12 @@ paths:
                     description: |-
                         Invalid input - check the error code for details.
                         Common errors: INVALID_EMAIL, NAME_TOO_LONG
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                "404":
+                    description: User not found
                     content:
                         application/json:
                             schema:
@@ -81,71 +142,10 @@ paths:
                     type: string
                     format: uuid
             responses:
-                "404":
-                    description: User not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/Error'
                 "204":
                     description: User deleted
-    /users:
-        get:
-            summary: List all users
-            description: Retrieves a paginated list of users.
-            parameters:
-                - name: fields
-                  in: query
-                  description: 'Fields to include (comma-separated: id,email,name,bio)'
-                  required: true
-                  schema:
-                    type: array
-                    items:
-                        type: string
-                - name: include_deleted
-                  in: query
-                  description: Include deleted users
-                  required: true
-                  schema:
-                    type:
-                        - boolean
-                        - "null"
-                    default: false
-            responses:
-                "200":
-                    description: |-
-                        Successfully retrieved list of users.
-                        Pagination info is included in response headers.
-                    content:
-                        application/json:
-                            schema:
-                                type: array
-                                items:
-                                    $ref: '#/components/schemas/User'
-        post:
-            summary: Create a new user
-            description: Creates a new user account.
-            requestBody:
-                content:
-                    application/json:
-                        schema:
-                            $ref: '#/components/schemas/User'
-                required: true
-            responses:
-                "409":
-                    description: User with this email already exists
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/Error'
-                "201":
-                    description: User created successfully
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/User'
-                "400":
-                    description: Invalid input data
+                "404":
+                    description: User not found
                     content:
                         application/json:
                             schema:

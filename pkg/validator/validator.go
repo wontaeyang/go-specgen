@@ -382,37 +382,6 @@ func extractPathVariables(path string) []string {
 	return vars
 }
 
-// validatePathParameters validates that path parameters match path variables
-func (v *Validator) validatePathParameters(path string, pathVars []string, params []*resolver.ResolvedParameter) {
-	// Create map of path variables
-	pathVarMap := make(map[string]bool)
-	for _, varName := range pathVars {
-		pathVarMap[varName] = true
-	}
-
-	// Collect all parameter field names
-	paramFieldMap := make(map[string]bool)
-	for _, param := range params {
-		for _, field := range param.Fields {
-			paramFieldMap[field.Name] = true
-		}
-	}
-
-	// Check that all path variables have corresponding parameters
-	for _, varName := range pathVars {
-		if !paramFieldMap[varName] {
-			v.addError(path, fmt.Sprintf("path variable {%s} has no corresponding @path parameter", varName))
-		}
-	}
-
-	// Check that all path parameters are used in the path
-	for paramName := range paramFieldMap {
-		if !pathVarMap[paramName] {
-			v.addError(path, fmt.Sprintf("@path parameter %s not used in path", paramName))
-		}
-	}
-}
-
 // validatePathParametersWithInline validates path parameters including inline declarations
 func (v *Validator) validatePathParametersWithInline(path string, pathVars []string, params []*resolver.ResolvedParameter, inlineParams *resolver.ResolvedInlineParams) {
 	// Create map of path variables

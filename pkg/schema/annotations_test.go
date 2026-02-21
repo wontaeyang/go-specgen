@@ -288,7 +288,7 @@ func TestAnnotationSchema_ParentReferences(t *testing.T) {
 }
 
 func TestAnnotationSchema_Integrity(t *testing.T) {
-	if err := ValidateSchemaIntegrity(); err != nil {
+	if err := AnnotationSchema.Validate(); err != nil {
 		t.Errorf("Schema integrity validation failed: %v", err)
 	}
 }

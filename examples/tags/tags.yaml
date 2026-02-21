@@ -58,6 +58,20 @@ paths:
                                 $ref: '#/components/schemas/XMLUser'
 components:
     schemas:
+        CreateUserRequest:
+            type: object
+            properties:
+                name:
+                    type: string
+                    minLength: 1
+                    description: User name
+                email:
+                    type: string
+                    format: email
+                    description: User email
+            required:
+                - name
+                - email
         User:
             type: object
             properties:
@@ -92,20 +106,6 @@ components:
                     description: Uses Go field name
             required:
                 - from_xml
-        CreateUserRequest:
-            type: object
-            properties:
-                name:
-                    type: string
-                    minLength: 1
-                    description: User name
-                email:
-                    type: string
-                    format: email
-                    description: User email
-            required:
-                - name
-                - email
         XMLUser:
             type: object
             properties:

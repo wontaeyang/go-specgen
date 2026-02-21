@@ -2,7 +2,8 @@ package generator
 
 import (
 	"fmt"
-	"strconv"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/pb33f/libopenapi/datamodel/high/base"
@@ -161,7 +162,8 @@ func (g *Generator) generateComponents(pkg *resolver.ResolvedPackage) *v3.Compon
 func (g *Generator) generateSchemas(schemas map[string]*resolver.ResolvedSchema) *orderedmap.Map[string, *base.SchemaProxy] {
 	result := orderedmap.New[string, *base.SchemaProxy]()
 
-	for name, schema := range schemas {
+	for _, name := range slices.Sorted(maps.Keys(schemas)) {
+		schema := schemas[name]
 		// Skip generic schemas - they are templates, not concrete types
 		if schema.IsGeneric {
 			continue
@@ -579,7 +581,8 @@ func (g *Generator) generateParameterFieldSchema(field *resolver.ResolvedField) 
 func (g *Generator) generateSecuritySchemes(schemes map[string]*resolver.SecurityScheme) *orderedmap.Map[string, *v3.SecurityScheme] {
 	result := orderedmap.New[string, *v3.SecurityScheme]()
 
-	for name, scheme := range schemes {
+	for _, name := range slices.Sorted(maps.Keys(schemes)) {
+		scheme := schemes[name]
 		ss := &v3.SecurityScheme{
 			Type:        scheme.Type,
 			Description: scheme.Description,
@@ -656,9 +659,9 @@ func (g *Generator) generatePaths(endpoints []*resolver.ResolvedEndpoint, parame
 		}
 	}
 
-	// Add to paths
-	for path, pathItem := range pathMap {
-		paths.PathItems.Set(path, pathItem)
+	// Add to paths in sorted order for deterministic output
+	for _, path := range slices.Sorted(maps.Keys(pathMap)) {
+		paths.PathItems.Set(path, pathMap[path])
 	}
 
 	return paths
@@ -864,7 +867,8 @@ func (g *Generator) generateResponsesWithInline(responses map[string]*resolver.R
 	}
 
 	// Add explicit responses
-	for statusCode, response := range responses {
+	for _, statusCode := range slices.Sorted(maps.Keys(responses)) {
+		response := responses[statusCode]
 		resp := &v3.Response{
 			Description: response.Description,
 		}
@@ -902,7 +906,8 @@ func (g *Generator) generateResponsesWithInline(responses map[string]*resolver.R
 	}
 
 	// Add inline responses (don't override explicit ones)
-	for statusCode, inline := range inlineResponses {
+	for _, statusCode := range slices.Sorted(maps.Keys(inlineResponses)) {
+		inline := inlineResponses[statusCode]
 		if result.Codes.GetOrZero(statusCode) != nil {
 			continue // Skip if explicit response already exists
 		}
@@ -1156,23 +1161,4 @@ func goTypeToPrimitive(typeName string) string {
 	default:
 		return "string"
 	}
-}
-
-// convertEnumValues converts string enum values to the appropriate type based on OpenAPI type
-func convertEnumValues(values []string, openAPIType string) []any {
-	result := make([]any, len(values))
-	if openAPIType == "integer" {
-		for i, v := range values {
-			if num, err := strconv.ParseInt(v, 10, 64); err == nil {
-				result[i] = num
-			} else {
-				result[i] = v
-			}
-		}
-		return result
-	}
-	for i, v := range values {
-		result[i] = v
-	}
-	return result
 }

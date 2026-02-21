@@ -30,7 +30,7 @@ paths:
                 - name: limit
                   in: query
                   description: Maximum results to return
-                  required: true
+                  required: false
                   schema:
                     type:
                         - integer
@@ -41,7 +41,7 @@ paths:
                 - name: offset
                   in: query
                   description: Offset for pagination
-                  required: true
+                  required: false
                   schema:
                     type:
                         - integer
@@ -51,7 +51,7 @@ paths:
                 - name: status
                   in: query
                   description: Filter by status
-                  required: true
+                  required: false
                   schema:
                     type:
                         - string
@@ -63,7 +63,7 @@ paths:
                 - name: category
                   in: query
                   description: Filter by category
-                  required: true
+                  required: false
                   schema:
                     type:
                         - string
@@ -77,7 +77,7 @@ paths:
                 - name: tags
                   in: query
                   description: Filter by tags (can specify multiple)
-                  required: true
+                  required: false
                   schema:
                     type: array
                     items:
@@ -171,12 +171,6 @@ paths:
                             $ref: '#/components/schemas/UpdatePetRequest'
                 required: true
             responses:
-                "404":
-                    description: Pet not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/Error'
                 "200":
                     description: Pet updated successfully
                     content:
@@ -185,6 +179,12 @@ paths:
                                 $ref: '#/components/schemas/Pet'
                 "400":
                     description: Invalid request body
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                "404":
+                    description: Pet not found
                     content:
                         application/json:
                             schema:
@@ -233,6 +233,65 @@ paths:
             deprecated: true
 components:
     schemas:
+        CreatePetRequest:
+            type: object
+            properties:
+                name:
+                    type: string
+                    maxLength: 100
+                    minLength: 1
+                    description: Pet name
+                category:
+                    type: string
+                    enum:
+                        - dog
+                        - cat
+                        - bird
+                        - fish
+                        - other
+                    description: Pet category
+                status:
+                    type:
+                        - string
+                        - "null"
+                    enum:
+                        - available
+                        - pending
+                    description: Initial status
+                    default: available
+                tags:
+                    type: array
+                    items:
+                        type: string
+                    description: Pet tags for searching
+                age:
+                    type:
+                        - integer
+                        - "null"
+                    maximum: 100
+                    minimum: 0
+                    description: Pet age in years
+            required:
+                - name
+                - category
+        Error:
+            type: object
+            properties:
+                code:
+                    type: string
+                    description: Error code
+                message:
+                    type: string
+                    description: Human-readable error message
+                details:
+                    type: array
+                    items:
+                        type: string
+                    description: Additional error details
+            required:
+                - code
+                - message
+            description: Standard error response
         Pet:
             type: object
             properties:
@@ -294,47 +353,6 @@ components:
                 - created_at
                 - updated_at
             description: A pet available in the store
-        CreatePetRequest:
-            type: object
-            properties:
-                name:
-                    type: string
-                    maxLength: 100
-                    minLength: 1
-                    description: Pet name
-                category:
-                    type: string
-                    enum:
-                        - dog
-                        - cat
-                        - bird
-                        - fish
-                        - other
-                    description: Pet category
-                status:
-                    type:
-                        - string
-                        - "null"
-                    enum:
-                        - available
-                        - pending
-                    description: Initial status
-                    default: available
-                tags:
-                    type: array
-                    items:
-                        type: string
-                    description: Pet tags for searching
-                age:
-                    type:
-                        - integer
-                        - "null"
-                    maximum: 100
-                    minimum: 0
-                    description: Pet age in years
-            required:
-                - name
-                - category
         UpdatePetRequest:
             type: object
             properties:
@@ -377,24 +395,6 @@ components:
                     maximum: 100
                     minimum: 0
                     description: Pet age in years
-        Error:
-            type: object
-            properties:
-                code:
-                    type: string
-                    description: Error code
-                message:
-                    type: string
-                    description: Human-readable error message
-                details:
-                    type: array
-                    items:
-                        type: string
-                    description: Additional error details
-            required:
-                - code
-                - message
-            description: Standard error response
     securitySchemes:
         bearerAuth:
             type: http

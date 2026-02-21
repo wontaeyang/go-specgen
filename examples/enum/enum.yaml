@@ -13,7 +13,7 @@ paths:
                 - name: status
                   in: query
                   description: Filter by status
-                  required: true
+                  required: false
                   schema:
                     type:
                         - string
@@ -26,7 +26,7 @@ paths:
                 - name: priority
                   in: query
                   description: Filter by priority
-                  required: true
+                  required: false
                   schema:
                     type:
                         - integer
@@ -38,7 +38,7 @@ paths:
                 - name: categories
                   in: query
                   description: Filter by categories (can specify multiple)
-                  required: true
+                  required: false
                   schema:
                     type: array
                     items:
@@ -51,7 +51,7 @@ paths:
                 - name: sort
                   in: query
                   description: Sort order
-                  required: true
+                  required: false
                   schema:
                     type:
                         - string
@@ -107,6 +107,41 @@ paths:
                                 $ref: '#/components/schemas/Task'
 components:
     schemas:
+        CreateTaskRequest:
+            type: object
+            properties:
+                title:
+                    type: string
+                    description: Task title
+                status:
+                    type: string
+                    enum:
+                        - pending
+                        - in_progress
+                    description: Initial status
+                    default: pending
+                priority:
+                    type: integer
+                    enum:
+                        - 1
+                        - 2
+                        - 3
+                    description: Priority level
+                    default: 2
+                categories:
+                    type: array
+                    items:
+                        type: string
+                        enum:
+                            - work
+                            - personal
+                            - health
+                            - finance
+                    description: Task categories
+            required:
+                - title
+                - status
+                - priority
         Task:
             type: object
             properties:
@@ -158,38 +193,3 @@ components:
                 - priority
                 - categories
                 - subtask_priorities
-        CreateTaskRequest:
-            type: object
-            properties:
-                title:
-                    type: string
-                    description: Task title
-                status:
-                    type: string
-                    enum:
-                        - pending
-                        - in_progress
-                    description: Initial status
-                    default: pending
-                priority:
-                    type: integer
-                    enum:
-                        - 1
-                        - 2
-                        - 3
-                    description: Priority level
-                    default: 2
-                categories:
-                    type: array
-                    items:
-                        type: string
-                        enum:
-                            - work
-                            - personal
-                            - health
-                            - finance
-                    description: Task categories
-            required:
-                - title
-                - status
-                - priority
