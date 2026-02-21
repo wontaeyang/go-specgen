@@ -329,6 +329,8 @@ Set a default at the `@api` level:
 
 ### @api
 
+The `@api` block can appear directly above the `package` keyword or as a standalone comment anywhere in the file. This lets you keep your package documentation separate from API metadata.
+
 ```
 @api {
   @title           (required) API title
