@@ -138,9 +138,16 @@ func ExtractComments(packagePath string) (*PackageComments, error) {
 	for _, file := range pkg.Syntax {
 		fset := pkg.Fset
 
-		// Extract package-level comments
-		if file.Doc != nil {
+		// Extract @api annotation: prefer file.Doc, fall back to scanning all comments
+		if file.Doc != nil && hasAPIAnnotation(file.Doc) {
 			comments.PackageComments = extractCommentBlock(fset, file.Doc)
+		} else {
+			for _, cg := range file.Comments {
+				if hasAPIAnnotation(cg) {
+					comments.PackageComments = extractCommentBlock(fset, cg)
+					break
+				}
+			}
 		}
 
 		// Traverse AST nodes
@@ -265,6 +272,19 @@ func extractCommentBlock(fset *token.FileSet, cg *ast.CommentGroup) *CommentBloc
 		Lines:    lines,
 		Position: position,
 	}
+}
+
+// hasAPIAnnotation checks if a comment group contains an @api annotation
+func hasAPIAnnotation(cg *ast.CommentGroup) bool {
+	for _, c := range cg.List {
+		text := strings.TrimPrefix(c.Text, "//")
+		text = strings.TrimPrefix(text, "/*")
+		text = strings.TrimSpace(text)
+		if strings.HasPrefix(text, "@api") {
+			return true
+		}
+	}
+	return false
 }
 
 // GetStructComment returns the comment block for a struct

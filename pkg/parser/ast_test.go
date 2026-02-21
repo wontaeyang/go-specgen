@@ -69,6 +69,47 @@ func TestExtractComments(t *testing.T) {
 	}
 }
 
+func TestExtractComments_StandaloneAPI(t *testing.T) {
+	comments, err := ExtractComments("./testdata/standalone_api")
+	if err != nil {
+		t.Fatalf("ExtractComments() error = %v", err)
+	}
+
+	if comments == nil {
+		t.Fatal("ExtractComments() returned nil")
+	}
+
+	// @api is NOT in file.Doc — it's a standalone comment block
+	if comments.PackageComments == nil {
+		t.Fatal("PackageComments is nil, expected standalone @api annotation to be found")
+	}
+
+	if !comments.PackageComments.HasAnnotation("@api") {
+		t.Error("PackageComments should have @api annotation")
+	}
+
+	// Verify title was extracted correctly
+	found := false
+	for _, line := range comments.PackageComments.Lines {
+		if line == "@title Standalone API" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected @title Standalone API in PackageComments, got: %v", comments.PackageComments.Lines)
+	}
+
+	// Verify other annotations still work alongside standalone @api
+	if comments.GetStructComment("Item") == nil {
+		t.Error("Missing struct comment for Item")
+	}
+
+	if comments.GetFunctionComment("GetItem") == nil {
+		t.Error("Missing function comment for GetItem")
+	}
+}
+
 func TestCommentBlock_HasAnnotation(t *testing.T) {
 	tests := []struct {
 		name       string
