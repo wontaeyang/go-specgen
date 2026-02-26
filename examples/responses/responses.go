@@ -58,6 +58,22 @@ type PaginatedResponse struct {
 // Data Schemas
 // -----------------------------------------------------------------------------
 
+// Address represents a mailing address
+// @schema
+type Address struct {
+	// @field { @description Street address }
+	Street string `json:"street"`
+
+	// @field { @description City }
+	City string `json:"city"`
+
+	// @field { @description State or province }
+	State string `json:"state"`
+
+	// @field { @description ZIP or postal code }
+	ZIP string `json:"zip"`
+}
+
 // User represents a user in the system
 // @schema
 type User struct {
@@ -69,6 +85,9 @@ type User struct {
 
 	// @field { @description User display name }
 	Name string `json:"name"`
+
+	// @field { @description Optional mailing address }
+	Address *Address `json:"address,omitempty"`
 }
 
 // Product represents a product

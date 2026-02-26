@@ -61,10 +61,12 @@ func CreateUser() {}
 
 // @schema
 type FieldRequiredTest struct {
-	Value         string  `json:"value"`
-	ValuePtr      *string `json:"value_ptr"`
-	ValueOmit     string  `json:"value_omit,omitempty"`
-	ValuePtrOmit  *string `json:"value_ptr_omit,omitempty"`
+	Value          string  `json:"value"`
+	ValuePtr       *string `json:"value_ptr"`
+	ValueOmit      string  `json:"value_omit,omitempty"`
+	ValuePtrOmit   *string `json:"value_ptr_omit,omitempty"`
+	ValueStruct    User    `json:"value_struct"`
+	ValueStructPtr *User   `json:"value_struct_ptr"`
 }
 
 // No annotation - should be ignored

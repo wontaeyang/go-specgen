@@ -748,7 +748,15 @@ func (r *Resolver) resolveType(t types.Type) *TypeInfo {
 	// Handle type aliases (e.g., "any" is an alias for interface{})
 	if alias, ok := t.(*types.Alias); ok {
 		// Recurse on the aliased type
-		return r.resolveType(alias.Rhs())
+		aliasInfo := r.resolveType(alias.Rhs())
+		if info.IsNullable {
+			// Preserve nullable from pointer detection
+			result := *aliasInfo
+			result.IsNullable = true
+			r.typeCache[typeStr] = &result
+			return &result
+		}
+		return aliasInfo
 	}
 
 	// Handle named types
@@ -768,7 +776,15 @@ func (r *Resolver) resolveType(t types.Type) *TypeInfo {
 		}
 
 		// Recurse on underlying type
-		return r.resolveType(named.Underlying())
+		underlyingInfo := r.resolveType(named.Underlying())
+		if info.IsNullable {
+			// Preserve nullable from pointer detection
+			result := *underlyingInfo
+			result.IsNullable = true
+			r.typeCache[typeStr] = &result
+			return &result
+		}
+		return underlyingInfo
 	}
 
 	// Handle basic types
