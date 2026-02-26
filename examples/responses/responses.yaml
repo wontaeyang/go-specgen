@@ -334,6 +334,26 @@ components:
                 - status
                 - data
             description: Standard API response envelope
+        Address:
+            type: object
+            properties:
+                street:
+                    type: string
+                    description: Street address
+                city:
+                    type: string
+                    description: City
+                state:
+                    type: string
+                    description: State or province
+                zip:
+                    type: string
+                    description: ZIP or postal code
+            required:
+                - street
+                - city
+                - state
+                - zip
         Error:
             type: object
             properties:
@@ -429,6 +449,8 @@ components:
                 name:
                     type: string
                     description: User display name
+                address:
+                    $ref: '#/components/schemas/Address'
             required:
                 - id
                 - email

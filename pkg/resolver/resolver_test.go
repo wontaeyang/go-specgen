@@ -888,10 +888,12 @@ func TestResolver_PointerImpliesNotRequired(t *testing.T) {
 		wantRequired bool
 		wantNullable bool
 	}{
-		{"value", true, false},          // string: required, not nullable
-		{"value_ptr", false, true},      // *string: not required, nullable
-		{"value_omit", false, false},    // string,omitempty: not required, not nullable
-		{"value_ptr_omit", false, true}, // *string,omitempty: not required, nullable
+		{"value", true, false},            // string: required, not nullable
+		{"value_ptr", false, true},        // *string: not required, nullable
+		{"value_omit", false, false},      // string,omitempty: not required, not nullable
+		{"value_ptr_omit", false, true},   // *string,omitempty: not required, nullable
+		{"value_struct", true, false},     // User: required, not nullable
+		{"value_struct_ptr", false, true}, // *User: not required, nullable
 	}
 
 	for _, tt := range tests {
