@@ -88,6 +88,9 @@ type User struct {
 
 	// @field { @description Optional mailing address }
 	Address *Address `json:"address,omitempty"`
+
+	// @field { @description Billing address (nullable but required) }
+	BillingAddress *Address `json:"billing_address"`
 }
 
 // Product represents a product

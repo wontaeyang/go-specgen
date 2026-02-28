@@ -451,10 +451,13 @@ components:
                     description: User display name
                 address:
                     $ref: '#/components/schemas/Address'
+                billing_address:
+                    $ref: '#/components/schemas/Address'
             required:
                 - id
                 - email
                 - name
+                - billing_address
         WebhookEvent:
             type: object
             properties:
