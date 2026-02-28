@@ -422,9 +422,6 @@ func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser
 		resolved.ItemsType = typeInfo.ItemsType
 		resolved.Nullable = typeInfo.IsNullable
 		resolved.IsAnyValue = typeInfo.IsAnyValue
-		if typeInfo.IsNullable {
-			resolved.Required = false
-		}
 	}
 
 	applyAnnotationOverrides(resolved, annotation)
@@ -502,9 +499,6 @@ func (r *Resolver) resolveAnonymousStruct(t types.Type, schemaNames map[string]b
 			resolvedField.ItemsType = typeInfo.ItemsType
 			resolvedField.Nullable = typeInfo.IsNullable
 			resolvedField.IsAnyValue = typeInfo.IsAnyValue
-			if typeInfo.IsNullable {
-				resolvedField.Required = false
-			}
 		}
 
 		fields = append(fields, resolvedField)
