@@ -65,9 +65,9 @@ func init() {
 	}
 }
 
-// ParseInlineAnnotation parses an inline @request/@response comment using InlineAnnotationSchema.
+// ParseInlineDeclaration parses an inline @request/@response comment using InlineAnnotationSchema.
 // Returns parsed annotation or error if invalid annotations are used.
-func ParseInlineAnnotation(comment *parser.CommentBlock, annotationType string) (*parser.ParsedAnnotation, error) {
+func ParseInlineDeclaration(comment *parser.CommentBlock, annotationType string) (*parser.ParsedAnnotation, error) {
 	if comment == nil {
 		return nil, nil
 	}

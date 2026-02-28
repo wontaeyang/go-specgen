@@ -1363,7 +1363,7 @@ func (r *Resolver) resolveInlineDeclarations(endpoint *ResolvedEndpoint, inlines
 	// Resolve inline request body
 	if inlines.Request != nil {
 		// Step 1: Parse inline annotation using InlineAnnotationSchema
-		parsed, err := ParseInlineAnnotation(inlines.Request.Comment, "request")
+		parsed, err := ParseInlineDeclaration(inlines.Request.Comment, "request")
 		if err != nil {
 			return fmt.Errorf("failed to parse inline request: %w", err)
 		}
@@ -1379,7 +1379,7 @@ func (r *Resolver) resolveInlineDeclarations(endpoint *ResolvedEndpoint, inlines
 	// Resolve inline responses
 	for statusCode, respInfo := range inlines.Responses {
 		// Step 1: Parse inline annotation using InlineAnnotationSchema
-		parsed, err := ParseInlineAnnotation(respInfo.Comment, "response")
+		parsed, err := ParseInlineDeclaration(respInfo.Comment, "response")
 		if err != nil {
 			return fmt.Errorf("failed to parse inline response %s: %w", statusCode, err)
 		}

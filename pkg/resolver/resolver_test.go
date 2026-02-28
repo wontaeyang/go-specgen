@@ -644,7 +644,7 @@ func TestResolver_InlineDeclarations(t *testing.T) {
 	}
 }
 
-func TestParseInlineAnnotation(t *testing.T) {
+func TestParseInlineDeclaration(t *testing.T) {
 	tests := []struct {
 		name            string
 		annotationType  string
@@ -746,20 +746,20 @@ func TestParseInlineAnnotation(t *testing.T) {
 				comment = &parser.CommentBlock{Lines: tt.lines}
 			}
 
-			result, err := ParseInlineAnnotation(comment, tt.annotationType)
+			result, err := ParseInlineDeclaration(comment, tt.annotationType)
 			if err != nil {
-				t.Fatalf("ParseInlineAnnotation() error = %v", err)
+				t.Fatalf("ParseInlineDeclaration() error = %v", err)
 			}
 
 			if tt.expectNil {
 				if result != nil {
-					t.Errorf("ParseInlineAnnotation() = %v, want nil", result)
+					t.Errorf("ParseInlineDeclaration() = %v, want nil", result)
 				}
 				return
 			}
 
 			if result == nil {
-				t.Fatal("ParseInlineAnnotation() = nil, want non-nil")
+				t.Fatal("ParseInlineDeclaration() = nil, want non-nil")
 			}
 
 			// Check content type

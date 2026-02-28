@@ -1166,3 +1166,218 @@ func TestValidator_ValidateEndpointWithTags(t *testing.T) {
 		})
 	}
 }
+
+func TestValidator_ValidateBindTarget(t *testing.T) {
+	wrapperSchema := &resolver.ResolvedSchema{
+		Name:       "DataResponse",
+		GoTypeName: "DataResponse",
+		Fields: []*resolver.ResolvedField{
+			{Name: "data", GoName: "Data", OpenAPIType: "object"},
+			{Name: "message", GoName: "Message", OpenAPIType: "string"},
+		},
+	}
+
+	tests := []struct {
+		name    string
+		bind    *resolver.ResolvedBindTarget
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "valid bind target",
+			bind: &resolver.ResolvedBindTarget{
+				Wrapper:       "DataResponse",
+				Field:         "Data",
+				WrapperSchema: wrapperSchema,
+			},
+			wantErr: false,
+		},
+		{
+			name: "unknown wrapper schema",
+			bind: &resolver.ResolvedBindTarget{
+				Wrapper:       "NonExistent",
+				Field:         "Data",
+				WrapperSchema: nil,
+			},
+			wantErr: true,
+			errMsg:  "references unknown wrapper schema: NonExistent",
+		},
+		{
+			name: "unknown field in wrapper",
+			bind: &resolver.ResolvedBindTarget{
+				Wrapper:       "DataResponse",
+				Field:         "Missing",
+				WrapperSchema: wrapperSchema,
+			},
+			wantErr: true,
+			errMsg:  `wrapper schema "DataResponse" has no field "Missing"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := NewValidator()
+			schemas := map[string]*resolver.ResolvedSchema{
+				"DataResponse": wrapperSchema,
+			}
+			v.validateBindTarget("@endpoint[GET /users].@request", tt.bind, schemas)
+
+			if tt.wantErr && len(v.errors) == 0 {
+				t.Error("expected error but got none")
+			}
+
+			if !tt.wantErr && len(v.errors) > 0 {
+				t.Errorf("expected no error but got: %v", v.errors)
+			}
+
+			if tt.wantErr && len(v.errors) > 0 {
+				if !strings.Contains(v.errors[0].Error(), tt.errMsg) {
+					t.Errorf("expected error containing %q, got: %v", tt.errMsg, v.errors[0])
+				}
+			}
+		})
+	}
+}
+
+func TestValidator_ValidateBindTarget_RequestBody(t *testing.T) {
+	wrapperSchema := &resolver.ResolvedSchema{
+		Name:       "DataResponse",
+		GoTypeName: "DataResponse",
+		Fields: []*resolver.ResolvedField{
+			{Name: "data", GoName: "Data", OpenAPIType: "object"},
+		},
+	}
+
+	pkg := &resolver.ResolvedPackage{
+		API: &resolver.ResolvedAPI{
+			Title:   "Test",
+			Version: "1.0.0",
+		},
+		Schemas: map[string]*resolver.ResolvedSchema{
+			"User":         {Name: "User", Fields: []*resolver.ResolvedField{{Name: "id", GoName: "ID", OpenAPIType: "string"}}},
+			"DataResponse": wrapperSchema,
+		},
+		Parameters: map[string]*resolver.ResolvedParameter{},
+		Endpoints: []*resolver.ResolvedEndpoint{
+			{
+				Method: "POST",
+				Path:   "/users",
+				Request: &resolver.ResolvedRequestBody{
+					ContentType: "application/json",
+					Body: &resolver.ResolvedBody{
+						Schema:      "User",
+						ElementType: "User",
+						Bind: &resolver.ResolvedBindTarget{
+							Wrapper:       "NonExistent",
+							Field:         "Data",
+							WrapperSchema: nil,
+						},
+					},
+				},
+				Responses: map[string]*resolver.ResolvedResponse{
+					"200": {StatusCode: "200"},
+				},
+			},
+		},
+	}
+
+	v := NewValidator()
+	err := v.Validate(pkg)
+	if err == nil {
+		t.Fatal("expected validation error for unknown bind wrapper")
+	}
+	if !strings.Contains(err.Error(), "references unknown wrapper schema: NonExistent") {
+		t.Errorf("expected error about unknown wrapper schema, got: %v", err)
+	}
+}
+
+func TestValidator_ValidateBindTarget_Response(t *testing.T) {
+	wrapperSchema := &resolver.ResolvedSchema{
+		Name:       "DataResponse",
+		GoTypeName: "DataResponse",
+		Fields: []*resolver.ResolvedField{
+			{Name: "data", GoName: "Data", OpenAPIType: "object"},
+		},
+	}
+
+	pkg := &resolver.ResolvedPackage{
+		API: &resolver.ResolvedAPI{
+			Title:   "Test",
+			Version: "1.0.0",
+		},
+		Schemas: map[string]*resolver.ResolvedSchema{
+			"User":         {Name: "User", Fields: []*resolver.ResolvedField{{Name: "id", GoName: "ID", OpenAPIType: "string"}}},
+			"DataResponse": wrapperSchema,
+		},
+		Parameters: map[string]*resolver.ResolvedParameter{},
+		Endpoints: []*resolver.ResolvedEndpoint{
+			{
+				Method: "GET",
+				Path:   "/users",
+				Responses: map[string]*resolver.ResolvedResponse{
+					"200": {
+						StatusCode:  "200",
+						ContentType: "application/json",
+						Body: &resolver.ResolvedBody{
+							Schema:      "User",
+							ElementType: "User",
+							Bind: &resolver.ResolvedBindTarget{
+								Wrapper:       "DataResponse",
+								Field:         "NonExistent",
+								WrapperSchema: wrapperSchema,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	v := NewValidator()
+	err := v.Validate(pkg)
+	if err == nil {
+		t.Fatal("expected validation error for unknown bind field")
+	}
+	if !strings.Contains(err.Error(), `wrapper schema "DataResponse" has no field "NonExistent"`) {
+		t.Errorf("expected error about unknown field, got: %v", err)
+	}
+}
+
+func TestValidator_ValidateBindTarget_InlineResponse(t *testing.T) {
+	pkg := &resolver.ResolvedPackage{
+		API: &resolver.ResolvedAPI{
+			Title:   "Test",
+			Version: "1.0.0",
+		},
+		Schemas:    map[string]*resolver.ResolvedSchema{},
+		Parameters: map[string]*resolver.ResolvedParameter{},
+		Endpoints: []*resolver.ResolvedEndpoint{
+			{
+				Method: "GET",
+				Path:   "/users",
+				Responses: map[string]*resolver.ResolvedResponse{
+					"200": {StatusCode: "200"},
+				},
+				InlineResponses: map[string]*resolver.ResolvedInlineBody{
+					"201": {
+						ContentType: "application/json",
+						Bind: &resolver.ResolvedBindTarget{
+							Wrapper:       "UnknownWrapper",
+							Field:         "Data",
+							WrapperSchema: nil,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	v := NewValidator()
+	err := v.Validate(pkg)
+	if err == nil {
+		t.Fatal("expected validation error for unknown inline bind wrapper")
+	}
+	if !strings.Contains(err.Error(), "references unknown wrapper schema: UnknownWrapper") {
+		t.Errorf("expected error about unknown wrapper schema, got: %v", err)
+	}
+}
