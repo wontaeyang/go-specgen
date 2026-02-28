@@ -454,6 +454,8 @@ func (p *Parser) convertParsedField(fieldName string, parsed *ParsedAnnotation) 
 		Default:     parsed.GetChildValue("@default"),
 		Pattern:     parsed.GetChildValue("@pattern"),
 		Deprecated:  parsed.HasChild("@deprecated"),
+		ReadOnly:    parsed.HasChild("@readOnly"),
+		WriteOnly:   parsed.HasChild("@writeOnly"),
 	}
 
 	// Parse enum (comma-separated)
@@ -474,6 +476,18 @@ func (p *Parser) convertParsedField(fieldName string, parsed *ParsedAnnotation) 
 	if max := parsed.GetChildValue("@maximum"); max != "" {
 		if val, err := strconv.ParseFloat(max, 64); err == nil {
 			field.Maximum = &val
+		}
+	}
+
+	if exMin := parsed.GetChildValue("@exclusiveMinimum"); exMin != "" {
+		if val, err := strconv.ParseFloat(exMin, 64); err == nil {
+			field.ExclusiveMinimum = &val
+		}
+	}
+
+	if exMax := parsed.GetChildValue("@exclusiveMaximum"); exMax != "" {
+		if val, err := strconv.ParseFloat(exMax, 64); err == nil {
+			field.ExclusiveMaximum = &val
 		}
 	}
 

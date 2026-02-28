@@ -109,6 +109,8 @@ type ResolvedField struct {
 	Required    bool
 	Nullable    bool
 	Deprecated  bool
+	ReadOnly    bool
+	WriteOnly   bool
 
 	// Type information (resolved from Go type)
 	GoType      string // Original Go type string
@@ -135,17 +137,19 @@ type ResolvedField struct {
 	InlineFields []*ResolvedField // For anonymous structs, the resolved fields to inline
 
 	// Validation constraints
-	Enum        []string
-	Default     string
-	Example     string
-	Pattern     string
-	MinLength   *int
-	MaxLength   *int
-	MinItems    *int
-	MaxItems    *int
-	UniqueItems bool
-	Minimum     *float64
-	Maximum     *float64
+	Enum             []string
+	Default          string
+	Example          string
+	Pattern          string
+	MinLength        *int
+	MaxLength        *int
+	MinItems         *int
+	MaxItems         *int
+	UniqueItems      bool
+	Minimum          *float64
+	Maximum          *float64
+	ExclusiveMinimum *float64
+	ExclusiveMaximum *float64
 }
 
 // ResolvedEndpoint contains an endpoint with resolved types

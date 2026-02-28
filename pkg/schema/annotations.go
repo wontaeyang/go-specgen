@@ -284,6 +284,14 @@ var AnnotationSchema = &SchemaNode{
 					Name: "@maximum",
 					Type: ValueAnnotation,
 				},
+				"@exclusiveMinimum": {
+					Name: "@exclusiveMinimum",
+					Type: ValueAnnotation,
+				},
+				"@exclusiveMaximum": {
+					Name: "@exclusiveMaximum",
+					Type: ValueAnnotation,
+				},
 				"@minLength": {
 					Name: "@minLength",
 					Type: ValueAnnotation,
@@ -310,6 +318,14 @@ var AnnotationSchema = &SchemaNode{
 				},
 				"@deprecated": {
 					Name: "@deprecated",
+					Type: FlagAnnotation,
+				},
+				"@readOnly": {
+					Name: "@readOnly",
+					Type: FlagAnnotation,
+				},
+				"@writeOnly": {
+					Name: "@writeOnly",
 					Type: FlagAnnotation,
 				},
 			},

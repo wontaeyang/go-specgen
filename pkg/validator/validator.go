@@ -267,6 +267,11 @@ func (v *Validator) validateField(path string, field *resolver.ResolvedField) {
 			v.addError(fieldPath, fmt.Sprintf("invalid pattern regex: %v", err))
 		}
 	}
+
+	// Validate readOnly and writeOnly are mutually exclusive
+	if field.ReadOnly && field.WriteOnly {
+		v.addError(fieldPath, "readOnly and writeOnly cannot both be true")
+	}
 }
 
 // validateParameterField validates a parameter field with type-specific rules

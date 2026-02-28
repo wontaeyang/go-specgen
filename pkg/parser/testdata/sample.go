@@ -69,6 +69,20 @@ type FieldRequiredTest struct {
 	ValueStructPtr *User   `json:"value_struct_ptr"`
 }
 
+// BaseModel is a common base struct for embedding
+type BaseModel struct {
+	ID        string `json:"id"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// @schema
+type EmbeddedTest struct {
+	BaseModel
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
 // No annotation - should be ignored
 func HelperFunction() {}
 

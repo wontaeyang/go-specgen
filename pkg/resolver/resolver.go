@@ -278,14 +278,42 @@ func (r *Resolver) resolveSchema(schema *parser.Schema, schemaNames map[string]b
 		return nil, fmt.Errorf("%s is not a struct", schema.GoTypeName)
 	}
 
-	// Resolve each field
+	// Resolve each field (including embedded struct flattening)
+	fields, err := r.resolveSchemaFields(structType, schema.Fields, schemaNames, nil)
+	if err != nil {
+		return nil, err
+	}
+	resolved.Fields = fields
+
+	return resolved, nil
+}
+
+// resolveSchemaFields resolves fields from a struct type, flattening embedded structs.
+// visited tracks type names to prevent infinite recursion from circular embedding.
+func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*parser.Field, schemaNames map[string]bool, visited map[string]bool) ([]*ResolvedField, error) {
+	if visited == nil {
+		visited = make(map[string]bool)
+	}
+
+	var fields []*ResolvedField
+
 	for i := 0; i < structType.NumFields(); i++ {
 		field := structType.Field(i)
 		tag := structType.Tag(i)
 
+		// Handle embedded (anonymous) fields by flattening
+		if field.Anonymous() {
+			embeddedFields, err := r.flattenEmbeddedField(field, annotations, schemaNames, visited)
+			if err != nil {
+				return nil, err
+			}
+			fields = append(fields, embeddedFields...)
+			continue
+		}
+
 		// Find annotation for this field
 		var fieldAnnotation *parser.Field
-		for _, f := range schema.Fields {
+		for _, f := range annotations {
 			if f.GoName == field.Name() {
 				fieldAnnotation = f
 				break
@@ -302,10 +330,45 @@ func (r *Resolver) resolveSchema(schema *parser.Schema, schemaNames map[string]b
 			continue
 		}
 
-		resolved.Fields = append(resolved.Fields, resolvedField)
+		fields = append(fields, resolvedField)
 	}
 
-	return resolved, nil
+	return fields, nil
+}
+
+// flattenEmbeddedField resolves an embedded struct field and returns its flattened fields.
+func (r *Resolver) flattenEmbeddedField(field *types.Var, annotations []*parser.Field, schemaNames map[string]bool, visited map[string]bool) ([]*ResolvedField, error) {
+	t := field.Type()
+
+	// Unwrap pointer
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+
+	// Get the underlying struct type
+	var embeddedStruct *types.Struct
+	if named, ok := t.(*types.Named); ok {
+		typeName := named.Obj().Name()
+
+		// Cycle detection
+		if visited[typeName] {
+			return nil, nil
+		}
+		visited[typeName] = true
+		defer delete(visited, typeName)
+
+		underlying, ok := named.Underlying().(*types.Struct)
+		if !ok {
+			return nil, nil
+		}
+		embeddedStruct = underlying
+	} else if st, ok := t.(*types.Struct); ok {
+		embeddedStruct = st
+	} else {
+		return nil, nil
+	}
+
+	return r.resolveSchemaFields(embeddedStruct, annotations, schemaNames, visited)
 }
 
 // extractTypeArg extracts the type argument from a generic instantiation
@@ -339,14 +402,41 @@ func (r *Resolver) resolveParameter(param *parser.Parameter) (*ResolvedParameter
 		return nil, fmt.Errorf("%s is not a struct", param.GoTypeName)
 	}
 
-	// Resolve each field
+	// Resolve each field (including embedded struct flattening)
+	fields, err := r.resolveParameterFields(structType, param.Fields, string(param.Type), nil)
+	if err != nil {
+		return nil, err
+	}
+	resolved.Fields = fields
+
+	return resolved, nil
+}
+
+// resolveParameterFields resolves fields from a parameter struct, flattening embedded structs.
+func (r *Resolver) resolveParameterFields(structType *types.Struct, annotations []*parser.Field, paramType string, visited map[string]bool) ([]*ResolvedField, error) {
+	if visited == nil {
+		visited = make(map[string]bool)
+	}
+
+	var fields []*ResolvedField
+
 	for i := 0; i < structType.NumFields(); i++ {
 		field := structType.Field(i)
 		tag := structType.Tag(i)
 
+		// Handle embedded (anonymous) fields by flattening
+		if field.Anonymous() {
+			embeddedFields, err := r.flattenEmbeddedParamField(field, annotations, paramType, visited)
+			if err != nil {
+				return nil, err
+			}
+			fields = append(fields, embeddedFields...)
+			continue
+		}
+
 		// Find annotation for this field
 		var fieldAnnotation *parser.Field
-		for _, f := range param.Fields {
+		for _, f := range annotations {
 			if f.GoName == field.Name() {
 				fieldAnnotation = f
 				break
@@ -354,19 +444,173 @@ func (r *Resolver) resolveParameter(param *parser.Parameter) (*ResolvedParameter
 		}
 
 		// Resolve field type
-		resolvedField, err := r.resolveFieldWithParamType(field, tag, fieldAnnotation, string(param.Type))
+		resolvedField, err := r.resolveFieldWithParamType(field, tag, fieldAnnotation, paramType)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve field %s: %w", field.Name(), err)
 		}
-		// Skip fields that should be omitted (e.g., json:"-" for schema fields)
+		// Skip fields that should be omitted
 		if resolvedField == nil {
 			continue
 		}
 
-		resolved.Fields = append(resolved.Fields, resolvedField)
+		fields = append(fields, resolvedField)
 	}
 
-	return resolved, nil
+	return fields, nil
+}
+
+// flattenEmbeddedParamField resolves an embedded struct field for parameters.
+func (r *Resolver) flattenEmbeddedParamField(field *types.Var, annotations []*parser.Field, paramType string, visited map[string]bool) ([]*ResolvedField, error) {
+	t := field.Type()
+
+	// Unwrap pointer
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+
+	// Get the underlying struct type
+	var embeddedStruct *types.Struct
+	if named, ok := t.(*types.Named); ok {
+		typeName := named.Obj().Name()
+
+		// Cycle detection
+		if visited[typeName] {
+			return nil, nil
+		}
+		visited[typeName] = true
+		defer delete(visited, typeName)
+
+		underlying, ok := named.Underlying().(*types.Struct)
+		if !ok {
+			return nil, nil
+		}
+		embeddedStruct = underlying
+	} else if st, ok := t.(*types.Struct); ok {
+		embeddedStruct = st
+	} else {
+		return nil, nil
+	}
+
+	return r.resolveParameterFields(embeddedStruct, annotations, paramType, visited)
+}
+
+// flattenInlineEmbeddedType resolves an embedded type for inline struct fields.
+// It unwraps the type, gets the underlying struct, and resolves each field
+// using the same tag-type and schema-name rules as the parent inline resolver.
+func (r *Resolver) flattenInlineEmbeddedType(t types.Type, tagType string, schemaNames map[string]bool, fieldComments map[string]*parser.CommentBlock) []*ResolvedField {
+	// Unwrap pointer
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+
+	// Get the underlying struct
+	var embeddedStruct *types.Struct
+	if named, ok := t.(*types.Named); ok {
+		underlying, ok := named.Underlying().(*types.Struct)
+		if !ok {
+			return nil
+		}
+		embeddedStruct = underlying
+	} else if st, ok := t.(*types.Struct); ok {
+		embeddedStruct = st
+	} else {
+		return nil
+	}
+
+	var fields []*ResolvedField
+	for i := 0; i < embeddedStruct.NumFields(); i++ {
+		field := embeddedStruct.Field(i)
+		tag := embeddedStruct.Tag(i)
+
+		// Recurse into nested embedded fields
+		if field.Anonymous() {
+			nested := r.flattenInlineEmbeddedType(field.Type(), tagType, schemaNames, fieldComments)
+			fields = append(fields, nested...)
+			continue
+		}
+
+		// Skip unexported fields
+		if !field.Exported() {
+			continue
+		}
+
+		fieldName := field.Name()
+
+		// Extract name from appropriate struct tag
+		var resolvedName string
+		var shouldSkip bool
+		switch tagType {
+		case "path":
+			resolvedName = extractTagName(tag, "path")
+		case "query":
+			resolvedName = extractTagName(tag, "query")
+		case "header":
+			resolvedName = extractTagName(tag, "header")
+		case "cookie":
+			resolvedName = extractTagName(tag, "cookie")
+		default:
+			resolvedName = resolveFieldNameFromTag(tag, fieldName)
+			if resolvedName == "" {
+				shouldSkip = true
+			}
+		}
+
+		if shouldSkip {
+			continue
+		}
+
+		if resolvedName == "" || resolvedName == "-" {
+			resolvedName = fieldName
+		}
+
+		resolved := &ResolvedField{
+			GoName:   fieldName,
+			Name:     resolvedName,
+			GoType:   field.Type().String(),
+			Required: resolveParamRequired(tag, tagType),
+		}
+
+		// Resolve type info
+		if schemaNames != nil {
+			if inlineFields := r.resolveAnonymousStruct(field.Type(), schemaNames); inlineFields != nil {
+				resolved.InlineFields = inlineFields
+				resolved.OpenAPIType = "object"
+			} else if itemFields := r.resolveSliceOfAnonymousStruct(field.Type(), schemaNames); itemFields != nil {
+				resolved.IsArray = true
+				resolved.OpenAPIType = "array"
+				resolved.ItemsType = "object"
+				resolved.ItemsInlineFields = itemFields
+			} else if mapValueFields := r.resolveMapOfAnonymousStruct(field.Type(), schemaNames); mapValueFields != nil {
+				resolved.IsMap = true
+				resolved.OpenAPIType = "object"
+				resolved.MapValueInlineFields = mapValueFields
+			}
+		}
+
+		if resolved.OpenAPIType == "" {
+			typeInfo := r.resolveType(field.Type())
+			resolved.OpenAPIType = typeInfo.OpenAPIType
+			resolved.Format = typeInfo.Format
+			resolved.IsArray = typeInfo.IsArray
+			resolved.ItemsType = typeInfo.ItemsType
+			resolved.Nullable = typeInfo.IsNullable
+			resolved.IsAnyValue = typeInfo.IsAnyValue
+			if typeInfo.IsNullable {
+				resolved.Required = false
+			}
+		}
+
+		// Apply field annotations if present
+		if fieldComments != nil {
+			if comment := fieldComments[fieldName]; comment != nil {
+				r.applyFieldAnnotations(resolved, comment)
+			}
+		}
+
+		fields = append(fields, resolved)
+	}
+
+	return fields
 }
 
 // resolveField resolves a single struct field
@@ -449,6 +693,16 @@ func (r *Resolver) resolveAnonymousStruct(t types.Type, schemaNames map[string]b
 	for i := 0; i < structType.NumFields(); i++ {
 		field := structType.Field(i)
 		tag := structType.Tag(i)
+
+		// Handle embedded (anonymous) fields by flattening
+		if field.Anonymous() {
+			embeddedFields, err := r.flattenEmbeddedField(field, nil, schemaNames, nil)
+			if err != nil {
+				continue
+			}
+			fields = append(fields, embeddedFields...)
+			continue
+		}
 
 		// Skip unexported (private) fields - they cannot be serialized
 		if !field.Exported() {
@@ -705,11 +959,23 @@ func applyAnnotationOverrides(resolved *ResolvedField, annotation *parser.Field)
 	if annotation.Maximum != nil {
 		resolved.Maximum = annotation.Maximum
 	}
+	if annotation.ExclusiveMinimum != nil {
+		resolved.ExclusiveMinimum = annotation.ExclusiveMinimum
+	}
+	if annotation.ExclusiveMaximum != nil {
+		resolved.ExclusiveMaximum = annotation.ExclusiveMaximum
+	}
 	if annotation.Nullable {
 		resolved.Nullable = true
 	}
 	if annotation.Deprecated {
 		resolved.Deprecated = true
+	}
+	if annotation.ReadOnly {
+		resolved.ReadOnly = true
+	}
+	if annotation.WriteOnly {
+		resolved.WriteOnly = true
 	}
 }
 
@@ -731,6 +997,14 @@ func (r *Resolver) resolveType(t types.Type) *TypeInfo {
 
 	// Handle slices/arrays
 	if slice, ok := t.(*types.Slice); ok {
+		// Special case: []byte → string, format: byte (base64-encoded)
+		if basic, ok := slice.Elem().(*types.Basic); ok && basic.Kind() == types.Byte {
+			info.OpenAPIType = "string"
+			info.Format = "byte"
+			r.typeCache[typeStr] = info
+			return info
+		}
+
 		info.IsArray = true
 		elemInfo := r.resolveType(slice.Elem())
 		info.ItemsType = elemInfo.OpenAPIType
@@ -1207,8 +1481,15 @@ func (r *Resolver) resolveInlineStructFields(structType *ast.StructType, fieldCo
 	fields := make([]*ResolvedField, 0, len(structType.Fields.List))
 
 	for _, astField := range structType.Fields.List {
+		// Handle embedded fields by flattening
 		if len(astField.Names) == 0 {
-			continue // Skip embedded fields
+			if r.pkg != nil && r.pkg.TypesInfo != nil {
+				if typeAndValue, ok := r.pkg.TypesInfo.Types[astField.Type]; ok {
+					embeddedFields := r.flattenInlineEmbeddedType(typeAndValue.Type, tagType, schemaNames, fieldComments)
+					fields = append(fields, embeddedFields...)
+				}
+			}
+			continue
 		}
 
 		fieldName := astField.Names[0].Name
@@ -1386,6 +1667,14 @@ func (r *Resolver) applyFieldAnnotations(field *ResolvedField, comment *parser.C
 				if val, err := parseFloat(annotValue); err == nil {
 					field.Maximum = &val
 				}
+			case "@exclusiveMinimum":
+				if val, err := parseFloat(annotValue); err == nil {
+					field.ExclusiveMinimum = &val
+				}
+			case "@exclusiveMaximum":
+				if val, err := parseFloat(annotValue); err == nil {
+					field.ExclusiveMaximum = &val
+				}
 			case "@minLength":
 				if val, err := parseInt(annotValue); err == nil {
 					field.MinLength = &val
@@ -1404,6 +1693,10 @@ func (r *Resolver) applyFieldAnnotations(field *ResolvedField, comment *parser.C
 				}
 			case "@uniqueItems":
 				field.UniqueItems = true
+			case "@readOnly":
+				field.ReadOnly = true
+			case "@writeOnly":
+				field.WriteOnly = true
 			}
 		}
 	}

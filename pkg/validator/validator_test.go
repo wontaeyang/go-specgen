@@ -467,6 +467,38 @@ func TestValidator_ValidateField(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "readOnly and writeOnly both true",
+			field: &resolver.ResolvedField{
+				Name:        "field",
+				GoName:      "Field",
+				OpenAPIType: "string",
+				ReadOnly:    true,
+				WriteOnly:   true,
+			},
+			wantErr: true,
+			errMsg:  "readOnly and writeOnly cannot both be true",
+		},
+		{
+			name: "readOnly only",
+			field: &resolver.ResolvedField{
+				Name:        "id",
+				GoName:      "ID",
+				OpenAPIType: "string",
+				ReadOnly:    true,
+			},
+			wantErr: false,
+		},
+		{
+			name: "writeOnly only",
+			field: &resolver.ResolvedField{
+				Name:        "password",
+				GoName:      "Password",
+				OpenAPIType: "string",
+				WriteOnly:   true,
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

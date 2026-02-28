@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"go/types"
 	"testing"
 
 	"github.com/wontaeyang/go-specgen/pkg/parser"
@@ -500,6 +501,31 @@ func TestTypeInfo_BasicTypes(t *testing.T) {
 	}
 }
 
+func TestResolver_ByteSliceResolvesToStringByte(t *testing.T) {
+	resolver, err := NewResolver("../parser/testdata", nil)
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+
+	// Construct a []byte type using go/types
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	typeInfo := resolver.resolveType(byteSlice)
+	if typeInfo == nil {
+		t.Fatal("resolveType([]byte) returned nil")
+	}
+
+	if typeInfo.OpenAPIType != "string" {
+		t.Errorf("[]byte OpenAPIType = %q, want %q", typeInfo.OpenAPIType, "string")
+	}
+	if typeInfo.Format != "byte" {
+		t.Errorf("[]byte Format = %q, want %q", typeInfo.Format, "byte")
+	}
+	if typeInfo.IsArray {
+		t.Error("[]byte should not be marked as IsArray")
+	}
+}
+
 func TestResolver_InlineDeclarations(t *testing.T) {
 	// Parse the inline example package
 	p := parser.NewParser("../../examples/inline")
@@ -909,6 +935,67 @@ func TestResolver_PointerImpliesNotRequired(t *testing.T) {
 				t.Errorf("field %q Nullable = %v, want %v", tt.fieldName, f.Nullable, tt.wantNullable)
 			}
 		})
+	}
+}
+
+func TestResolver_EmbeddedStructFlattening(t *testing.T) {
+	// Parse the test package
+	p := parser.NewParser("../parser/testdata")
+	parsed, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Failed to parse package: %v", err)
+	}
+
+	// Create resolver
+	resolver, err := NewResolver("../parser/testdata", nil)
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+
+	// Get EmbeddedTest schema
+	schema, ok := parsed.Schemas["EmbeddedTest"]
+	if !ok {
+		t.Fatal("EmbeddedTest schema not found in parsed package")
+	}
+
+	// Build schema names map
+	schemaNames := make(map[string]bool)
+	for name := range parsed.Schemas {
+		schemaNames[name] = true
+	}
+
+	// Resolve it
+	resolved, err := resolver.resolveSchema(schema, schemaNames)
+	if err != nil {
+		t.Fatalf("resolveSchema() error = %v", err)
+	}
+
+	// Build field lookup
+	fields := make(map[string]*ResolvedField)
+	for _, f := range resolved.Fields {
+		fields[f.Name] = f
+	}
+
+	// Should have 5 fields: id, created_at, updated_at (from BaseModel), name, email
+	expectedFields := []string{"id", "created_at", "updated_at", "name", "email"}
+	for _, name := range expectedFields {
+		if _, ok := fields[name]; !ok {
+			t.Errorf("expected field %q not found in resolved fields", name)
+		}
+	}
+
+	if len(resolved.Fields) != len(expectedFields) {
+		t.Errorf("expected %d fields, got %d", len(expectedFields), len(resolved.Fields))
+		for _, f := range resolved.Fields {
+			t.Logf("  field: %s (GoName: %s)", f.Name, f.GoName)
+		}
+	}
+
+	// Verify embedded fields have correct types
+	if f, ok := fields["id"]; ok {
+		if f.OpenAPIType != "string" {
+			t.Errorf("id field OpenAPIType = %q, want %q", f.OpenAPIType, "string")
+		}
 	}
 }
 
