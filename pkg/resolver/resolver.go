@@ -497,7 +497,11 @@ func (r *Resolver) flattenEmbeddedParamField(field *types.Var, annotations []*pa
 // flattenInlineEmbeddedType resolves an embedded type for inline struct fields.
 // It unwraps the type, gets the underlying struct, and resolves each field
 // using the same tag-type and schema-name rules as the parent inline resolver.
-func (r *Resolver) flattenInlineEmbeddedType(t types.Type, tagType string, schemaNames map[string]bool, fieldComments map[string]*parser.CommentBlock) []*ResolvedField {
+func (r *Resolver) flattenInlineEmbeddedType(t types.Type, tagType string, schemaNames map[string]bool, fieldComments map[string]*parser.CommentBlock, visited map[string]bool) []*ResolvedField {
+	if visited == nil {
+		visited = make(map[string]bool)
+	}
+
 	// Unwrap pointer
 	if ptr, ok := t.(*types.Pointer); ok {
 		t = ptr.Elem()
@@ -506,6 +510,15 @@ func (r *Resolver) flattenInlineEmbeddedType(t types.Type, tagType string, schem
 	// Get the underlying struct
 	var embeddedStruct *types.Struct
 	if named, ok := t.(*types.Named); ok {
+		typeName := named.Obj().Name()
+
+		// Cycle detection
+		if visited[typeName] {
+			return nil
+		}
+		visited[typeName] = true
+		defer delete(visited, typeName)
+
 		underlying, ok := named.Underlying().(*types.Struct)
 		if !ok {
 			return nil
@@ -524,7 +537,7 @@ func (r *Resolver) flattenInlineEmbeddedType(t types.Type, tagType string, schem
 
 		// Recurse into nested embedded fields
 		if field.Anonymous() {
-			nested := r.flattenInlineEmbeddedType(field.Type(), tagType, schemaNames, fieldComments)
+			nested := r.flattenInlineEmbeddedType(field.Type(), tagType, schemaNames, fieldComments, visited)
 			fields = append(fields, nested...)
 			continue
 		}
@@ -603,7 +616,9 @@ func (r *Resolver) flattenInlineEmbeddedType(t types.Type, tagType string, schem
 		// Apply field annotations if present
 		if fieldComments != nil {
 			if comment := fieldComments[fieldName]; comment != nil {
-				r.applyFieldAnnotations(resolved, comment)
+				if err := r.applyFieldAnnotations(resolved, comment); err != nil {
+					continue
+				}
 			}
 		}
 
@@ -1485,7 +1500,7 @@ func (r *Resolver) resolveInlineStructFields(structType *ast.StructType, fieldCo
 		if len(astField.Names) == 0 {
 			if r.pkg != nil && r.pkg.TypesInfo != nil {
 				if typeAndValue, ok := r.pkg.TypesInfo.Types[astField.Type]; ok {
-					embeddedFields := r.flattenInlineEmbeddedType(typeAndValue.Type, tagType, schemaNames, fieldComments)
+					embeddedFields := r.flattenInlineEmbeddedType(typeAndValue.Type, tagType, schemaNames, fieldComments, nil)
 					fields = append(fields, embeddedFields...)
 				}
 			}
@@ -1593,7 +1608,9 @@ func (r *Resolver) resolveInlineStructFields(structType *ast.StructType, fieldCo
 
 		// Apply field annotations if present
 		if comment := fieldComments[fieldName]; comment != nil {
-			r.applyFieldAnnotations(resolved, comment)
+			if err := r.applyFieldAnnotations(resolved, comment); err != nil {
+				return nil, fmt.Errorf("invalid annotation for field %s: %w", fieldName, err)
+			}
 		}
 
 		fields = append(fields, resolved)
@@ -1603,9 +1620,9 @@ func (r *Resolver) resolveInlineStructFields(structType *ast.StructType, fieldCo
 }
 
 // applyFieldAnnotations applies @field annotations to a resolved field
-func (r *Resolver) applyFieldAnnotations(field *ResolvedField, comment *parser.CommentBlock) {
+func (r *Resolver) applyFieldAnnotations(field *ResolvedField, comment *parser.CommentBlock) error {
 	if comment == nil {
-		return
+		return nil
 	}
 
 	// Parse inline @field annotation
@@ -1662,34 +1679,50 @@ func (r *Resolver) applyFieldAnnotations(field *ResolvedField, comment *parser.C
 			case "@minimum":
 				if val, err := parseFloat(annotValue); err == nil {
 					field.Minimum = &val
+				} else {
+					return fmt.Errorf("@minimum value %q is not a valid number", annotValue)
 				}
 			case "@maximum":
 				if val, err := parseFloat(annotValue); err == nil {
 					field.Maximum = &val
+				} else {
+					return fmt.Errorf("@maximum value %q is not a valid number", annotValue)
 				}
 			case "@exclusiveMinimum":
 				if val, err := parseFloat(annotValue); err == nil {
 					field.ExclusiveMinimum = &val
+				} else {
+					return fmt.Errorf("@exclusiveMinimum value %q is not a valid number", annotValue)
 				}
 			case "@exclusiveMaximum":
 				if val, err := parseFloat(annotValue); err == nil {
 					field.ExclusiveMaximum = &val
+				} else {
+					return fmt.Errorf("@exclusiveMaximum value %q is not a valid number", annotValue)
 				}
 			case "@minLength":
 				if val, err := parseInt(annotValue); err == nil {
 					field.MinLength = &val
+				} else {
+					return fmt.Errorf("@minLength value %q is not a valid integer", annotValue)
 				}
 			case "@maxLength":
 				if val, err := parseInt(annotValue); err == nil {
 					field.MaxLength = &val
+				} else {
+					return fmt.Errorf("@maxLength value %q is not a valid integer", annotValue)
 				}
 			case "@minItems":
 				if val, err := parseInt(annotValue); err == nil {
 					field.MinItems = &val
+				} else {
+					return fmt.Errorf("@minItems value %q is not a valid integer", annotValue)
 				}
 			case "@maxItems":
 				if val, err := parseInt(annotValue); err == nil {
 					field.MaxItems = &val
+				} else {
+					return fmt.Errorf("@maxItems value %q is not a valid integer", annotValue)
 				}
 			case "@uniqueItems":
 				field.UniqueItems = true
@@ -1700,6 +1733,7 @@ func (r *Resolver) applyFieldAnnotations(field *ResolvedField, comment *parser.C
 			}
 		}
 	}
+	return nil
 }
 
 // parseFloat parses a string to float64

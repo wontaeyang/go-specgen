@@ -233,7 +233,10 @@ func (p *Parser) parseSchemas(result *ParsedPackage) error {
 						return fmt.Errorf("failed to parse inline @field for %s.%s: %w", structName, fieldName, err)
 					}
 
-					field := p.convertParsedField(fieldName, parsedField)
+					field, err := p.convertParsedField(fieldName, parsedField)
+					if err != nil {
+						return fmt.Errorf("invalid @field for %s.%s: %w", structName, fieldName, err)
+					}
 					s.Fields = append(s.Fields, field)
 				} else {
 					parsedField, err := ParseAnnotationBlock(fieldLines, "@field", fieldNode)
@@ -241,7 +244,10 @@ func (p *Parser) parseSchemas(result *ParsedPackage) error {
 						return fmt.Errorf("failed to parse @field for %s.%s: %w", structName, fieldName, err)
 					}
 
-					field := p.convertParsedField(fieldName, parsedField)
+					field, err := p.convertParsedField(fieldName, parsedField)
+					if err != nil {
+						return fmt.Errorf("invalid @field for %s.%s: %w", structName, fieldName, err)
+					}
 					s.Fields = append(s.Fields, field)
 				}
 			}
@@ -351,7 +357,10 @@ func (p *Parser) parseParameters(result *ParsedPackage) error {
 						return fmt.Errorf("failed to parse inline @field for %s.%s: %w", structName, fieldName, err)
 					}
 
-					field := p.convertParsedField(fieldName, parsedField)
+					field, err := p.convertParsedField(fieldName, parsedField)
+					if err != nil {
+						return fmt.Errorf("invalid @field for %s.%s: %w", structName, fieldName, err)
+					}
 					param.Fields = append(param.Fields, field)
 				} else {
 					parsedField, err := ParseAnnotationBlock(fieldLines, "@field", fieldNode)
@@ -359,7 +368,10 @@ func (p *Parser) parseParameters(result *ParsedPackage) error {
 						return fmt.Errorf("failed to parse @field for %s.%s: %w", structName, fieldName, err)
 					}
 
-					field := p.convertParsedField(fieldName, parsedField)
+					field, err := p.convertParsedField(fieldName, parsedField)
+					if err != nil {
+						return fmt.Errorf("invalid @field for %s.%s: %w", structName, fieldName, err)
+					}
 					param.Fields = append(param.Fields, field)
 				}
 			}
@@ -444,7 +456,7 @@ func (p *Parser) parseEndpoints(result *ParsedPackage) error {
 }
 
 // convertParsedField converts a ParsedAnnotation to a Field
-func (p *Parser) convertParsedField(fieldName string, parsed *ParsedAnnotation) *Field {
+func (p *Parser) convertParsedField(fieldName string, parsed *ParsedAnnotation) (*Field, error) {
 	field := &Field{
 		GoName:      fieldName,
 		Name:        fieldName, // Will be resolved from struct tags later
@@ -470,48 +482,64 @@ func (p *Parser) convertParsedField(fieldName string, parsed *ParsedAnnotation) 
 	if min := parsed.GetChildValue("@minimum"); min != "" {
 		if val, err := strconv.ParseFloat(min, 64); err == nil {
 			field.Minimum = &val
+		} else {
+			return nil, fmt.Errorf("@minimum value %q is not a valid number", min)
 		}
 	}
 
 	if max := parsed.GetChildValue("@maximum"); max != "" {
 		if val, err := strconv.ParseFloat(max, 64); err == nil {
 			field.Maximum = &val
+		} else {
+			return nil, fmt.Errorf("@maximum value %q is not a valid number", max)
 		}
 	}
 
 	if exMin := parsed.GetChildValue("@exclusiveMinimum"); exMin != "" {
 		if val, err := strconv.ParseFloat(exMin, 64); err == nil {
 			field.ExclusiveMinimum = &val
+		} else {
+			return nil, fmt.Errorf("@exclusiveMinimum value %q is not a valid number", exMin)
 		}
 	}
 
 	if exMax := parsed.GetChildValue("@exclusiveMaximum"); exMax != "" {
 		if val, err := strconv.ParseFloat(exMax, 64); err == nil {
 			field.ExclusiveMaximum = &val
+		} else {
+			return nil, fmt.Errorf("@exclusiveMaximum value %q is not a valid number", exMax)
 		}
 	}
 
 	if minLen := parsed.GetChildValue("@minLength"); minLen != "" {
 		if val, err := strconv.Atoi(minLen); err == nil {
 			field.MinLength = &val
+		} else {
+			return nil, fmt.Errorf("@minLength value %q is not a valid integer", minLen)
 		}
 	}
 
 	if maxLen := parsed.GetChildValue("@maxLength"); maxLen != "" {
 		if val, err := strconv.Atoi(maxLen); err == nil {
 			field.MaxLength = &val
+		} else {
+			return nil, fmt.Errorf("@maxLength value %q is not a valid integer", maxLen)
 		}
 	}
 
 	if minItems := parsed.GetChildValue("@minItems"); minItems != "" {
 		if val, err := strconv.Atoi(minItems); err == nil {
 			field.MinItems = &val
+		} else {
+			return nil, fmt.Errorf("@minItems value %q is not a valid integer", minItems)
 		}
 	}
 
 	if maxItems := parsed.GetChildValue("@maxItems"); maxItems != "" {
 		if val, err := strconv.Atoi(maxItems); err == nil {
 			field.MaxItems = &val
+		} else {
+			return nil, fmt.Errorf("@maxItems value %q is not a valid integer", maxItems)
 		}
 	}
 
@@ -519,7 +547,7 @@ func (p *Parser) convertParsedField(fieldName string, parsed *ParsedAnnotation) 
 		field.UniqueItems = true
 	}
 
-	return field
+	return field, nil
 }
 
 // extractRepeatedReferences extracts references from repeated children annotations
