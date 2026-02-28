@@ -450,11 +450,13 @@ components:
                     type: string
                     description: User display name
                 address:
-                    allOf:
+                    oneOf:
                         - $ref: '#/components/schemas/Address'
+                        - type: "null"
                 billing_address:
-                    allOf:
+                    oneOf:
                         - $ref: '#/components/schemas/Address'
+                        - type: "null"
             required:
                 - id
                 - email

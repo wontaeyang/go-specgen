@@ -1216,12 +1216,27 @@ func TestGenerator_NullableSchemaRef_31(t *testing.T) {
 		t.Fatalf("BuildSchema() error = %v", err)
 	}
 
-	// Should have allOf wrapping the $ref
-	if len(schema.AllOf) != 1 {
-		t.Fatalf("allOf should have 1 entry, got %d", len(schema.AllOf))
+	// Should have oneOf with $ref and null type
+	if len(schema.OneOf) != 2 {
+		t.Fatalf("oneOf should have 2 entries, got %d", len(schema.OneOf))
 	}
 
-	// Should NOT have nullable (3.1 uses type array)
+	// First entry should be the $ref
+	ref := schema.OneOf[0].GetReference()
+	if ref != "#/components/schemas/Address" {
+		t.Errorf("oneOf[0] should be $ref to Address, got %q", ref)
+	}
+
+	// Second entry should be null type
+	nullSchema, err := schema.OneOf[1].BuildSchema()
+	if err != nil {
+		t.Fatalf("BuildSchema() for null entry error = %v", err)
+	}
+	if len(nullSchema.Type) != 1 || nullSchema.Type[0] != "null" {
+		t.Errorf("oneOf[1] should be type null, got %v", nullSchema.Type)
+	}
+
+	// Should NOT have nullable keyword (3.1 uses oneOf)
 	if schema.Nullable != nil {
 		t.Error("nullable should not be set for 3.1")
 	}

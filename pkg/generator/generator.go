@@ -298,15 +298,25 @@ func (g *Generator) generateFieldSchemaWithRefs(field *resolver.ResolvedField, s
 
 	// Handle schema references: User (named type that is a schema)
 	if isSchemaReference(goType, schemas) {
-		ref := base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", extractTypeName(goType)))
+		refPath := fmt.Sprintf("#/components/schemas/%s", extractTypeName(goType))
 		if field.Nullable {
-			// In OpenAPI 3.0, $ref cannot have siblings. Wrap in allOf to add nullable.
+			if g.schemaBuilder.Is31Plus() {
+				// OpenAPI 3.1+: $ref can have siblings, use oneOf with null type
+				schema := g.schemaBuilder.NewSchema()
+				schema.OneOf = []*base.SchemaProxy{
+					base.CreateSchemaProxyRef(refPath),
+					base.CreateSchemaProxy(&base.Schema{Type: []string{"null"}}),
+				}
+				return base.CreateSchemaProxy(schema)
+			}
+			// OpenAPI 3.0: $ref cannot have siblings. Wrap in allOf to add nullable.
+			ref := base.CreateSchemaProxyRef(refPath)
 			wrapper := g.schemaBuilder.NewSchema()
 			wrapper.AllOf = []*base.SchemaProxy{ref}
 			g.schemaBuilder.SetNullable(wrapper, true)
 			return base.CreateSchemaProxy(wrapper)
 		}
-		return ref
+		return base.CreateSchemaProxyRef(refPath)
 	}
 
 	// Handle any value (empty schema)

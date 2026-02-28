@@ -122,8 +122,9 @@ components:
                     type: string
                     description: Employee title
                 manager:
-                    allOf:
+                    oneOf:
                         - $ref: '#/components/schemas/Employee'
+                        - type: "null"
                 direct_reports:
                     type: array
                     items:
@@ -279,8 +280,9 @@ components:
                 home_address:
                     $ref: '#/components/schemas/Address'
                 work_address:
-                    allOf:
+                    oneOf:
                         - $ref: '#/components/schemas/Address'
+                        - type: "null"
             required:
                 - id
                 - email
