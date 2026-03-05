@@ -303,6 +303,59 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Error'
+    /users/{id}/full:
+        get:
+            summary: Get a user with error responses
+            description: Returns a user with standard error range responses.
+            operationId: getUserWithErrors
+            parameters:
+                - name: id
+                  in: path
+                  description: User ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "200":
+                    description: User found
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    status:
+                                        type: string
+                                        description: Response status
+                                    data:
+                                        $ref: '#/components/schemas/User'
+                                    error:
+                                        type:
+                                            - string
+                                            - "null"
+                                        description: Optional error message
+                                required:
+                                    - status
+                                    - data
+                                description: Standard API response envelope
+                4XX:
+                    description: Client error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                5XX:
+                    description: Server error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                default:
+                    description: Unexpected error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
     /webhooks:
         post:
             summary: Handle incoming webhook
