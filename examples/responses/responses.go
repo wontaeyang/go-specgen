@@ -314,6 +314,10 @@ func HandleWebhook(w http.ResponseWriter, r *http.Request) {}
 //	    @body Error
 //	    @description Server error
 //	  }
+//	  @response default {
+//	    @body Error
+//	    @description Unexpected error
+//	  }
 //	}
 func GetUserWithErrors(w http.ResponseWriter, r *http.Request) {}
 

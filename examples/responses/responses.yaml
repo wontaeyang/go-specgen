@@ -350,6 +350,12 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Error'
+                default:
+                    description: Unexpected error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
     /webhooks:
         post:
             summary: Handle incoming webhook
