@@ -1,7 +1,7 @@
-// @api {
-//   @title Test API
-//   @version 1.0.0
-// }
+//	@api {
+//	  @title Test API
+//	  @version 1.0.0
+//	}
 package testdata
 
 // @schema
@@ -36,27 +36,27 @@ type SearchQuery struct {
 	Limit *int `query:"limit,omitempty"`
 }
 
-// @endpoint GET /users/{id} {
-//   @summary Get user by ID
-//   @path UserIDPath
-//   @response 200 {
-//     @contentType json
-//     @body User
-//   }
-// }
+//	@endpoint GET /users/{id} {
+//	  @summary Get user by ID
+//	  @path UserIDPath
+//	  @response 200 {
+//	    @contentType json
+//	    @body User
+//	  }
+//	}
 func GetUser() {}
 
-// @endpoint POST /users {
-//   @summary Create user
-//   @request {
-//     @contentType json
-//     @body User
-//   }
-//   @response 201 {
-//     @contentType json
-//     @body User
-//   }
-// }
+//	@endpoint POST /users {
+//	  @summary Create user
+//	  @request {
+//	    @contentType json
+//	    @body User
+//	  }
+//	  @response 201 {
+//	    @contentType json
+//	    @body User
+//	  }
+//	}
 func CreateUser() {}
 
 // @schema
@@ -81,6 +81,38 @@ type EmbeddedTest struct {
 	BaseModel
 	Name  string `json:"name"`
 	Email string `json:"email"`
+}
+
+// @schema
+type EmbeddedPtrTest struct {
+	*BaseModel
+	Label string `json:"label"`
+}
+
+// Auditable adds audit fields via embedding
+type Auditable struct {
+	DeletedAt *string `json:"deleted_at,omitempty"`
+	DeletedBy *string `json:"deleted_by,omitempty"`
+}
+
+// @schema
+type NestedEmbedTest struct {
+	BaseModel
+	Auditable
+	Status string `json:"status"`
+}
+
+// CommonQueryParams is a shared base for query parameters
+type CommonQueryParams struct {
+	Limit  *int `query:"limit,omitempty"`
+	Offset *int `query:"offset,omitempty"`
+}
+
+// @query
+type EmbeddedQueryParams struct {
+	CommonQueryParams
+	// @field
+	Search string `query:"search"`
 }
 
 // No annotation - should be ignored

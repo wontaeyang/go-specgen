@@ -336,35 +336,47 @@ func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*
 	return fields, nil
 }
 
-// flattenEmbeddedField resolves an embedded struct field and returns its flattened fields.
-func (r *Resolver) flattenEmbeddedField(field *types.Var, annotations []*parser.Field, schemaNames map[string]bool, visited map[string]bool) ([]*ResolvedField, error) {
-	t := field.Type()
+// unwrapEmbeddedStruct unwraps a type (through pointers and named types) to get
+// the underlying struct, with cycle detection via the visited map.
+// Returns nil if the type is not a struct or if a cycle is detected.
+// The returned cleanup function must be deferred to remove the type from visited.
+func unwrapEmbeddedStruct(t types.Type, visited map[string]bool) (st *types.Struct, cleanup func()) {
+	cleanup = func() {} // no-op default
 
 	// Unwrap pointer
 	if ptr, ok := t.(*types.Pointer); ok {
 		t = ptr.Elem()
 	}
 
-	// Get the underlying struct type
-	var embeddedStruct *types.Struct
 	if named, ok := t.(*types.Named); ok {
 		typeName := named.Obj().Name()
 
 		// Cycle detection
 		if visited[typeName] {
-			return nil, nil
+			return nil, cleanup
 		}
 		visited[typeName] = true
-		defer delete(visited, typeName)
+		cleanup = func() { delete(visited, typeName) }
 
 		underlying, ok := named.Underlying().(*types.Struct)
 		if !ok {
-			return nil, nil
+			return nil, cleanup
 		}
-		embeddedStruct = underlying
-	} else if st, ok := t.(*types.Struct); ok {
-		embeddedStruct = st
-	} else {
+		return underlying, cleanup
+	}
+
+	if s, ok := t.(*types.Struct); ok {
+		return s, cleanup
+	}
+
+	return nil, cleanup
+}
+
+// flattenEmbeddedField resolves an embedded struct field and returns its flattened fields.
+func (r *Resolver) flattenEmbeddedField(field *types.Var, annotations []*parser.Field, schemaNames map[string]bool, visited map[string]bool) ([]*ResolvedField, error) {
+	embeddedStruct, cleanup := unwrapEmbeddedStruct(field.Type(), visited)
+	defer cleanup()
+	if embeddedStruct == nil {
 		return nil, nil
 	}
 
@@ -461,33 +473,9 @@ func (r *Resolver) resolveParameterFields(structType *types.Struct, annotations 
 
 // flattenEmbeddedParamField resolves an embedded struct field for parameters.
 func (r *Resolver) flattenEmbeddedParamField(field *types.Var, annotations []*parser.Field, paramType string, visited map[string]bool) ([]*ResolvedField, error) {
-	t := field.Type()
-
-	// Unwrap pointer
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
-	}
-
-	// Get the underlying struct type
-	var embeddedStruct *types.Struct
-	if named, ok := t.(*types.Named); ok {
-		typeName := named.Obj().Name()
-
-		// Cycle detection
-		if visited[typeName] {
-			return nil, nil
-		}
-		visited[typeName] = true
-		defer delete(visited, typeName)
-
-		underlying, ok := named.Underlying().(*types.Struct)
-		if !ok {
-			return nil, nil
-		}
-		embeddedStruct = underlying
-	} else if st, ok := t.(*types.Struct); ok {
-		embeddedStruct = st
-	} else {
+	embeddedStruct, cleanup := unwrapEmbeddedStruct(field.Type(), visited)
+	defer cleanup()
+	if embeddedStruct == nil {
 		return nil, nil
 	}
 
@@ -502,31 +490,9 @@ func (r *Resolver) flattenInlineEmbeddedType(t types.Type, tagType string, schem
 		visited = make(map[string]bool)
 	}
 
-	// Unwrap pointer
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
-	}
-
-	// Get the underlying struct
-	var embeddedStruct *types.Struct
-	if named, ok := t.(*types.Named); ok {
-		typeName := named.Obj().Name()
-
-		// Cycle detection
-		if visited[typeName] {
-			return nil
-		}
-		visited[typeName] = true
-		defer delete(visited, typeName)
-
-		underlying, ok := named.Underlying().(*types.Struct)
-		if !ok {
-			return nil
-		}
-		embeddedStruct = underlying
-	} else if st, ok := t.(*types.Struct); ok {
-		embeddedStruct = st
-	} else {
+	embeddedStruct, cleanup := unwrapEmbeddedStruct(t, visited)
+	defer cleanup()
+	if embeddedStruct == nil {
 		return nil
 	}
 
