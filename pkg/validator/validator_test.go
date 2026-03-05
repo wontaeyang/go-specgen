@@ -944,6 +944,60 @@ func TestValidator_ValidateRequestBody(t *testing.T) {
 	}
 }
 
+func TestValidator_ValidateResponseStatusCode(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode string
+		wantErr    bool
+	}{
+		{"exact 200", "200", false},
+		{"exact 404", "404", false},
+		{"exact 500", "500", false},
+		{"range 2XX", "2XX", false},
+		{"range 4XX", "4XX", false},
+		{"range 5XX", "5XX", false},
+		{"default", "default", false},
+		{"invalid letters", "abc", true},
+		{"invalid 6XX", "6XX", true},
+		{"invalid 0XX", "0XX", true},
+		{"too short", "20", true},
+		{"too long", "2000", true},
+		{"lowercase xx", "2xx", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pkg := &resolver.ResolvedPackage{
+				API: &resolver.ResolvedAPI{
+					Title:   "Test",
+					Version: "1.0.0",
+				},
+				Schemas:    map[string]*resolver.ResolvedSchema{},
+				Parameters: map[string]*resolver.ResolvedParameter{},
+				Endpoints: []*resolver.ResolvedEndpoint{
+					{
+						Method: "GET",
+						Path:   "/test",
+						Responses: map[string]*resolver.ResolvedResponse{
+							tt.statusCode: {StatusCode: tt.statusCode},
+						},
+					},
+				},
+			}
+
+			v := NewValidator()
+			err := v.Validate(pkg)
+
+			if tt.wantErr && (err == nil || !strings.Contains(err.Error(), "invalid status code")) {
+				t.Errorf("expected 'invalid status code' error for %q, got: %v", tt.statusCode, err)
+			}
+			if !tt.wantErr && err != nil && strings.Contains(err.Error(), "invalid status code") {
+				t.Errorf("unexpected 'invalid status code' error for %q: %v", tt.statusCode, err)
+			}
+		})
+	}
+}
+
 func TestMultiError_Error(t *testing.T) {
 	tests := []struct {
 		name   string

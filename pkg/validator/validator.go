@@ -467,8 +467,8 @@ func (v *Validator) validateRequestBody(path string, request *resolver.ResolvedR
 func (v *Validator) validateResponse(path, statusCode string, response *resolver.ResolvedResponse, schemas map[string]*resolver.ResolvedSchema) {
 	responsePath := fmt.Sprintf("%s.@response[%s]", path, statusCode)
 
-	// Validate status code is numeric
-	if !regexp.MustCompile(`^\d{3}$`).MatchString(statusCode) {
+	// Validate status code: 3-digit (200), range (2XX), or "default"
+	if statusCode != "default" && !regexp.MustCompile(`^[1-5](\d{2}|XX)$`).MatchString(statusCode) {
 		v.addError(responsePath, fmt.Sprintf("invalid status code: %s", statusCode))
 	}
 

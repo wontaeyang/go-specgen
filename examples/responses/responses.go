@@ -294,6 +294,29 @@ func DeleteUser(w http.ResponseWriter, r *http.Request) {}
 //	}
 func HandleWebhook(w http.ResponseWriter, r *http.Request) {}
 
+// GetUserWithErrors demonstrates response range patterns (4XX, 5XX, default)
+//
+//	@endpoint GET /users/{id}/full {
+//	  @operationID getUserWithErrors
+//	  @summary Get a user with error responses
+//	  @description Returns a user with standard error range responses.
+//	  @path UserIDPath
+//	  @response 200 {
+//	    @body User
+//	    @bind APIResponse.Data
+//	    @description User found
+//	  }
+//	  @response 4XX {
+//	    @body Error
+//	    @description Client error
+//	  }
+//	  @response 5XX {
+//	    @body Error
+//	    @description Server error
+//	  }
+//	}
+func GetUserWithErrors(w http.ResponseWriter, r *http.Request) {}
+
 // ListUsersWithHeaders demonstrates response headers
 //
 //	@endpoint GET /users/with-headers {
