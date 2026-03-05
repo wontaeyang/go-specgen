@@ -212,8 +212,9 @@ type Tags []string      // -> type: array, items: string
 | Type | Required | Nullable |
 |------|----------|----------|
 | `string` | Yes | No |
-| `*string` | No | Yes |
+| `*string` | Yes | Yes |
 | `string` with `omitempty` | No | No |
+| `*string` with `omitempty` | No | Yes |
 
 **Parameter fields** — determined by parameter type:
 
@@ -223,6 +224,26 @@ type Tags []string      // -> type: array, items: string
 | `query` | Optional | Tag contains `,required` (e.g., `query:"q,required"`) |
 | `header` | Optional | Tag contains `,required` |
 | `cookie` | Optional | Tag contains `,required` |
+
+### Embedded Structs
+
+Embedded (anonymous) struct fields are flattened into the parent schema or parameter:
+
+```go
+type BaseModel struct {
+    ID        string `json:"id"`
+    CreatedAt string `json:"created_at"`
+}
+
+// @schema
+type User struct {
+    BaseModel                    // Fields flattened into User
+    Name  string `json:"name"`
+    Email string `json:"email"`
+}
+```
+
+The embedded struct does not need a `@schema` annotation — its fields are inlined directly.
 
 ### Schema References
 
@@ -425,6 +446,15 @@ The `@api` block can appear directly above the `package` keyword or as a standal
 }
 ```
 
+CODE can be a specific status (`200`, `404`), a range (`2XX`, `4XX`, `5XX`), or `default`:
+
+```
+@response 200 { @body User }
+@response 4XX { @body Error @description Client error }
+@response 5XX { @body Error @description Server error }
+@response default { @body Error }
+```
+
 **Content type support:**
 
 | Keyword | MIME | Schema Support |
@@ -442,20 +472,24 @@ The `@api` block can appear directly above the `package` keyword or as a standal
 
 ```
 @field {
-  @description   Field description (multi-line supported)
-  @format        Format: email, uuid, date-time, uri, etc.
-  @example       Example value
-  @enum          Comma-separated values
-  @default       Default value
-  @minimum       Minimum value (numbers)
-  @maximum       Maximum value (numbers)
-  @minLength     Minimum length (strings)
-  @maxLength     Maximum length (strings)
-  @minItems      Minimum items (arrays)
-  @maxItems      Maximum items (arrays)
-  @uniqueItems   Require unique items (arrays)
-  @pattern       Regex pattern
-  @deprecated    Mark as deprecated
+  @description        Field description (multi-line supported)
+  @format             Format: email, uuid, date-time, uri, etc.
+  @example            Example value
+  @enum               Comma-separated values
+  @default            Default value
+  @minimum            Minimum value (numbers)
+  @maximum            Maximum value (numbers)
+  @exclusiveMinimum   Exclusive minimum value (numbers)
+  @exclusiveMaximum   Exclusive maximum value (numbers)
+  @minLength          Minimum length (strings)
+  @maxLength          Maximum length (strings)
+  @minItems           Minimum items (arrays)
+  @maxItems           Maximum items (arrays)
+  @uniqueItems        Require unique items (arrays)
+  @pattern            Regex pattern
+  @deprecated         Mark as deprecated
+  @readOnly           Mark as read-only
+  @writeOnly          Mark as write-only
 }
 ```
 
@@ -590,8 +624,6 @@ Only `@description` supports multi-line values:
 
 ## Future Features
 
-- `@exclusiveMinimum`/`@exclusiveMaximum` for numeric bounds
-- `$ref` with siblings (description/nullable on references)
 - XML/YAML struct tag support
 - OAuth2 flows configuration
 - External documentation support
