@@ -157,6 +157,12 @@ type Field struct {
 	// Maximum is the maximum value (for numbers)
 	Maximum *float64
 
+	// ExclusiveMinimum is the exclusive minimum value (for numbers)
+	ExclusiveMinimum *float64
+
+	// ExclusiveMaximum is the exclusive maximum value (for numbers)
+	ExclusiveMaximum *float64
+
 	// MinLength is the minimum length (for strings)
 	MinLength *int
 
@@ -177,6 +183,12 @@ type Field struct {
 
 	// Deprecated indicates if the field is deprecated
 	Deprecated bool
+
+	// ReadOnly indicates the field is read-only (e.g., id, createdAt)
+	ReadOnly bool
+
+	// WriteOnly indicates the field is write-only (e.g., password)
+	WriteOnly bool
 }
 
 // Parameter represents a parameter struct (@path, @query, @header, @cookie)

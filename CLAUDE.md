@@ -16,3 +16,10 @@
 - Golang uses tabs instead of spaces for indentation
 - Run Golang LSP
 - After editing Go code, run `go fmt`, `go vet`
+
+# Golden file tests
+- Golden files live in `examples/*/` as `.yaml` files
+- All golden files are generated with OpenAPI 3.1 and YAML format
+- To run golden tests: `go test ./cmd/specgen -run TestGoldenFiles`
+- To update golden files after code changes: `go test ./cmd/specgen -run TestGoldenFiles -update`
+- Comparison is byte-for-byte exact match — always update golden files when output changes

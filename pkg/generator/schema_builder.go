@@ -53,8 +53,6 @@ func (sb *SchemaBuilder) SetNullable(schema *base.Schema, nullable bool) {
 // SetExclusiveMinimum sets exclusive minimum constraint (version-aware).
 // - OpenAPI 3.0: Sets minimum + exclusiveMinimum as boolean (true)
 // - OpenAPI 3.1+: Sets exclusiveMinimum as the numeric value itself
-//
-// Note: Not currently used - resolver doesn't support @exclusiveMinimum yet.
 func (sb *SchemaBuilder) SetExclusiveMinimum(schema *base.Schema, value float64) {
 	switch sb.version {
 	case "3.0":
@@ -71,8 +69,6 @@ func (sb *SchemaBuilder) SetExclusiveMinimum(schema *base.Schema, value float64)
 // SetExclusiveMaximum sets exclusive maximum constraint (version-aware).
 // - OpenAPI 3.0: Sets maximum + exclusiveMaximum as boolean (true)
 // - OpenAPI 3.1+: Sets exclusiveMaximum as the numeric value itself
-//
-// Note: Not currently used - resolver doesn't support @exclusiveMaximum yet.
 func (sb *SchemaBuilder) SetExclusiveMaximum(schema *base.Schema, value float64) {
 	switch sb.version {
 	case "3.0":

@@ -1,6 +1,8 @@
 package resolver
 
 import (
+	"go/types"
+	"strings"
 	"testing"
 
 	"github.com/wontaeyang/go-specgen/pkg/parser"
@@ -500,6 +502,31 @@ func TestTypeInfo_BasicTypes(t *testing.T) {
 	}
 }
 
+func TestResolver_ByteSliceResolvesToStringByte(t *testing.T) {
+	resolver, err := NewResolver("../parser/testdata", nil)
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+
+	// Construct a []byte type using go/types
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	typeInfo := resolver.resolveType(byteSlice)
+	if typeInfo == nil {
+		t.Fatal("resolveType([]byte) returned nil")
+	}
+
+	if typeInfo.OpenAPIType != "string" {
+		t.Errorf("[]byte OpenAPIType = %q, want %q", typeInfo.OpenAPIType, "string")
+	}
+	if typeInfo.Format != "byte" {
+		t.Errorf("[]byte Format = %q, want %q", typeInfo.Format, "byte")
+	}
+	if typeInfo.IsArray {
+		t.Error("[]byte should not be marked as IsArray")
+	}
+}
+
 func TestResolver_InlineDeclarations(t *testing.T) {
 	// Parse the inline example package
 	p := parser.NewParser("../../examples/inline")
@@ -618,7 +645,7 @@ func TestResolver_InlineDeclarations(t *testing.T) {
 	}
 }
 
-func TestParseInlineAnnotation(t *testing.T) {
+func TestParseInlineDeclaration(t *testing.T) {
 	tests := []struct {
 		name            string
 		annotationType  string
@@ -720,20 +747,20 @@ func TestParseInlineAnnotation(t *testing.T) {
 				comment = &parser.CommentBlock{Lines: tt.lines}
 			}
 
-			result, err := ParseInlineAnnotation(comment, tt.annotationType)
+			result, err := ParseInlineDeclaration(comment, tt.annotationType)
 			if err != nil {
-				t.Fatalf("ParseInlineAnnotation() error = %v", err)
+				t.Fatalf("ParseInlineDeclaration() error = %v", err)
 			}
 
 			if tt.expectNil {
 				if result != nil {
-					t.Errorf("ParseInlineAnnotation() = %v, want nil", result)
+					t.Errorf("ParseInlineDeclaration() = %v, want nil", result)
 				}
 				return
 			}
 
 			if result == nil {
-				t.Fatal("ParseInlineAnnotation() = nil, want non-nil")
+				t.Fatal("ParseInlineDeclaration() = nil, want non-nil")
 			}
 
 			// Check content type
@@ -912,6 +939,235 @@ func TestResolver_PointerImpliesNotRequired(t *testing.T) {
 	}
 }
 
+func TestResolver_EmbeddedStructFlattening(t *testing.T) {
+	// Parse the test package
+	p := parser.NewParser("../parser/testdata")
+	parsed, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Failed to parse package: %v", err)
+	}
+
+	// Create resolver
+	resolver, err := NewResolver("../parser/testdata", nil)
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+
+	// Get EmbeddedTest schema
+	schema, ok := parsed.Schemas["EmbeddedTest"]
+	if !ok {
+		t.Fatal("EmbeddedTest schema not found in parsed package")
+	}
+
+	// Build schema names map
+	schemaNames := make(map[string]bool)
+	for name := range parsed.Schemas {
+		schemaNames[name] = true
+	}
+
+	// Resolve it
+	resolved, err := resolver.resolveSchema(schema, schemaNames)
+	if err != nil {
+		t.Fatalf("resolveSchema() error = %v", err)
+	}
+
+	// Build field lookup
+	fields := make(map[string]*ResolvedField)
+	for _, f := range resolved.Fields {
+		fields[f.Name] = f
+	}
+
+	// Should have 5 fields: id, created_at, updated_at (from BaseModel), name, email
+	expectedFields := []string{"id", "created_at", "updated_at", "name", "email"}
+	for _, name := range expectedFields {
+		if _, ok := fields[name]; !ok {
+			t.Errorf("expected field %q not found in resolved fields", name)
+		}
+	}
+
+	if len(resolved.Fields) != len(expectedFields) {
+		t.Errorf("expected %d fields, got %d", len(expectedFields), len(resolved.Fields))
+		for _, f := range resolved.Fields {
+			t.Logf("  field: %s (GoName: %s)", f.Name, f.GoName)
+		}
+	}
+
+	// Verify embedded fields have correct types
+	if f, ok := fields["id"]; ok {
+		if f.OpenAPIType != "string" {
+			t.Errorf("id field OpenAPIType = %q, want %q", f.OpenAPIType, "string")
+		}
+	}
+}
+
+func TestResolver_EmbeddedPtrFlattening(t *testing.T) {
+	p := parser.NewParser("../parser/testdata")
+	parsed, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Failed to parse package: %v", err)
+	}
+
+	resolver, err := NewResolver("../parser/testdata", nil)
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+
+	schema, ok := parsed.Schemas["EmbeddedPtrTest"]
+	if !ok {
+		t.Fatal("EmbeddedPtrTest schema not found in parsed package")
+	}
+
+	schemaNames := make(map[string]bool)
+	for name := range parsed.Schemas {
+		schemaNames[name] = true
+	}
+
+	resolved, err := resolver.resolveSchema(schema, schemaNames)
+	if err != nil {
+		t.Fatalf("resolveSchema() error = %v", err)
+	}
+
+	fields := make(map[string]*ResolvedField)
+	for _, f := range resolved.Fields {
+		fields[f.Name] = f
+	}
+
+	// Should have 4 fields: id, created_at, updated_at (from *BaseModel), label
+	expectedFields := []string{"id", "created_at", "updated_at", "label"}
+	for _, name := range expectedFields {
+		if _, ok := fields[name]; !ok {
+			t.Errorf("expected field %q not found in resolved fields", name)
+		}
+	}
+
+	if len(resolved.Fields) != len(expectedFields) {
+		t.Errorf("expected %d fields, got %d", len(expectedFields), len(resolved.Fields))
+		for _, f := range resolved.Fields {
+			t.Logf("  field: %s (GoName: %s)", f.Name, f.GoName)
+		}
+	}
+}
+
+func TestResolver_NestedEmbedFlattening(t *testing.T) {
+	p := parser.NewParser("../parser/testdata")
+	parsed, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Failed to parse package: %v", err)
+	}
+
+	resolver, err := NewResolver("../parser/testdata", nil)
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+
+	schema, ok := parsed.Schemas["NestedEmbedTest"]
+	if !ok {
+		t.Fatal("NestedEmbedTest schema not found in parsed package")
+	}
+
+	schemaNames := make(map[string]bool)
+	for name := range parsed.Schemas {
+		schemaNames[name] = true
+	}
+
+	resolved, err := resolver.resolveSchema(schema, schemaNames)
+	if err != nil {
+		t.Fatalf("resolveSchema() error = %v", err)
+	}
+
+	fields := make(map[string]*ResolvedField)
+	for _, f := range resolved.Fields {
+		fields[f.Name] = f
+	}
+
+	// Should have fields from BaseModel (id, created_at, updated_at),
+	// Auditable (deleted_at, deleted_by), and status
+	expectedFields := []string{"id", "created_at", "updated_at", "deleted_at", "deleted_by", "status"}
+	for _, name := range expectedFields {
+		if _, ok := fields[name]; !ok {
+			t.Errorf("expected field %q not found in resolved fields", name)
+		}
+	}
+
+	if len(resolved.Fields) != len(expectedFields) {
+		t.Errorf("expected %d fields, got %d", len(expectedFields), len(resolved.Fields))
+		for _, f := range resolved.Fields {
+			t.Logf("  field: %s (GoName: %s)", f.Name, f.GoName)
+		}
+	}
+
+	// Verify nullable fields from Auditable (pointer types)
+	if f, ok := fields["deleted_at"]; ok {
+		if !f.Nullable {
+			t.Error("deleted_at should be nullable (pointer type)")
+		}
+		if f.Required {
+			t.Error("deleted_at should not be required (omitempty)")
+		}
+	}
+}
+
+func TestResolver_EmbeddedParameterFlattening(t *testing.T) {
+	p := parser.NewParser("../parser/testdata")
+	parsed, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Failed to parse package: %v", err)
+	}
+
+	resolver, err := NewResolver("../parser/testdata", nil)
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+
+	// Find EmbeddedQueryParams parameter
+	var param *parser.Parameter
+	for _, p := range parsed.Parameters {
+		if p.GoTypeName == "EmbeddedQueryParams" {
+			param = p
+			break
+		}
+	}
+
+	if param == nil {
+		t.Fatal("EmbeddedQueryParams parameter not found in parsed package")
+	}
+
+	resolved, err := resolver.resolveParameter(param)
+	if err != nil {
+		t.Fatalf("resolveParameter() error = %v", err)
+	}
+
+	fields := make(map[string]*ResolvedField)
+	for _, f := range resolved.Fields {
+		fields[f.Name] = f
+	}
+
+	// Should have 3 fields: limit, offset (from CommonQueryParams), search
+	expectedFields := []string{"limit", "offset", "search"}
+	for _, name := range expectedFields {
+		if _, ok := fields[name]; !ok {
+			t.Errorf("expected field %q not found in resolved fields", name)
+		}
+	}
+
+	if len(resolved.Fields) != len(expectedFields) {
+		t.Errorf("expected %d fields, got %d", len(expectedFields), len(resolved.Fields))
+		for _, f := range resolved.Fields {
+			t.Logf("  field: %s (GoName: %s)", f.Name, f.GoName)
+		}
+	}
+
+	// Verify embedded fields are resolved as query parameters (not required by default)
+	if f, ok := fields["limit"]; ok {
+		if f.Required {
+			t.Error("limit should not be required (omitempty)")
+		}
+		if f.OpenAPIType != "integer" {
+			t.Errorf("limit OpenAPIType = %q, want %q", f.OpenAPIType, "integer")
+		}
+	}
+}
+
 func TestResolveFieldNameFromTag(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1010,6 +1266,47 @@ func TestResolveFieldNameFromTag(t *testing.T) {
 			got := resolveFieldNameFromTag(tt.tag, tt.goFieldName)
 			if got != tt.want {
 				t.Errorf("resolveFieldNameFromTag(%q, %q) = %q, want %q", tt.tag, tt.goFieldName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyFieldAnnotations_InvalidNumeric(t *testing.T) {
+	resolver, err := NewResolver("../parser/testdata", nil)
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		comment *parser.CommentBlock
+		wantErr string
+	}{
+		{
+			name: "invalid minimum",
+			comment: &parser.CommentBlock{
+				Lines: []string{`@field { @minimum abc }`},
+			},
+			wantErr: "@minimum",
+		},
+		{
+			name: "invalid maxLength",
+			comment: &parser.CommentBlock{
+				Lines: []string{`@field { @maxLength 1.5 }`},
+			},
+			wantErr: "@maxLength",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field := &ResolvedField{}
+			err := resolver.applyFieldAnnotations(field, tt.comment)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), tt.wantErr)
 			}
 		})
 	}

@@ -298,7 +298,25 @@ func (g *Generator) generateFieldSchemaWithRefs(field *resolver.ResolvedField, s
 
 	// Handle schema references: User (named type that is a schema)
 	if isSchemaReference(goType, schemas) {
-		return base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", extractTypeName(goType)))
+		refPath := fmt.Sprintf("#/components/schemas/%s", extractTypeName(goType))
+		if field.Nullable {
+			if g.schemaBuilder.Is31Plus() {
+				// OpenAPI 3.1+: $ref can have siblings, use oneOf with null type
+				schema := g.schemaBuilder.NewSchema()
+				schema.OneOf = []*base.SchemaProxy{
+					base.CreateSchemaProxyRef(refPath),
+					base.CreateSchemaProxy(&base.Schema{Type: []string{"null"}}),
+				}
+				return base.CreateSchemaProxy(schema)
+			}
+			// OpenAPI 3.0: $ref cannot have siblings. Wrap in allOf to add nullable.
+			ref := base.CreateSchemaProxyRef(refPath)
+			wrapper := g.schemaBuilder.NewSchema()
+			wrapper.AllOf = []*base.SchemaProxy{ref}
+			g.schemaBuilder.SetNullable(wrapper, true)
+			return base.CreateSchemaProxy(wrapper)
+		}
+		return base.CreateSchemaProxyRef(refPath)
 	}
 
 	// Handle any value (empty schema)
@@ -404,11 +422,23 @@ func (g *Generator) addFieldConstraints(schema *base.Schema, field *resolver.Res
 	if field.Maximum != nil {
 		schema.Maximum = field.Maximum
 	}
+	if field.ExclusiveMinimum != nil {
+		g.schemaBuilder.SetExclusiveMinimum(schema, *field.ExclusiveMinimum)
+	}
+	if field.ExclusiveMaximum != nil {
+		g.schemaBuilder.SetExclusiveMaximum(schema, *field.ExclusiveMaximum)
+	}
 	if field.Nullable {
 		g.schemaBuilder.SetNullable(schema, true)
 	}
 	if field.Deprecated {
 		schema.Deprecated = &field.Deprecated
+	}
+	if field.ReadOnly {
+		schema.ReadOnly = &field.ReadOnly
+	}
+	if field.WriteOnly {
+		schema.WriteOnly = &field.WriteOnly
 	}
 }
 
@@ -567,11 +597,23 @@ func (g *Generator) generateParameterFieldSchema(field *resolver.ResolvedField) 
 	if field.Maximum != nil {
 		schema.Maximum = field.Maximum
 	}
+	if field.ExclusiveMinimum != nil {
+		g.schemaBuilder.SetExclusiveMinimum(schema, *field.ExclusiveMinimum)
+	}
+	if field.ExclusiveMaximum != nil {
+		g.schemaBuilder.SetExclusiveMaximum(schema, *field.ExclusiveMaximum)
+	}
 	if field.Nullable {
 		g.schemaBuilder.SetNullable(schema, true)
 	}
 	if field.Deprecated {
 		schema.Deprecated = &field.Deprecated
+	}
+	if field.ReadOnly {
+		schema.ReadOnly = &field.ReadOnly
+	}
+	if field.WriteOnly {
+		schema.WriteOnly = &field.WriteOnly
 	}
 
 	return base.CreateSchemaProxy(schema)

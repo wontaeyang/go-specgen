@@ -267,6 +267,11 @@ func (v *Validator) validateField(path string, field *resolver.ResolvedField) {
 			v.addError(fieldPath, fmt.Sprintf("invalid pattern regex: %v", err))
 		}
 	}
+
+	// Validate readOnly and writeOnly are mutually exclusive
+	if field.ReadOnly && field.WriteOnly {
+		v.addError(fieldPath, "readOnly and writeOnly cannot both be true")
+	}
 }
 
 // validateParameterField validates a parameter field with type-specific rules
@@ -330,6 +335,11 @@ func (v *Validator) validateEndpoint(endpoint *resolver.ResolvedEndpoint, pkg *r
 		v.validateRequestBody(path, endpoint.Request, pkg.Schemas)
 	}
 
+	// Validate inline request bind target
+	if endpoint.InlineRequest != nil && endpoint.InlineRequest.Bind != nil {
+		v.validateBindTarget(path+".@request", endpoint.InlineRequest.Bind, pkg.Schemas)
+	}
+
 	// Validate responses (including inline responses)
 	hasResponses := len(endpoint.Responses) > 0 || len(endpoint.InlineResponses) > 0
 	if !hasResponses {
@@ -339,7 +349,13 @@ func (v *Validator) validateEndpoint(endpoint *resolver.ResolvedEndpoint, pkg *r
 	for statusCode, response := range endpoint.Responses {
 		v.validateResponse(path, statusCode, response, pkg.Schemas)
 	}
-	// Inline responses don't need schema validation (they have inline fields)
+
+	// Validate inline response bind targets
+	for statusCode, inlineResp := range endpoint.InlineResponses {
+		if inlineResp.Bind != nil {
+			v.validateBindTarget(fmt.Sprintf("%s.@response[%s]", path, statusCode), inlineResp.Bind, pkg.Schemas)
+		}
+	}
 
 	// Validate no parameter name conflicts
 	v.validateParameterConflicts(path, endpoint)
@@ -440,6 +456,11 @@ func (v *Validator) validateRequestBody(path string, request *resolver.ResolvedR
 			v.addError(path+".@request", fmt.Sprintf("references unknown schema: %s", schemaToCheck))
 		}
 	}
+
+	// Validate bind target
+	if request.Body.Bind != nil {
+		v.validateBindTarget(path+".@request", request.Body.Bind, schemas)
+	}
 }
 
 // validateResponse validates a response
@@ -462,6 +483,11 @@ func (v *Validator) validateResponse(path, statusCode string, response *resolver
 			if _, ok := schemas[schemaToCheck]; !ok {
 				v.addError(responsePath, fmt.Sprintf("references unknown schema: %s", schemaToCheck))
 			}
+		}
+
+		// Validate bind target
+		if response.Body.Bind != nil {
+			v.validateBindTarget(responsePath, response.Body.Bind, schemas)
 		}
 	}
 }
@@ -515,6 +541,29 @@ func (v *Validator) validateParameterConflicts(path string, endpoint *resolver.R
 			}
 			allParams[field.Name] = "cookie"
 		}
+	}
+}
+
+// validateBindTarget validates that a @bind target references a valid wrapper schema and field
+func (v *Validator) validateBindTarget(path string, bind *resolver.ResolvedBindTarget, schemas map[string]*resolver.ResolvedSchema) {
+	bindPath := path + ".@bind"
+
+	// Check wrapper schema exists
+	if bind.WrapperSchema == nil {
+		v.addError(bindPath, fmt.Sprintf("references unknown wrapper schema: %s", bind.Wrapper))
+		return
+	}
+
+	// Check field exists in wrapper schema
+	found := false
+	for _, field := range bind.WrapperSchema.Fields {
+		if field.GoName == bind.Field {
+			found = true
+			break
+		}
+	}
+	if !found {
+		v.addError(bindPath, fmt.Sprintf("wrapper schema %q has no field %q", bind.Wrapper, bind.Field))
 	}
 }
 

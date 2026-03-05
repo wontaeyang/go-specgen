@@ -64,17 +64,19 @@ func TestSchemaNode_GetChild(t *testing.T) {
 
 	tests := []struct {
 		name      string
+		node      *SchemaNode
 		childName string
 		wantNil   bool
 	}{
-		{"existing child", "@child1", false},
-		{"another existing child", "@child2", false},
-		{"non-existing child", "@child3", true},
+		{"existing child", parent, "@child1", false},
+		{"another existing child", parent, "@child2", false},
+		{"non-existing child", parent, "@child3", true},
+		{"nil children map", &SchemaNode{Name: "leaf"}, "@any", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parent.GetChild(tt.childName)
+			got := tt.node.GetChild(tt.childName)
 			if tt.wantNil && got != nil {
 				t.Errorf("GetChild(%s) = %v, want nil", tt.childName, got)
 			}
@@ -191,11 +193,67 @@ func TestSchemaNode_InitializeParents(t *testing.T) {
 	}
 }
 
+func TestSchemaNode_CanBeEmpty(t *testing.T) {
+	tests := []struct {
+		name     string
+		node     *SchemaNode
+		expected bool
+	}{
+		{
+			name:     "no children",
+			node:     &SchemaNode{Name: "@test"},
+			expected: true,
+		},
+		{
+			name: "all optional children",
+			node: &SchemaNode{
+				Name: "@test",
+				Children: map[string]*SchemaNode{
+					"@a": {Name: "@a"},
+					"@b": {Name: "@b"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "one required child",
+			node: &SchemaNode{
+				Name: "@test",
+				Children: map[string]*SchemaNode{
+					"@a": {Name: "@a", Required: true},
+					"@b": {Name: "@b"},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "all required children",
+			node: &SchemaNode{
+				Name: "@test",
+				Children: map[string]*SchemaNode{
+					"@a": {Name: "@a", Required: true},
+					"@b": {Name: "@b", Required: true},
+				},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.node.CanBeEmpty(); got != tt.expected {
+				t.Errorf("CanBeEmpty() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestSchemaNode_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
 		node    *SchemaNode
 		wantErr bool
+		errMsg  string
 	}{
 		{
 			name: "valid block annotation with children",
@@ -246,6 +304,7 @@ func TestSchemaNode_Validate(t *testing.T) {
 				},
 			},
 			wantErr: true,
+			errMsg:  "marker annotations cannot have children",
 		},
 		{
 			name: "invalid: required and repeatable",
@@ -256,6 +315,41 @@ func TestSchemaNode_Validate(t *testing.T) {
 				Repeatable: true,
 			},
 			wantErr: true,
+			errMsg:  "annotation cannot be both required and repeatable",
+		},
+		{
+			name: "invalid: recursive child validation failure",
+			node: &SchemaNode{
+				Name: "@parent",
+				Type: BlockAnnotation,
+				Children: map[string]*SchemaNode{
+					"@child": {
+						Name: "@child",
+						Type: MarkerAnnotation,
+						Children: map[string]*SchemaNode{
+							"@invalid": {Name: "@invalid"},
+						},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "marker annotations cannot have children",
+		},
+		{
+			name: "valid value annotation",
+			node: &SchemaNode{
+				Name: "@test",
+				Type: ValueAnnotation,
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid flag annotation",
+			node: &SchemaNode{
+				Name: "@test",
+				Type: FlagAnnotation,
+			},
+			wantErr: false,
 		},
 	}
 
@@ -264,6 +358,13 @@ func TestSchemaNode_Validate(t *testing.T) {
 			err := tt.node.Validate()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("SchemaNode.Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && err != nil && tt.errMsg != "" {
+				if ve, ok := err.(*ValidationError); ok {
+					if ve.Message != tt.errMsg {
+						t.Errorf("ValidationError.Message = %q, want %q", ve.Message, tt.errMsg)
+					}
+				}
 			}
 		})
 	}

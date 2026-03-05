@@ -1036,6 +1036,244 @@ func TestGenerator_Version32Nullable(t *testing.T) {
 	}
 }
 
+func TestGenerator_ExclusiveMinMax_30(t *testing.T) {
+	gen := NewGenerator("3.0")
+
+	exMin := 0.0
+	exMax := 100.0
+	field := &resolver.ResolvedField{
+		Name:             "score",
+		GoName:           "Score",
+		OpenAPIType:      "number",
+		ExclusiveMinimum: &exMin,
+		ExclusiveMaximum: &exMax,
+	}
+
+	result := gen.generateFieldSchema(field)
+
+	schema, err := result.BuildSchema()
+	if err != nil {
+		t.Fatalf("BuildSchema() error = %v", err)
+	}
+
+	// In 3.0, exclusive minimum is represented as minimum + exclusiveMinimum: true
+	if schema.Minimum == nil || *schema.Minimum != 0 {
+		t.Errorf("minimum = %v, want 0", schema.Minimum)
+	}
+	if schema.ExclusiveMinimum == nil || schema.ExclusiveMinimum.A != true {
+		t.Error("exclusiveMinimum should be true for 3.0")
+	}
+
+	if schema.Maximum == nil || *schema.Maximum != 100 {
+		t.Errorf("maximum = %v, want 100", schema.Maximum)
+	}
+	if schema.ExclusiveMaximum == nil || schema.ExclusiveMaximum.A != true {
+		t.Error("exclusiveMaximum should be true for 3.0")
+	}
+}
+
+func TestGenerator_ExclusiveMinMax_31(t *testing.T) {
+	gen := NewGenerator("3.1")
+
+	exMin := 0.0
+	exMax := 100.0
+	field := &resolver.ResolvedField{
+		Name:             "score",
+		GoName:           "Score",
+		OpenAPIType:      "number",
+		ExclusiveMinimum: &exMin,
+		ExclusiveMaximum: &exMax,
+	}
+
+	result := gen.generateFieldSchema(field)
+
+	schema, err := result.BuildSchema()
+	if err != nil {
+		t.Fatalf("BuildSchema() error = %v", err)
+	}
+
+	// In 3.1, exclusiveMinimum is the numeric value itself
+	if schema.ExclusiveMinimum == nil || schema.ExclusiveMinimum.B != 0 {
+		t.Errorf("exclusiveMinimum = %v, want 0", schema.ExclusiveMinimum)
+	}
+	if schema.ExclusiveMaximum == nil || schema.ExclusiveMaximum.B != 100 {
+		t.Errorf("exclusiveMaximum = %v, want 100", schema.ExclusiveMaximum)
+	}
+
+	// minimum/maximum should NOT be set (those are for non-exclusive bounds)
+	if schema.Minimum != nil {
+		t.Error("minimum should not be set for 3.1 exclusive bounds")
+	}
+	if schema.Maximum != nil {
+		t.Error("maximum should not be set for 3.1 exclusive bounds")
+	}
+}
+
+func TestGenerator_ReadOnly(t *testing.T) {
+	gen := NewGenerator("3.0")
+
+	field := &resolver.ResolvedField{
+		Name:        "id",
+		GoName:      "ID",
+		OpenAPIType: "string",
+		ReadOnly:    true,
+	}
+
+	result := gen.generateFieldSchema(field)
+
+	schema, err := result.BuildSchema()
+	if err != nil {
+		t.Fatalf("BuildSchema() error = %v", err)
+	}
+
+	if schema.ReadOnly == nil || *schema.ReadOnly != true {
+		t.Error("readOnly should be true")
+	}
+}
+
+func TestGenerator_WriteOnly(t *testing.T) {
+	gen := NewGenerator("3.0")
+
+	field := &resolver.ResolvedField{
+		Name:        "password",
+		GoName:      "Password",
+		OpenAPIType: "string",
+		WriteOnly:   true,
+	}
+
+	result := gen.generateFieldSchema(field)
+
+	schema, err := result.BuildSchema()
+	if err != nil {
+		t.Fatalf("BuildSchema() error = %v", err)
+	}
+
+	if schema.WriteOnly == nil || *schema.WriteOnly != true {
+		t.Error("writeOnly should be true")
+	}
+}
+
+func TestGenerator_NullableSchemaRef_30(t *testing.T) {
+	gen := NewGenerator("3.0")
+	schemas := map[string]*resolver.ResolvedSchema{
+		"Address": {
+			Name: "Address",
+			Fields: []*resolver.ResolvedField{
+				{Name: "street", GoName: "Street", OpenAPIType: "string"},
+			},
+		},
+	}
+
+	field := &resolver.ResolvedField{
+		Name:        "address",
+		GoName:      "Address",
+		GoType:      "Address",
+		OpenAPIType: "object",
+		Nullable:    true,
+	}
+
+	result := gen.generateFieldSchemaWithRefs(field, schemas)
+
+	schema, err := result.BuildSchema()
+	if err != nil {
+		t.Fatalf("BuildSchema() error = %v", err)
+	}
+
+	// Should have allOf wrapping the $ref
+	if len(schema.AllOf) != 1 {
+		t.Fatalf("allOf should have 1 entry, got %d", len(schema.AllOf))
+	}
+
+	// Should have nullable: true (3.0 style)
+	if schema.Nullable == nil || *schema.Nullable != true {
+		t.Error("nullable should be true for 3.0")
+	}
+}
+
+func TestGenerator_NullableSchemaRef_31(t *testing.T) {
+	gen := NewGenerator("3.1")
+	schemas := map[string]*resolver.ResolvedSchema{
+		"Address": {
+			Name: "Address",
+			Fields: []*resolver.ResolvedField{
+				{Name: "street", GoName: "Street", OpenAPIType: "string"},
+			},
+		},
+	}
+
+	field := &resolver.ResolvedField{
+		Name:        "address",
+		GoName:      "Address",
+		GoType:      "Address",
+		OpenAPIType: "object",
+		Nullable:    true,
+	}
+
+	result := gen.generateFieldSchemaWithRefs(field, schemas)
+
+	schema, err := result.BuildSchema()
+	if err != nil {
+		t.Fatalf("BuildSchema() error = %v", err)
+	}
+
+	// Should have oneOf with $ref and null type
+	if len(schema.OneOf) != 2 {
+		t.Fatalf("oneOf should have 2 entries, got %d", len(schema.OneOf))
+	}
+
+	// First entry should be the $ref
+	ref := schema.OneOf[0].GetReference()
+	if ref != "#/components/schemas/Address" {
+		t.Errorf("oneOf[0] should be $ref to Address, got %q", ref)
+	}
+
+	// Second entry should be null type
+	nullSchema, err := schema.OneOf[1].BuildSchema()
+	if err != nil {
+		t.Fatalf("BuildSchema() for null entry error = %v", err)
+	}
+	if len(nullSchema.Type) != 1 || nullSchema.Type[0] != "null" {
+		t.Errorf("oneOf[1] should be type null, got %v", nullSchema.Type)
+	}
+
+	// Should NOT have nullable keyword (3.1 uses oneOf)
+	if schema.Nullable != nil {
+		t.Error("nullable should not be set for 3.1")
+	}
+}
+
+func TestGenerator_NonNullableSchemaRef(t *testing.T) {
+	gen := NewGenerator("3.0")
+	schemas := map[string]*resolver.ResolvedSchema{
+		"Address": {
+			Name: "Address",
+			Fields: []*resolver.ResolvedField{
+				{Name: "street", GoName: "Street", OpenAPIType: "string"},
+			},
+		},
+	}
+
+	field := &resolver.ResolvedField{
+		Name:        "address",
+		GoName:      "Address",
+		GoType:      "Address",
+		OpenAPIType: "object",
+		Nullable:    false,
+	}
+
+	result := gen.generateFieldSchemaWithRefs(field, schemas)
+
+	// Non-nullable schema ref should be a bare $ref
+	// A bare $ref proxy returns the reference string, not a built schema
+	ref := result.GetReference()
+	if ref == "" {
+		t.Error("non-nullable ref should be a bare $ref proxy")
+	}
+	if ref != "#/components/schemas/Address" {
+		t.Errorf("ref = %q, want %q", ref, "#/components/schemas/Address")
+	}
+}
+
 func TestGenerator_OpenAPIVersions(t *testing.T) {
 	tests := []struct {
 		version string

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/wontaeyang/go-specgen/pkg/schema"
@@ -266,7 +267,10 @@ func TestParser_ConvertParsedField(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			field := parser.convertParsedField(tt.fieldName, tt.annotation)
+			field, err := parser.convertParsedField(tt.fieldName, tt.annotation)
+			if err != nil {
+				t.Fatalf("convertParsedField() error = %v", err)
+			}
 
 			if field.GoName != tt.fieldName {
 				t.Errorf("GoName = %q, want %q", field.GoName, tt.fieldName)
@@ -295,7 +299,10 @@ func TestParser_ConvertParsedField_Numeric(t *testing.T) {
 		},
 	}
 
-	field := parser.convertParsedField("Age", annotation)
+	field, err := parser.convertParsedField("Age", annotation)
+	if err != nil {
+		t.Fatalf("convertParsedField() error = %v", err)
+	}
 
 	if field.Minimum == nil || *field.Minimum != 0 {
 		t.Error("Minimum not parsed correctly")
@@ -323,7 +330,10 @@ func TestParser_ConvertParsedField_Enum(t *testing.T) {
 		},
 	}
 
-	field := parser.convertParsedField("Status", annotation)
+	field, err := parser.convertParsedField("Status", annotation)
+	if err != nil {
+		t.Fatalf("convertParsedField() error = %v", err)
+	}
 
 	if len(field.Enum) != 3 {
 		t.Fatalf("Enum has %d values, want 3", len(field.Enum))
@@ -346,10 +356,82 @@ func TestParser_ConvertParsedField_Deprecated(t *testing.T) {
 		},
 	}
 
-	field := parser.convertParsedField("OldField", annotation)
+	field, err := parser.convertParsedField("OldField", annotation)
+	if err != nil {
+		t.Fatalf("convertParsedField() error = %v", err)
+	}
 
 	if !field.Deprecated {
 		t.Error("Field should be marked as deprecated")
+	}
+}
+
+func TestParser_ConvertParsedField_InvalidFloat(t *testing.T) {
+	parser := &Parser{}
+
+	annotation := &ParsedAnnotation{
+		Children: map[string]*ParsedAnnotation{
+			"@minimum": {Value: "abc"},
+		},
+	}
+
+	_, err := parser.convertParsedField("BadField", annotation)
+	if err == nil {
+		t.Fatal("expected error for invalid @minimum value")
+	}
+
+	if !strings.Contains(err.Error(), "@minimum") || !strings.Contains(err.Error(), "abc") {
+		t.Errorf("error message = %q, want it to mention @minimum and the invalid value", err.Error())
+	}
+}
+
+func TestParser_ConvertParsedField_InvalidInt(t *testing.T) {
+	parser := &Parser{}
+
+	annotation := &ParsedAnnotation{
+		Children: map[string]*ParsedAnnotation{
+			"@minLength": {Value: "1.5"},
+		},
+	}
+
+	_, err := parser.convertParsedField("BadField", annotation)
+	if err == nil {
+		t.Fatal("expected error for invalid @minLength value")
+	}
+
+	if !strings.Contains(err.Error(), "@minLength") || !strings.Contains(err.Error(), "1.5") {
+		t.Errorf("error message = %q, want it to mention @minLength and the invalid value", err.Error())
+	}
+}
+
+func TestParser_ConvertParsedField_ValidNumeric(t *testing.T) {
+	parser := &Parser{}
+
+	annotation := &ParsedAnnotation{
+		Children: map[string]*ParsedAnnotation{
+			"@minimum":   {Value: "1.5"},
+			"@maximum":   {Value: "99.9"},
+			"@minLength": {Value: "3"},
+			"@maxLength": {Value: "100"},
+		},
+	}
+
+	field, err := parser.convertParsedField("GoodField", annotation)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if field.Minimum == nil || *field.Minimum != 1.5 {
+		t.Error("Minimum not parsed correctly")
+	}
+	if field.Maximum == nil || *field.Maximum != 99.9 {
+		t.Error("Maximum not parsed correctly")
+	}
+	if field.MinLength == nil || *field.MinLength != 3 {
+		t.Error("MinLength not parsed correctly")
+	}
+	if field.MaxLength == nil || *field.MaxLength != 100 {
+		t.Error("MaxLength not parsed correctly")
 	}
 }
 

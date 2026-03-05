@@ -287,6 +287,320 @@ func TestAnnotationSchema_ParentReferences(t *testing.T) {
 	}
 }
 
+func TestAnnotationSchema_Endpoint_AllChildren(t *testing.T) {
+	endpoint := AnnotationSchema.GetChild("@endpoint")
+	if endpoint == nil {
+		t.Fatal("@endpoint annotation not found")
+	}
+
+	tests := []struct {
+		name       string
+		annType    AnnotationType
+		repeatable bool
+	}{
+		{"@operationID", ValueAnnotation, false},
+		{"@summary", ValueAnnotation, false},
+		{"@description", ValueAnnotation, false},
+		{"@tag", ReferenceAnnotation, true},
+		{"@deprecated", FlagAnnotation, false},
+		{"@auth", ValueAnnotation, false},
+		{"@path", ReferenceAnnotation, true},
+		{"@query", ReferenceAnnotation, true},
+		{"@header", ReferenceAnnotation, true},
+		{"@cookie", ReferenceAnnotation, true},
+		{"@request", BlockAnnotation, false},
+		{"@response", BlockAnnotation, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := endpoint.GetChild(tt.name)
+			if node == nil {
+				t.Fatalf("@endpoint missing child: %s", tt.name)
+			}
+			if node.Type != tt.annType {
+				t.Errorf("@endpoint.%s type = %v, want %v", tt.name, node.Type, tt.annType)
+			}
+			if node.Repeatable != tt.repeatable {
+				t.Errorf("@endpoint.%s repeatable = %v, want %v", tt.name, node.Repeatable, tt.repeatable)
+			}
+		})
+	}
+}
+
+func TestAnnotationSchema_Request(t *testing.T) {
+	endpoint := AnnotationSchema.GetChild("@endpoint")
+	request := endpoint.GetChild("@request")
+	if request == nil {
+		t.Fatal("@request annotation not found")
+	}
+
+	if request.Type != BlockAnnotation {
+		t.Errorf("@request type = %v, want BlockAnnotation", request.Type)
+	}
+
+	children := []struct {
+		name        string
+		annType     AnnotationType
+		hasMetadata bool
+	}{
+		{"@contentType", ValueAnnotation, false},
+		{"@body", ValueAnnotation, true},
+		{"@bind", ValueAnnotation, false},
+	}
+
+	for _, tt := range children {
+		t.Run(tt.name, func(t *testing.T) {
+			node := request.GetChild(tt.name)
+			if node == nil {
+				t.Fatalf("@request missing child: %s", tt.name)
+			}
+			if node.Type != tt.annType {
+				t.Errorf("@request.%s type = %v, want %v", tt.name, node.Type, tt.annType)
+			}
+			if node.HasMetadata != tt.hasMetadata {
+				t.Errorf("@request.%s hasMetadata = %v, want %v", tt.name, node.HasMetadata, tt.hasMetadata)
+			}
+		})
+	}
+}
+
+func TestAnnotationSchema_Response_AllChildren(t *testing.T) {
+	endpoint := AnnotationSchema.GetChild("@endpoint")
+	response := endpoint.GetChild("@response")
+	if response == nil {
+		t.Fatal("@response annotation not found")
+	}
+
+	children := []struct {
+		name       string
+		annType    AnnotationType
+		repeatable bool
+	}{
+		{"@contentType", ValueAnnotation, false},
+		{"@body", ValueAnnotation, false},
+		{"@bind", ValueAnnotation, false},
+		{"@description", ValueAnnotation, false},
+		{"@header", ValueAnnotation, true},
+	}
+
+	for _, tt := range children {
+		t.Run(tt.name, func(t *testing.T) {
+			node := response.GetChild(tt.name)
+			if node == nil {
+				t.Fatalf("@response missing child: %s", tt.name)
+			}
+			if node.Type != tt.annType {
+				t.Errorf("@response.%s type = %v, want %v", tt.name, node.Type, tt.annType)
+			}
+			if node.Repeatable != tt.repeatable {
+				t.Errorf("@response.%s repeatable = %v, want %v", tt.name, node.Repeatable, tt.repeatable)
+			}
+		})
+	}
+
+	// @description should support multiline
+	desc := response.GetChild("@description")
+	if !desc.SupportsMultiline {
+		t.Error("@response.@description should support multiline")
+	}
+
+	// @body should have metadata
+	body := response.GetChild("@body")
+	if !body.HasMetadata {
+		t.Error("@response.@body should have metadata")
+	}
+}
+
+func TestAnnotationSchema_Field_AllChildren(t *testing.T) {
+	field := AnnotationSchema.GetChild("@field")
+	if field == nil {
+		t.Fatal("@field annotation not found")
+	}
+
+	valueChildren := []string{
+		"@description", "@format", "@example", "@enum", "@default",
+		"@minimum", "@maximum", "@exclusiveMinimum", "@exclusiveMaximum",
+		"@minLength", "@maxLength", "@minItems", "@maxItems", "@pattern",
+	}
+	for _, name := range valueChildren {
+		t.Run(name, func(t *testing.T) {
+			node := field.GetChild(name)
+			if node == nil {
+				t.Fatalf("@field missing child: %s", name)
+			}
+			if node.Type != ValueAnnotation {
+				t.Errorf("@field.%s type = %v, want ValueAnnotation", name, node.Type)
+			}
+		})
+	}
+
+	flagChildren := []string{"@uniqueItems", "@deprecated", "@readOnly", "@writeOnly"}
+	for _, name := range flagChildren {
+		t.Run(name, func(t *testing.T) {
+			node := field.GetChild(name)
+			if node == nil {
+				t.Fatalf("@field missing child: %s", name)
+			}
+			if node.Type != FlagAnnotation {
+				t.Errorf("@field.%s type = %v, want FlagAnnotation", name, node.Type)
+			}
+		})
+	}
+
+	// @description should support multiline
+	desc := field.GetChild("@description")
+	if !desc.SupportsMultiline {
+		t.Error("@field.@description should support multiline")
+	}
+}
+
+func TestAnnotationSchema_API_AllChildren(t *testing.T) {
+	api := AnnotationSchema.GetChild("@api")
+	if api == nil {
+		t.Fatal("@api annotation not found")
+	}
+
+	expectedChildren := []struct {
+		name       string
+		annType    AnnotationType
+		repeatable bool
+	}{
+		{"@title", ValueAnnotation, false},
+		{"@version", ValueAnnotation, false},
+		{"@description", ValueAnnotation, false},
+		{"@termsOfService", ValueAnnotation, false},
+		{"@contact", BlockAnnotation, false},
+		{"@license", BlockAnnotation, false},
+		{"@server", BlockAnnotation, true},
+		{"@securityScheme", BlockAnnotation, true},
+		{"@security", BlockAnnotation, true},
+		{"@tag", BlockAnnotation, true},
+		{"@defaultContentType", ValueAnnotation, false},
+	}
+
+	for _, tt := range expectedChildren {
+		t.Run(tt.name, func(t *testing.T) {
+			node := api.GetChild(tt.name)
+			if node == nil {
+				t.Fatalf("@api missing child: %s", tt.name)
+			}
+			if node.Type != tt.annType {
+				t.Errorf("@api.%s type = %v, want %v", tt.name, node.Type, tt.annType)
+			}
+			if node.Repeatable != tt.repeatable {
+				t.Errorf("@api.%s repeatable = %v, want %v", tt.name, node.Repeatable, tt.repeatable)
+			}
+		})
+	}
+
+	// @description should support multiline
+	desc := api.GetChild("@description")
+	if !desc.SupportsMultiline {
+		t.Error("@api.@description should support multiline")
+	}
+}
+
+func TestAnnotationSchema_SecurityScheme(t *testing.T) {
+	api := AnnotationSchema.GetChild("@api")
+	scheme := api.GetChild("@securityScheme")
+	if scheme == nil {
+		t.Fatal("@securityScheme annotation not found")
+	}
+
+	if !scheme.HasMetadata {
+		t.Error("@securityScheme should have metadata (scheme name)")
+	}
+
+	// @type is required
+	typeNode := scheme.GetChild("@type")
+	if typeNode == nil {
+		t.Fatal("@securityScheme missing @type")
+	}
+	if !typeNode.Required {
+		t.Error("@securityScheme.@type should be required")
+	}
+
+	optionalChildren := []string{"@scheme", "@bearerFormat", "@in", "@name", "@description"}
+	for _, name := range optionalChildren {
+		node := scheme.GetChild(name)
+		if node == nil {
+			t.Errorf("@securityScheme missing child: %s", name)
+			continue
+		}
+		if node.Required {
+			t.Errorf("@securityScheme.%s should not be required", name)
+		}
+	}
+}
+
+func TestAnnotationSchema_License(t *testing.T) {
+	api := AnnotationSchema.GetChild("@api")
+	license := api.GetChild("@license")
+	if license == nil {
+		t.Fatal("@license annotation not found")
+	}
+
+	if license.Type != BlockAnnotation {
+		t.Errorf("@license type = %v, want BlockAnnotation", license.Type)
+	}
+
+	expectedChildren := []string{"@name", "@url"}
+	for _, name := range expectedChildren {
+		if !license.HasChild(name) {
+			t.Errorf("@license missing child: %s", name)
+		}
+	}
+}
+
+func TestAnnotationSchema_Tag(t *testing.T) {
+	api := AnnotationSchema.GetChild("@api")
+	tag := api.GetChild("@tag")
+	if tag == nil {
+		t.Fatal("@tag annotation not found")
+	}
+
+	if !tag.HasMetadata {
+		t.Error("@tag should have metadata (tag name)")
+	}
+
+	if !tag.Repeatable {
+		t.Error("@tag should be repeatable")
+	}
+
+	desc := tag.GetChild("@description")
+	if desc == nil {
+		t.Fatal("@tag missing @description")
+	}
+	if !desc.SupportsMultiline {
+		t.Error("@tag.@description should support multiline")
+	}
+}
+
+func TestAnnotationSchema_Server(t *testing.T) {
+	api := AnnotationSchema.GetChild("@api")
+	server := api.GetChild("@server")
+	if server == nil {
+		t.Fatal("@server annotation not found")
+	}
+
+	if !server.HasMetadata {
+		t.Error("@server should have metadata (URL)")
+	}
+
+	if !server.Repeatable {
+		t.Error("@server should be repeatable")
+	}
+
+	desc := server.GetChild("@description")
+	if desc == nil {
+		t.Fatal("@server missing @description")
+	}
+	if !desc.SupportsMultiline {
+		t.Error("@server.@description should support multiline")
+	}
+}
+
 func TestAnnotationSchema_Integrity(t *testing.T) {
 	if err := AnnotationSchema.Validate(); err != nil {
 		t.Errorf("Schema integrity validation failed: %v", err)
