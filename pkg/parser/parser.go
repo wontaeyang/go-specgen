@@ -602,6 +602,22 @@ func (p *Parser) convertParsedField(fieldName string, parsed *ParsedAnnotation) 
 		field.UniqueItems = true
 	}
 
+	if req := parsed.GetChildValue("@required"); req != "" {
+		val, err := strconv.ParseBool(req)
+		if err != nil {
+			return nil, fmt.Errorf("@required value %q is not a valid boolean (use true or false)", req)
+		}
+		field.Required = &val
+	}
+
+	if null := parsed.GetChildValue("@nullable"); null != "" {
+		val, err := strconv.ParseBool(null)
+		if err != nil {
+			return nil, fmt.Errorf("@nullable value %q is not a valid boolean (use true or false)", null)
+		}
+		field.Nullable = &val
+	}
+
 	return field, nil
 }
 

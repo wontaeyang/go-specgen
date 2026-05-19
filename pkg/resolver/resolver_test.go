@@ -1275,3 +1275,81 @@ func TestResolveFieldNameFromTag(t *testing.T) {
 // invalid-numeric coverage lives in pkg/parser/parser_test.go:
 //   - TestParser_ConvertParsedField_InvalidFloat
 //   - TestParser_ConvertParsedField_InvalidInt
+
+func TestApplyAnnotationOverrides_RequiredNullable(t *testing.T) {
+	bptr := func(b bool) *bool { return &b }
+
+	tests := []struct {
+		name          string
+		startRequired bool
+		startNullable bool
+		annotation    *parser.Field
+		wantRequired  bool
+		wantNullable  bool
+	}{
+		{
+			name:          "no override leaves values alone",
+			startRequired: true,
+			startNullable: false,
+			annotation:    &parser.Field{},
+			wantRequired:  true,
+			wantNullable:  false,
+		},
+		{
+			name:          "@required false overrides required=true (non-pointer optional)",
+			startRequired: true,
+			startNullable: false,
+			annotation:    &parser.Field{Required: bptr(false)},
+			wantRequired:  false,
+			wantNullable:  false,
+		},
+		{
+			name:          "@required true overrides required=false (pointer required)",
+			startRequired: false,
+			startNullable: true,
+			annotation:    &parser.Field{Required: bptr(true)},
+			wantRequired:  true,
+			wantNullable:  true,
+		},
+		{
+			name:          "@nullable true on non-pointer",
+			startRequired: true,
+			startNullable: false,
+			annotation:    &parser.Field{Nullable: bptr(true)},
+			wantRequired:  true,
+			wantNullable:  true,
+		},
+		{
+			name:          "@nullable false on pointer",
+			startRequired: false,
+			startNullable: true,
+			annotation:    &parser.Field{Nullable: bptr(false)},
+			wantRequired:  false,
+			wantNullable:  false,
+		},
+		{
+			name:          "both overrides apply independently",
+			startRequired: true,
+			startNullable: false,
+			annotation:    &parser.Field{Required: bptr(false), Nullable: bptr(true)},
+			wantRequired:  false,
+			wantNullable:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolved := &ResolvedField{
+				Required: tt.startRequired,
+				Nullable: tt.startNullable,
+			}
+			applyAnnotationOverrides(resolved, tt.annotation)
+			if resolved.Required != tt.wantRequired {
+				t.Errorf("Required = %v, want %v", resolved.Required, tt.wantRequired)
+			}
+			if resolved.Nullable != tt.wantNullable {
+				t.Errorf("Nullable = %v, want %v", resolved.Nullable, tt.wantNullable)
+			}
+		})
+	}
+}

@@ -832,8 +832,11 @@ func applyAnnotationOverrides(resolved *ResolvedField, annotation *parser.Field)
 	if annotation.ExclusiveMaximum != nil {
 		resolved.ExclusiveMaximum = annotation.ExclusiveMaximum
 	}
-	if annotation.Nullable {
-		resolved.Nullable = true
+	if annotation.Required != nil {
+		resolved.Required = *annotation.Required
+	}
+	if annotation.Nullable != nil {
+		resolved.Nullable = *annotation.Nullable
 	}
 	if annotation.Deprecated {
 		resolved.Deprecated = true

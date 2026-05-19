@@ -23,6 +23,7 @@ func TestGoldenFiles(t *testing.T) {
 		{"closure", "closure.yaml"},
 		{"customtypes", "customtypes.yaml"},
 		{"enum", "enum.yaml"},
+		{"overrides", "overrides.yaml"},
 		{"generics", "generics.yaml"},
 		{"inline", "inline.yaml"},
 		{"nested", "nested.yaml"},

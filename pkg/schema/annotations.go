@@ -328,6 +328,14 @@ var AnnotationSchema = &SchemaNode{
 					Name: "@writeOnly",
 					Type: FlagAnnotation,
 				},
+				"@required": {
+					Name: "@required",
+					Type: ValueAnnotation,
+				},
+				"@nullable": {
+					Name: "@nullable",
+					Type: ValueAnnotation,
+				},
 			},
 		},
 		"@schema": {

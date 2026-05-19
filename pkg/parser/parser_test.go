@@ -496,6 +496,123 @@ func TestParser_ConvertParsedField_ValidNumeric(t *testing.T) {
 	}
 }
 
+func TestParser_ConvertParsedField_RequiredNullableOverrides(t *testing.T) {
+	parser := &Parser{}
+
+	tests := []struct {
+		name         string
+		annotation   *ParsedAnnotation
+		wantRequired *bool
+		wantNullable *bool
+	}{
+		{
+			name:         "no overrides",
+			annotation:   &ParsedAnnotation{},
+			wantRequired: nil,
+			wantNullable: nil,
+		},
+		{
+			name: "@required true",
+			annotation: &ParsedAnnotation{
+				Children: map[string]*ParsedAnnotation{
+					"@required": {Value: "true"},
+				},
+			},
+			wantRequired: boolPtr(true),
+		},
+		{
+			name: "@required false",
+			annotation: &ParsedAnnotation{
+				Children: map[string]*ParsedAnnotation{
+					"@required": {Value: "false"},
+				},
+			},
+			wantRequired: boolPtr(false),
+		},
+		{
+			name: "@nullable true",
+			annotation: &ParsedAnnotation{
+				Children: map[string]*ParsedAnnotation{
+					"@nullable": {Value: "true"},
+				},
+			},
+			wantNullable: boolPtr(true),
+		},
+		{
+			name: "@nullable false",
+			annotation: &ParsedAnnotation{
+				Children: map[string]*ParsedAnnotation{
+					"@nullable": {Value: "false"},
+				},
+			},
+			wantNullable: boolPtr(false),
+		},
+		{
+			name: "both set",
+			annotation: &ParsedAnnotation{
+				Children: map[string]*ParsedAnnotation{
+					"@required": {Value: "false"},
+					"@nullable": {Value: "true"},
+				},
+			},
+			wantRequired: boolPtr(false),
+			wantNullable: boolPtr(true),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field, err := parser.convertParsedField("F", tt.annotation)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !boolPtrEqual(field.Required, tt.wantRequired) {
+				t.Errorf("Required = %v, want %v", boolPtrStr(field.Required), boolPtrStr(tt.wantRequired))
+			}
+			if !boolPtrEqual(field.Nullable, tt.wantNullable) {
+				t.Errorf("Nullable = %v, want %v", boolPtrStr(field.Nullable), boolPtrStr(tt.wantNullable))
+			}
+		})
+	}
+}
+
+func TestParser_ConvertParsedField_InvalidBool(t *testing.T) {
+	parser := &Parser{}
+
+	annotation := &ParsedAnnotation{
+		Children: map[string]*ParsedAnnotation{
+			"@required": {Value: "maybe"},
+		},
+	}
+
+	_, err := parser.convertParsedField("BadField", annotation)
+	if err == nil {
+		t.Fatal("expected error for invalid @required value")
+	}
+	if !strings.Contains(err.Error(), "@required") || !strings.Contains(err.Error(), "maybe") {
+		t.Errorf("error message = %q, want mention of @required and invalid value", err.Error())
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+func boolPtrEqual(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func boolPtrStr(b *bool) string {
+	if b == nil {
+		return "nil"
+	}
+	if *b {
+		return "true"
+	}
+	return "false"
+}
+
 func TestParser_ParseEndpoint_Metadata(t *testing.T) {
 	// Test that endpoint metadata (method and path) is parsed correctly
 	parser := &Parser{
