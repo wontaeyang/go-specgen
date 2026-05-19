@@ -2,7 +2,6 @@ package resolver
 
 import (
 	"go/types"
-	"strings"
 	"testing"
 
 	"github.com/wontaeyang/go-specgen/pkg/parser"
@@ -1271,43 +1270,8 @@ func TestResolveFieldNameFromTag(t *testing.T) {
 	}
 }
 
-func TestApplyFieldAnnotations_InvalidNumeric(t *testing.T) {
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	tests := []struct {
-		name    string
-		comment *parser.CommentBlock
-		wantErr string
-	}{
-		{
-			name: "invalid minimum",
-			comment: &parser.CommentBlock{
-				Lines: []string{`@field { @minimum abc }`},
-			},
-			wantErr: "@minimum",
-		},
-		{
-			name: "invalid maxLength",
-			comment: &parser.CommentBlock{
-				Lines: []string{`@field { @maxLength 1.5 }`},
-			},
-			wantErr: "@maxLength",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			field := &ResolvedField{}
-			err := resolver.applyFieldAnnotations(field, tt.comment)
-			if err == nil {
-				t.Fatal("expected error")
-			}
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Errorf("error = %q, want it to contain %q", err.Error(), tt.wantErr)
-			}
-		})
-	}
-}
+// applyFieldAnnotations has been removed — @field parsing now happens in the
+// parser via parseFieldComments and is validated by convertParsedField. Equivalent
+// invalid-numeric coverage lives in pkg/parser/parser_test.go:
+//   - TestParser_ConvertParsedField_InvalidFloat
+//   - TestParser_ConvertParsedField_InvalidInt

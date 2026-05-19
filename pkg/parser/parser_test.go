@@ -141,6 +141,13 @@ func TestParser_ParseSchemas(t *testing.T) {
 		t.Fatalf("parseSchemas() error = %v", err)
 	}
 
+	// parseStructFields is the single place that parses @field annotations, so
+	// it must be invoked to populate Schema.Fields — identical path to inline
+	// var structs.
+	if err := parser.parseStructFields(result); err != nil {
+		t.Fatalf("parseStructFields() error = %v", err)
+	}
+
 	// Check if User schema was parsed
 	userSchema, ok := result.Schemas["User"]
 	if !ok {
@@ -183,6 +190,60 @@ func TestParser_ParseParameters(t *testing.T) {
 		// Verify type is set correctly
 		if param.Type == "" {
 			t.Errorf("Parameter %s has empty Type", name)
+		}
+	}
+}
+
+func TestParser_ParseStructFields_InlineStructs(t *testing.T) {
+	// Verifies that parseStructFields populates Fields for inline var structs
+	// declared inside handler bodies via the same path as @schema structs.
+	parser := NewParser("../../examples/inline")
+	parsed, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	listUsers := parsed.Endpoints
+	_ = listUsers
+
+	inlines := parser.comments.FuncInlines["ListUsers"]
+	if inlines == nil || len(inlines.Query) == 0 {
+		t.Fatal("ListUsers should have an inline @query struct")
+	}
+	query := inlines.Query[0]
+	if len(query.Fields) == 0 {
+		t.Fatal("inline @query Fields should be populated by parseStructFields")
+	}
+
+	want := map[string]struct {
+		description string
+		hasMinimum  bool
+		hasEnum     bool
+	}{
+		"Limit":  {description: "Maximum results", hasMinimum: true},
+		"Offset": {description: "Page offset", hasMinimum: true},
+		"Status": {description: "Filter by status", hasEnum: true},
+	}
+
+	got := make(map[string]*Field, len(query.Fields))
+	for _, f := range query.Fields {
+		got[f.GoName] = f
+	}
+
+	for name, expected := range want {
+		f, ok := got[name]
+		if !ok {
+			t.Errorf("Field %q not parsed onto info.Fields", name)
+			continue
+		}
+		if f.Description != expected.description {
+			t.Errorf("%s.Description = %q, want %q", name, f.Description, expected.description)
+		}
+		if expected.hasMinimum && f.Minimum == nil {
+			t.Errorf("%s should have @minimum populated", name)
+		}
+		if expected.hasEnum && len(f.Enum) == 0 {
+			t.Errorf("%s should have @enum populated", name)
 		}
 	}
 }

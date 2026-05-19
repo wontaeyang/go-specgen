@@ -69,47 +69,6 @@ func TestExtractComments(t *testing.T) {
 	}
 }
 
-func TestExtractComments_StandaloneAPI(t *testing.T) {
-	comments, err := ExtractComments("./testdata/standalone_api")
-	if err != nil {
-		t.Fatalf("ExtractComments() error = %v", err)
-	}
-
-	if comments == nil {
-		t.Fatal("ExtractComments() returned nil")
-	}
-
-	// @api is NOT in file.Doc — it's a standalone comment block
-	if comments.PackageComments == nil {
-		t.Fatal("PackageComments is nil, expected standalone @api annotation to be found")
-	}
-
-	if !comments.PackageComments.HasAnnotation("@api") {
-		t.Error("PackageComments should have @api annotation")
-	}
-
-	// Verify title was extracted correctly
-	found := false
-	for _, line := range comments.PackageComments.Lines {
-		if line == "@title Standalone API" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("Expected @title Standalone API in PackageComments, got: %v", comments.PackageComments.Lines)
-	}
-
-	// Verify other annotations still work alongside standalone @api
-	if comments.GetStructComment("Item") == nil {
-		t.Error("Missing struct comment for Item")
-	}
-
-	if comments.GetFunctionComment("GetItem") == nil {
-		t.Error("Missing function comment for GetItem")
-	}
-}
-
 func TestCommentBlock_HasAnnotation(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -294,17 +253,18 @@ func TestExtractFuncInlines(t *testing.T) {
 	}
 
 	// GetUser has @path and @response 200
-	if getUserInlines.Path == nil {
+	if len(getUserInlines.Path) == 0 {
 		t.Error("GetUser should have @path inline")
 	} else {
-		if getUserInlines.Path.Annotation != "path" {
-			t.Errorf("Path.Annotation = %q, want %q", getUserInlines.Path.Annotation, "path")
+		path := getUserInlines.Path[0]
+		if path.Annotation != "path" {
+			t.Errorf("Path.Annotation = %q, want %q", path.Annotation, "path")
 		}
-		if getUserInlines.Path.VarName != "path" {
-			t.Errorf("Path.VarName = %q, want %q", getUserInlines.Path.VarName, "path")
+		if path.VarName != "path" {
+			t.Errorf("Path.VarName = %q, want %q", path.VarName, "path")
 		}
 		// Check field comments
-		if getUserInlines.Path.FieldComments["ID"] == nil {
+		if path.FieldComments["ID"] == nil {
 			t.Error("Path should have ID field comment")
 		}
 	}
@@ -354,17 +314,18 @@ func TestExtractFuncInlines(t *testing.T) {
 	}
 
 	// ListUsers has @query and @response 200
-	if listUsersInlines.Query == nil {
+	if len(listUsersInlines.Query) == 0 {
 		t.Error("ListUsers should have @query inline")
 	} else {
-		if listUsersInlines.Query.Annotation != "query" {
-			t.Errorf("Query.Annotation = %q, want %q", listUsersInlines.Query.Annotation, "query")
+		query := listUsersInlines.Query[0]
+		if query.Annotation != "query" {
+			t.Errorf("Query.Annotation = %q, want %q", query.Annotation, "query")
 		}
 		// Check field comments
-		if listUsersInlines.Query.FieldComments["Limit"] == nil {
+		if query.FieldComments["Limit"] == nil {
 			t.Error("Query should have Limit field comment")
 		}
-		if listUsersInlines.Query.FieldComments["Status"] == nil {
+		if query.FieldComments["Status"] == nil {
 			t.Error("Query should have Status field comment")
 		}
 	}

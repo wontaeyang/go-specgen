@@ -37,10 +37,14 @@ func IsInlineFormat(lines []string) bool {
 // ParseInlineAnnotation parses an inline annotation
 // Example: @field { @description User email @format email }
 // Note: All block annotations support inline format, but nested blocks are not allowed.
+// The nested-brace check is skipped when the annotation has no block-producing children
+// (e.g. @field's children are all value/flag annotations), so values like a regex
+// quantifier `{64}` are not misread as a nested block.
 func ParseInlineAnnotation(line, annotationName string, node *schema.SchemaNode) (*ParsedAnnotation, error) {
-	// Validate no nested braces - inline blocks cannot contain other blocks
-	if err := validateNoNestedBraces(line); err != nil {
-		return nil, err
+	if node.HasBlockChildren() {
+		if err := validateNoNestedBraces(line); err != nil {
+			return nil, err
+		}
 	}
 
 	result := &ParsedAnnotation{

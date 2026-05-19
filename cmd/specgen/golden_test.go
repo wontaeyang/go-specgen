@@ -30,6 +30,7 @@ func TestGoldenFiles(t *testing.T) {
 		{"petstore", "petstore.yaml"},
 		{"responses", "responses.yaml"},
 		{"security", "security.yaml"},
+		{"standalone_api", "standalone_api.yaml"},
 		{"tags", "tags.yaml"},
 	}
 

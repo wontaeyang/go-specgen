@@ -129,6 +129,22 @@ func (n *SchemaNode) CanBeEmpty() bool {
 	return true
 }
 
+// HasBlockChildren returns true if any child of this node is itself a block-producing
+// annotation (BlockAnnotation or SubCommand with children). When false, braces inside
+// a value (e.g. a regex quantifier like {64}) cannot be confused with a nested block,
+// so nested-brace validation can be skipped.
+func (n *SchemaNode) HasBlockChildren() bool {
+	for _, child := range n.Children {
+		if child.Type == BlockAnnotation {
+			return true
+		}
+		if child.Type == SubCommand && len(child.Children) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // InitializeParents recursively sets parent references in the schema tree
 func (n *SchemaNode) InitializeParents() {
 	if n.Children == nil {
