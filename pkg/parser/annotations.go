@@ -174,7 +174,7 @@ func ExtractMetadata(line, annotationName string) string {
 		line = line[:blockPos-1]
 	}
 
-	return strings.TrimSpace(line)
+	return UnescapeValue(strings.TrimSpace(line))
 }
 
 // ParseAnnotationBlock parses an annotation block using the schema
@@ -238,7 +238,7 @@ func ParseAnnotationBlock(lines []string, annotationName string, node *schema.Sc
 			firstLine := lines[0]
 			value := strings.TrimPrefix(firstLine, annotationName)
 			value = strings.TrimSpace(value)
-			result.Value = value
+			result.Value = UnescapeValue(value)
 		}
 		return result, nil
 	}
