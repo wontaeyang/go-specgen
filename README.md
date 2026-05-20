@@ -225,6 +225,34 @@ type Tags []string      // -> type: array, items: string
 | `header` | Optional | Tag contains `,required` |
 | `cookie` | Optional | Tag contains `,required` |
 
+**Overrides** — `@required` and `@nullable` on `@field` let you decouple the OpenAPI contract from Go's type/tag defaults when they don't match what you want to expose:
+
+```go
+// @schema
+type LoginRequest struct {
+    // Non-pointer, but optional in the request — avoids *string just to mark optional
+    // @field { @description 2FA code @required false }
+    TFACode string `json:"tfa_code"`
+}
+
+// @schema
+type CreatePromo struct {
+    // Pointer so the handler can distinguish "not sent" from "sent 0",
+    // but the field must still be present in the request
+    // @field { @description Discount percent @required true }
+    Percent *int `json:"percent"`
+}
+
+// @schema
+type UpdateUserPatch struct {
+    // PATCH semantics: pointer detects presence, but explicit null is rejected
+    // @field { @description Replace email; omit to leave unchanged @nullable false @required false }
+    Email *string `json:"email,omitempty"`
+}
+```
+
+When omitted, behavior falls back to the Go-type rules in the tables above.
+
 ### Embedded Structs
 
 Embedded (anonymous) struct fields are flattened into the parent schema or parameter:
@@ -490,6 +518,8 @@ CODE can be a specific status (`200`, `404`), a range (`2XX`, `4XX`, `5XX`), or 
   @deprecated         Mark as deprecated
   @readOnly           Mark as read-only
   @writeOnly          Mark as write-only
+  @required           Override required (true|false)
+  @nullable           Override nullable (true|false)
 }
 ```
 
@@ -627,6 +657,7 @@ Only `@description` supports multi-line values:
 - XML/YAML struct tag support
 - OAuth2 flows configuration
 - External documentation support
+- Custom type support for structs implementing `json.Marshaler` / `json.Unmarshaler` (e.g. `sql.NullString`)
 
 ---
 
