@@ -133,11 +133,13 @@ func parseInlineChildren(content string, parentNode *schema.SchemaNode, result *
 			}
 		}
 
-		// Create parsed annotation with unescaped value
-		unescapedValue := UnescapeValue(value)
+		resolvedValue, err := resolveValue(value, childNode, annotationName)
+		if err != nil {
+			return err
+		}
 		parsed := &ParsedAnnotation{
 			Name:             annotationName,
-			Value:            unescapedValue,
+			Value:            resolvedValue,
 			IsFlag:           childNode.Type == schema.FlagAnnotation,
 			Children:         make(map[string]*ParsedAnnotation),
 			RepeatedChildren: make(map[string][]*ParsedAnnotation),
@@ -145,7 +147,7 @@ func parseInlineChildren(content string, parentNode *schema.SchemaNode, result *
 
 		// For annotations with metadata (like @body), also set Metadata
 		if childNode.HasMetadata {
-			parsed.Metadata = unescapedValue
+			parsed.Metadata = resolvedValue
 		}
 
 		// Store in result

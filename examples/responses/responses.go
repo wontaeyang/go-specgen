@@ -1,8 +1,8 @@
 //	@api {
 //	  @title Response Wrappers Example
 //	  @version 1.0.0
-//	  @description Demonstrates response wrapper patterns using @bind.
-//	  The @bind directive allows wrapping response data in a consistent envelope.
+//	  @description Demonstrates response wrapper patterns using \@bind.
+//	  The \@bind directive allows wrapping response data in a consistent envelope.
 //	  @defaultContentType json
 //	}
 package responses

@@ -67,6 +67,11 @@ type SchemaNode struct {
 	// Only @description annotations should have this set to true
 	SupportsMultiline bool
 
+	// RawValue indicates the annotation's value is passed through verbatim:
+	// no escape validation, no UnescapeValue. Used when the value is itself
+	// a DSL with its own escape grammar (e.g. @pattern regex).
+	RawValue bool
+
 	// Children are nested annotations within this annotation
 	Children map[string]*SchemaNode
 

@@ -6,7 +6,7 @@
 //	  @termsOfService https://petstore.example.com/terms
 //	  @contact {
 //	    @name API Support
-//	    @email support@petstore.example.com
+//	    @email support\@petstore.example.com
 //	    @url https://petstore.example.com/support
 //	  }
 //	  @license {

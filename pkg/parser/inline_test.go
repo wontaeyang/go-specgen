@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/wontaeyang/go-specgen/pkg/schema"
@@ -410,8 +411,8 @@ func TestParseInlineAnnotation_EscapedCharacters(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "escaped braces in pattern",
-			line:     `@field { @pattern ^[A-Z]\{2\}$ }`,
+			name:     "raw braces in pattern (RawValue passthrough)",
+			line:     `@field { @pattern ^[A-Z]{2}$ }`,
 			child:    "@pattern",
 			expected: "^[A-Z]{2}$",
 		},
@@ -435,7 +436,7 @@ func TestParseInlineAnnotation_EscapedCharacters(t *testing.T) {
 		},
 		{
 			name:     "regex quantifier range",
-			line:     `@field { @pattern ^[a-z]\{3,5\}$ }`,
+			line:     `@field { @pattern ^[a-z]{3,5}$ }`,
 			child:    "@pattern",
 			expected: "^[a-z]{3,5}$",
 		},
@@ -468,16 +469,16 @@ func TestParseInlineAnnotation_EscapedCharacters(t *testing.T) {
 	}
 }
 
-func TestParseInlineAnnotation_EscapedBracesAllowed(t *testing.T) {
-	// Test that escaped braces don't trigger "nested blocks" error
+func TestParseInlineAnnotation_RawPatternBraces(t *testing.T) {
+	// @pattern is a RawValue annotation: raw braces are passed through verbatim
+	// without being mistaken for a nested block.
 	fieldNode := schema.AnnotationSchema.GetChild("@field")
 
-	// This previously failed with "nested blocks cannot be inlined"
-	line := `@field { @pattern ^[A-Z]\{2\}$ @description Country code }`
+	line := `@field { @pattern ^[A-Z]{2}$ @description Country code }`
 
 	parsed, err := ParseInlineAnnotation(line, "@field", fieldNode)
 	if err != nil {
-		t.Fatalf("ParseInlineAnnotation() should not error for escaped braces, got: %v", err)
+		t.Fatalf("ParseInlineAnnotation() should not error for raw braces in @pattern, got: %v", err)
 	}
 
 	pattern := parsed.GetChildValue("@pattern")
@@ -488,6 +489,54 @@ func TestParseInlineAnnotation_EscapedBracesAllowed(t *testing.T) {
 	desc := parsed.GetChildValue("@description")
 	if desc != "Country code" {
 		t.Errorf("description = %q, want %q", desc, "Country code")
+	}
+}
+
+func TestParseAnnotation_RejectsUnescapedSpecials(t *testing.T) {
+	fieldNode := schema.AnnotationSchema.GetChild("@field")
+	apiNode := schema.AnnotationSchema.GetChild("@api")
+
+	tests := []struct {
+		name  string
+		lines []string
+		node  *schema.SchemaNode
+		root  string
+		want  string // substring expected in the error
+	}{
+		{
+			name: "unescaped @ in block @email value",
+			lines: []string{
+				"@api {",
+				"  @title T",
+				"  @version 1",
+				"  @contact {",
+				"    @email user@example.com",
+				"  }",
+				"}",
+			},
+			node: apiNode,
+			root: "@api",
+			want: "unescaped '@' in @email",
+		},
+		{
+			name:  "unescaped { in inline @description",
+			lines: []string{`@field { @description Use {placeholder} here }`},
+			node:  fieldNode,
+			root:  "@field",
+			want:  "unescaped '{' in @description",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseAnnotationBlock(tt.lines, tt.root, tt.node)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tt.want)
+			}
+		})
 	}
 }
 

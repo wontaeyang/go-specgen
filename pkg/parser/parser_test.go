@@ -834,7 +834,7 @@ func TestParser_ParseAPI_Contact(t *testing.T) {
 					"  @version 1.0.0",
 					"  @contact {",
 					"    @name API Team",
-					"    @email api@example.com",
+					"    @email api\\@example.com",
 					"    @url https://example.com",
 					"  }",
 					"}",

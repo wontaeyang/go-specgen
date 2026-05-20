@@ -1,7 +1,7 @@
 //	@api {
 //	  @title Field Overrides Example
 //	  @version 1.0.0
-//	  @description Demonstrates @required and @nullable as explicit overrides on @field.
+//	  @description Demonstrates \@required and \@nullable as explicit overrides on \@field.
 //	  These let you decouple OpenAPI required/nullable from Go pointer-ness and json tags.
 //	  @defaultContentType json
 //	}

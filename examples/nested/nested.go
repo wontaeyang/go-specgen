@@ -2,7 +2,7 @@
 //	  @title Nested Schemas Example
 //	  @version 1.0.0
 //	  @description Demonstrates nested schema references and $ref generation.
-//	  When a schema field references another @schema type, go-specgen
+//	  When a schema field references another \@schema type, go-specgen
 //	  automatically generates $ref references in the OpenAPI output.
 //	  @defaultContentType json
 //	}
@@ -30,7 +30,7 @@ type Address struct {
 	PostalCode string `json:"postal_code"`
 
 	// Using escaped braces for regex quantifier in inline format
-	// @field { @description Country code @pattern ^[A-Z]\{2\}$ }
+	// @field { @description Country code @pattern ^[A-Z]{2}$ }
 	Country string `json:"country"`
 }
 

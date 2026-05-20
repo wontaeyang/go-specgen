@@ -76,6 +76,28 @@ func ContainsUnescapedBrace(content string) bool {
 	return false
 }
 
+// FindUnescapedSpecial scans content for an unescaped special character ({, }, @).
+// Returns the offending character and true if found. Used to validate annotation
+// values where these chars must be escaped (\{, \}, \@) if intended as literals.
+func FindUnescapedSpecial(content string) (byte, bool) {
+	i := 0
+	for i < len(content) {
+		if content[i] == '\\' && i+1 < len(content) {
+			next := content[i+1]
+			if next == '{' || next == '}' || next == '@' || next == '\\' {
+				i += 2
+				continue
+			}
+		}
+		switch content[i] {
+		case '{', '}', '@':
+			return content[i], true
+		}
+		i++
+	}
+	return 0, false
+}
+
 // StartsWithUnescapedAt checks if a line starts with an unescaped @ symbol.
 // Used for multi-line parsing to detect annotation boundaries.
 func StartsWithUnescapedAt(line string) bool {

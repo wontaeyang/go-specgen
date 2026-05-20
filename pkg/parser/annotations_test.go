@@ -373,7 +373,7 @@ func TestParseAnnotationBlock_NestedBlocks(t *testing.T) {
 		"  @version 1.0.0",
 		"  @contact {",
 		"    @name API Team",
-		"    @email api@example.com",
+		"    @email api\\@example.com",
 		"  }",
 		"}",
 	}

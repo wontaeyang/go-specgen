@@ -6,7 +6,7 @@ package standalone_api
 // @api {
 //   @title Standalone API
 //   @version 1.0.0
-//   @description Demonstrates @api declared as a standalone comment block.
+//   @description Demonstrates \@api declared as a standalone comment block.
 //   @defaultContentType json
 // }
 
