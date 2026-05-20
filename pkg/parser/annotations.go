@@ -39,17 +39,8 @@ type ParsedAnnotation struct {
 // Path params like {id} have no space before the brace.
 // Returns the position of '{' or -1 if no block delimiter found.
 func findBlockOpener(line string) int {
-	for i := 0; i < len(line)-1; i++ {
-		// Skip escape sequences
-		if line[i] == '\\' && i+1 < len(line) {
-			next := line[i+1]
-			if next == '{' || next == '}' || next == '@' || next == '\\' {
-				i++ // Skip the escaped character
-				continue
-			}
-		}
-		// Look for space/tab followed by {
-		if (line[i] == ' ' || line[i] == '\t') && line[i+1] == '{' {
+	for i, b := range unescapedBytes(line) {
+		if (b == ' ' || b == '\t') && i+1 < len(line) && line[i+1] == '{' {
 			return i + 1
 		}
 	}
@@ -60,21 +51,13 @@ func findBlockOpener(line string) int {
 // Returns the final depth.
 func countBracesFromPosition(line string, startPos int) int {
 	depth := 0
-	i := startPos
-	for i < len(line) {
-		if line[i] == '\\' && i+1 < len(line) {
-			next := line[i+1]
-			if next == '{' || next == '}' || next == '@' || next == '\\' {
-				i += 2
-				continue
-			}
-		}
-		if line[i] == '{' {
+	for _, b := range unescapedBytes(line[startPos:]) {
+		switch b {
+		case '{':
 			depth++
-		} else if line[i] == '}' {
+		case '}':
 			depth--
 		}
-		i++
 	}
 	return depth
 }
@@ -120,7 +103,7 @@ func ParseBracedBlock(lines []string) ([]string, error) {
 			line = line[openBracePos+1:]
 		} else {
 			// For subsequent lines, count all braces
-			lineDepth, _ := CountUnescapedBraces(line)
+			lineDepth := CountUnescapedBraces(line)
 			braceDepth += lineDepth
 		}
 
@@ -347,7 +330,7 @@ func parseChildren(lines []string, parentNode *schema.SchemaNode, result *Parsed
 				nextLine := lines[i]
 				annotationLines = append(annotationLines, nextLine)
 
-				lineDepth, _ := CountUnescapedBraces(nextLine)
+				lineDepth := CountUnescapedBraces(nextLine)
 				braceDepth += lineDepth
 				i++
 			}

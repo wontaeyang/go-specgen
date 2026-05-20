@@ -89,9 +89,7 @@ func parseInlineChildren(content string, parentNode *schema.SchemaNode, result *
 		return nil
 	}
 
-	// Protect escaped @ before splitting by @
-	protected := ProtectEscapedAt(content)
-	parts := strings.Split(protected, "@")
+	parts := SplitOnUnescapedAt(content)
 
 	for i, part := range parts {
 		// Skip empty parts (first part before first @)
@@ -99,8 +97,6 @@ func parseInlineChildren(content string, parentNode *schema.SchemaNode, result *
 			continue
 		}
 
-		// Restore escaped @ in this part
-		part = RestoreEscapedAt(part)
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
