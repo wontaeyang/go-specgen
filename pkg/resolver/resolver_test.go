@@ -2,7 +2,6 @@ package resolver
 
 import (
 	"go/types"
-	"strings"
 	"testing"
 
 	"github.com/wontaeyang/go-specgen/pkg/parser"
@@ -226,54 +225,6 @@ func TestResolver_ResolveAPI(t *testing.T) {
 
 	if resolved.Servers[0].URL != "https://api.example.com" {
 		t.Errorf("Server URL = %q, want %q", resolved.Servers[0].URL, "https://api.example.com")
-	}
-}
-
-func TestExtractJSONName(t *testing.T) {
-	tests := []struct {
-		name     string
-		tag      string
-		expected string
-	}{
-		{
-			name:     "simple json tag",
-			tag:      `json:"id"`,
-			expected: "id",
-		},
-		{
-			name:     "json tag with omitempty",
-			tag:      `json:"email,omitempty"`,
-			expected: "email",
-		},
-		{
-			name:     "json tag with dash",
-			tag:      `json:"-"`,
-			expected: "-",
-		},
-		{
-			name:     "no json tag",
-			tag:      `validate:"required"`,
-			expected: "",
-		},
-		{
-			name:     "empty tag",
-			tag:      "",
-			expected: "",
-		},
-		{
-			name:     "multiple tags",
-			tag:      `json:"name" validate:"required"`,
-			expected: "name",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractJSONName(tt.tag)
-			if got != tt.expected {
-				t.Errorf("extractJSONName(%q) = %q, want %q", tt.tag, got, tt.expected)
-			}
-		})
 	}
 }
 
@@ -1271,42 +1222,85 @@ func TestResolveFieldNameFromTag(t *testing.T) {
 	}
 }
 
-func TestApplyFieldAnnotations_InvalidNumeric(t *testing.T) {
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
+// applyFieldAnnotations has been removed — @field parsing now happens in the
+// parser via parseFieldComments and is validated by convertParsedField. Equivalent
+// invalid-numeric coverage lives in pkg/parser/parser_test.go:
+//   - TestParser_ConvertParsedField_InvalidFloat
+//   - TestParser_ConvertParsedField_InvalidInt
+
+func TestApplyAnnotationOverrides_RequiredNullable(t *testing.T) {
+	bptr := func(b bool) *bool { return &b }
 
 	tests := []struct {
-		name    string
-		comment *parser.CommentBlock
-		wantErr string
+		name          string
+		startRequired bool
+		startNullable bool
+		annotation    *parser.Field
+		wantRequired  bool
+		wantNullable  bool
 	}{
 		{
-			name: "invalid minimum",
-			comment: &parser.CommentBlock{
-				Lines: []string{`@field { @minimum abc }`},
-			},
-			wantErr: "@minimum",
+			name:          "no override leaves values alone",
+			startRequired: true,
+			startNullable: false,
+			annotation:    &parser.Field{},
+			wantRequired:  true,
+			wantNullable:  false,
 		},
 		{
-			name: "invalid maxLength",
-			comment: &parser.CommentBlock{
-				Lines: []string{`@field { @maxLength 1.5 }`},
-			},
-			wantErr: "@maxLength",
+			name:          "@required false overrides required=true (non-pointer optional)",
+			startRequired: true,
+			startNullable: false,
+			annotation:    &parser.Field{Required: bptr(false)},
+			wantRequired:  false,
+			wantNullable:  false,
+		},
+		{
+			name:          "@required true overrides required=false (pointer required)",
+			startRequired: false,
+			startNullable: true,
+			annotation:    &parser.Field{Required: bptr(true)},
+			wantRequired:  true,
+			wantNullable:  true,
+		},
+		{
+			name:          "@nullable true on non-pointer",
+			startRequired: true,
+			startNullable: false,
+			annotation:    &parser.Field{Nullable: bptr(true)},
+			wantRequired:  true,
+			wantNullable:  true,
+		},
+		{
+			name:          "@nullable false on pointer",
+			startRequired: false,
+			startNullable: true,
+			annotation:    &parser.Field{Nullable: bptr(false)},
+			wantRequired:  false,
+			wantNullable:  false,
+		},
+		{
+			name:          "both overrides apply independently",
+			startRequired: true,
+			startNullable: false,
+			annotation:    &parser.Field{Required: bptr(false), Nullable: bptr(true)},
+			wantRequired:  false,
+			wantNullable:  true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			field := &ResolvedField{}
-			err := resolver.applyFieldAnnotations(field, tt.comment)
-			if err == nil {
-				t.Fatal("expected error")
+			resolved := &ResolvedField{
+				Required: tt.startRequired,
+				Nullable: tt.startNullable,
 			}
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Errorf("error = %q, want it to contain %q", err.Error(), tt.wantErr)
+			applyAnnotationOverrides(resolved, tt.annotation)
+			if resolved.Required != tt.wantRequired {
+				t.Errorf("Required = %v, want %v", resolved.Required, tt.wantRequired)
+			}
+			if resolved.Nullable != tt.wantNullable {
+				t.Errorf("Nullable = %v, want %v", resolved.Nullable, tt.wantNullable)
 			}
 		})
 	}

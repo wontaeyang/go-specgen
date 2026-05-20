@@ -313,8 +313,9 @@ var AnnotationSchema = &SchemaNode{
 					Type: FlagAnnotation,
 				},
 				"@pattern": {
-					Name: "@pattern",
-					Type: ValueAnnotation,
+					Name:     "@pattern",
+					Type:     ValueAnnotation,
+					RawValue: true,
 				},
 				"@deprecated": {
 					Name: "@deprecated",
@@ -327,6 +328,14 @@ var AnnotationSchema = &SchemaNode{
 				"@writeOnly": {
 					Name: "@writeOnly",
 					Type: FlagAnnotation,
+				},
+				"@required": {
+					Name: "@required",
+					Type: ValueAnnotation,
+				},
+				"@nullable": {
+					Name: "@nullable",
+					Type: ValueAnnotation,
 				},
 			},
 		},

@@ -67,6 +67,11 @@ type SchemaNode struct {
 	// Only @description annotations should have this set to true
 	SupportsMultiline bool
 
+	// RawValue indicates the annotation's value is passed through verbatim:
+	// no escape validation, no UnescapeValue. Used when the value is itself
+	// a DSL with its own escape grammar (e.g. @pattern regex).
+	RawValue bool
+
 	// Children are nested annotations within this annotation
 	Children map[string]*SchemaNode
 
@@ -127,6 +132,22 @@ func (n *SchemaNode) CanBeEmpty() bool {
 		}
 	}
 	return true
+}
+
+// HasBlockChildren returns true if any child of this node is itself a block-producing
+// annotation (BlockAnnotation or SubCommand with children). When false, braces inside
+// a value (e.g. a regex quantifier like {64}) cannot be confused with a nested block,
+// so nested-brace validation can be skipped.
+func (n *SchemaNode) HasBlockChildren() bool {
+	for _, child := range n.Children {
+		if child.Type == BlockAnnotation {
+			return true
+		}
+		if child.Type == SubCommand && len(child.Children) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // InitializeParents recursively sets parent references in the schema tree

@@ -307,6 +307,49 @@ func DeleteOrder(w http.ResponseWriter, r *http.Request) {
 	_ = path
 }
 
+// SearchUsers demonstrates multiple inline @query structs in one handler.
+// Each inline @query contributes its own fields; all are flattened into a single
+// OpenAPI parameters array on the operation.
+// @endpoint GET /users/search
+func SearchUsers(w http.ResponseWriter, r *http.Request) {
+	// @query
+	var pagination struct {
+		// @field { @description Maximum results @minimum 1 @maximum 100 @default 20 }
+		Limit *int `query:"limit"`
+
+		// @field { @description Page offset @minimum 0 @default 0 }
+		Offset *int `query:"offset"`
+	}
+
+	// @query
+	var filters struct {
+		// @field { @description Filter by status @enum active,inactive,banned }
+		Status *string `query:"status"`
+
+		// @field { @description Substring match on email }
+		EmailContains *string `query:"email_contains"`
+	}
+
+	// @response 200
+	var success struct {
+		// @field { @description Matching users }
+		Users []struct {
+			// @field { @description User ID @format uuid }
+			ID string `json:"id"`
+
+			// @field { @description User email @format email }
+			Email string `json:"email"`
+		} `json:"users"`
+
+		// @field { @description Total count of matches }
+		Total int `json:"total"`
+	}
+
+	_ = pagination
+	_ = filters
+	_ = success
+}
+
 // -----------------------------------------------------------------------------
 // Response Headers for Rate Limiting
 // -----------------------------------------------------------------------------

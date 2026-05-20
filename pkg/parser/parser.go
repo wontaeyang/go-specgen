@@ -63,7 +63,101 @@ func (p *Parser) Parse() (*ParsedPackage, error) {
 		return nil, fmt.Errorf("failed to parse endpoints: %w", err)
 	}
 
+	// Step 6: Parse @field annotations on every struct that has them —
+	// @schema structs and inline var structs both, via one shared path.
+	if err := p.parseStructFields(result); err != nil {
+		return nil, fmt.Errorf("failed to parse struct fields: %w", err)
+	}
+
+	// Step 7: Resolve type-alias schemas (generic instantiations). Runs after
+	// parseStructFields so aliases copy already-populated Fields from their base.
+	if err := p.resolveSchemaAliases(result); err != nil {
+		return nil, fmt.Errorf("failed to resolve schema aliases: %w", err)
+	}
+
 	return result, nil
+}
+
+// parseStructFields is the single entry point for @field parsing. It iterates
+// every source of struct field comments — @schema structs and inline var structs
+// declared in handler bodies — and populates their Fields via parseFieldComments.
+// There is no separate "inline field parsing"; discovery differs by source, but
+// the parsing itself is identical for both.
+func (p *Parser) parseStructFields(result *ParsedPackage) error {
+	// @schema structs
+	for structName, s := range result.Schemas {
+		fieldComments, ok := p.comments.FieldComments[structName]
+		if !ok {
+			continue
+		}
+		fields, err := p.parseFieldComments(fieldComments, structName)
+		if err != nil {
+			return err
+		}
+		s.Fields = fields
+	}
+
+	// Inline var structs declared in function bodies
+	for funcName, inlines := range p.comments.FuncInlines {
+		if inlines == nil {
+			continue
+		}
+		var structs []*InlineStructInfo
+		structs = append(structs, inlines.Query...)
+		structs = append(structs, inlines.Path...)
+		structs = append(structs, inlines.Header...)
+		structs = append(structs, inlines.Cookie...)
+		if inlines.Request != nil {
+			structs = append(structs, inlines.Request)
+		}
+		for _, resp := range inlines.Responses {
+			structs = append(structs, resp)
+		}
+		for _, info := range structs {
+			fields, err := p.parseFieldComments(info.FieldComments, funcName+"."+info.VarName)
+			if err != nil {
+				return err
+			}
+			info.Fields = fields
+		}
+	}
+
+	return nil
+}
+
+// parseFieldComments parses @field annotations from a map of per-field comment
+// blocks into *Field values. Single source of truth for @field parsing.
+func (p *Parser) parseFieldComments(fieldComments map[string]*CommentBlock, context string) ([]*Field, error) {
+	var fields []*Field
+	fieldNode := schema.AnnotationSchema.GetChild("@field")
+
+	for fieldName, fieldComment := range fieldComments {
+		if fieldComment == nil || !fieldComment.HasAnnotation("@field") {
+			continue
+		}
+		fieldLines := fieldComment.GetAnnotationLines()
+
+		var parsedField *ParsedAnnotation
+		var err error
+		if IsInlineFormat(fieldLines) {
+			parsedField, err = ParseInlineAnnotation(fieldLines[0], "@field", fieldNode)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse inline @field for %s.%s: %w", context, fieldName, err)
+			}
+		} else {
+			parsedField, err = ParseAnnotationBlock(fieldLines, "@field", fieldNode)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse @field for %s.%s: %w", context, fieldName, err)
+			}
+		}
+
+		field, err := p.convertParsedField(fieldName, parsedField)
+		if err != nil {
+			return nil, fmt.Errorf("invalid @field for %s.%s: %w", context, fieldName, err)
+		}
+		fields = append(fields, field)
+	}
+	return fields, nil
 }
 
 // parseAPI parses the @api annotation from package-level comments
@@ -216,44 +310,8 @@ func (p *Parser) parseSchemas(result *ParsedPackage) error {
 			s.AliasOf = typeInfo.AliasOf
 		}
 
-		// Parse fields
-		if fieldComments, ok := p.comments.FieldComments[structName]; ok {
-			for fieldName, fieldComment := range fieldComments {
-				if !fieldComment.HasAnnotation("@field") {
-					continue
-				}
-
-				fieldLines := fieldComment.GetAnnotationLines()
-				fieldNode := schema.AnnotationSchema.GetChild("@field")
-
-				// Check if inline format
-				if IsInlineFormat(fieldLines) {
-					parsedField, err := ParseInlineAnnotation(fieldLines[0], "@field", fieldNode)
-					if err != nil {
-						return fmt.Errorf("failed to parse inline @field for %s.%s: %w", structName, fieldName, err)
-					}
-
-					field, err := p.convertParsedField(fieldName, parsedField)
-					if err != nil {
-						return fmt.Errorf("invalid @field for %s.%s: %w", structName, fieldName, err)
-					}
-					s.Fields = append(s.Fields, field)
-				} else {
-					parsedField, err := ParseAnnotationBlock(fieldLines, "@field", fieldNode)
-					if err != nil {
-						return fmt.Errorf("failed to parse @field for %s.%s: %w", structName, fieldName, err)
-					}
-
-					field, err := p.convertParsedField(fieldName, parsedField)
-					if err != nil {
-						return fmt.Errorf("invalid @field for %s.%s: %w", structName, fieldName, err)
-					}
-					s.Fields = append(s.Fields, field)
-				}
-			}
-		}
-
-		// Store schema with metadata if present
+		// Struct-level metadata only. Field parsing is handled by parseStructFields
+		// so @schema and inline var structs share one parsing path.
 		if parsed.HasChild("@description") {
 			s.Description = parsed.GetChildValue("@description")
 		}
@@ -264,45 +322,42 @@ func (p *Parser) parseSchemas(result *ParsedPackage) error {
 		result.Schemas[structName] = s
 	}
 
-	// Second pass: detect type aliases that instantiate generic schemas
-	// These don't need @schema annotation, they're detected from type alias syntax
+	return nil
+}
+
+// resolveSchemaAliases detects type aliases that instantiate generic schemas
+// (e.g. `type UserResponse = DataResponse[User]`) and creates derived Schema
+// entries by copying fields from the base. Runs after parseStructFields so the
+// base schema's Fields are already populated.
+func (p *Parser) resolveSchemaAliases(result *ParsedPackage) error {
 	for typeName, typeInfo := range p.comments.TypeInfo {
-		// Skip if already processed as @schema
 		if _, exists := result.Schemas[typeName]; exists {
 			continue
 		}
-
-		// Only process type aliases that reference a generic type
 		if !typeInfo.IsTypeAlias || typeInfo.AliasOf == "" {
 			continue
 		}
 
-		// Check if the base type is a generic schema
 		baseType := extractBaseType(typeInfo.AliasOf)
-		if baseSchema, ok := result.Schemas[baseType]; ok && baseSchema.IsGeneric {
-			// Create a schema for this type alias
-			s := &Schema{
-				Name:        typeName,
-				GoTypeName:  typeName,
-				IsTypeAlias: true,
-				AliasOf:     typeInfo.AliasOf,
-				Fields:      make([]*Field, 0),
-			}
-
-			// Copy fields from the generic base schema
-			// The type parameter will be resolved later
-			for _, field := range baseSchema.Fields {
-				fieldCopy := *field
-				s.Fields = append(s.Fields, &fieldCopy)
-			}
-
-			// Inherit description from base if available
-			s.Description = baseSchema.Description
-
-			result.Schemas[typeName] = s
+		baseSchema, ok := result.Schemas[baseType]
+		if !ok || !baseSchema.IsGeneric {
+			continue
 		}
-	}
 
+		s := &Schema{
+			Name:        typeName,
+			GoTypeName:  typeName,
+			IsTypeAlias: true,
+			AliasOf:     typeInfo.AliasOf,
+			Fields:      make([]*Field, 0),
+			Description: baseSchema.Description,
+		}
+		for _, field := range baseSchema.Fields {
+			fieldCopy := *field
+			s.Fields = append(s.Fields, &fieldCopy)
+		}
+		result.Schemas[typeName] = s
+	}
 	return nil
 }
 
@@ -545,6 +600,22 @@ func (p *Parser) convertParsedField(fieldName string, parsed *ParsedAnnotation) 
 
 	if parsed.HasChild("@uniqueItems") {
 		field.UniqueItems = true
+	}
+
+	if req := parsed.GetChildValue("@required"); req != "" {
+		val, err := strconv.ParseBool(req)
+		if err != nil {
+			return nil, fmt.Errorf("@required value %q is not a valid boolean (use true or false)", req)
+		}
+		field.Required = &val
+	}
+
+	if null := parsed.GetChildValue("@nullable"); null != "" {
+		val, err := strconv.ParseBool(null)
+		if err != nil {
+			return nil, fmt.Errorf("@nullable value %q is not a valid boolean (use true or false)", null)
+		}
+		field.Nullable = &val
 	}
 
 	return field, nil

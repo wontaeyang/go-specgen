@@ -130,11 +130,13 @@ type Field struct {
 	// GoType is the Go type name
 	GoType string
 
-	// Required indicates if the field is required
-	Required bool
+	// Required is an explicit override for whether the field is required.
+	// nil means no override (resolver determines from Go type/tags).
+	Required *bool
 
-	// Nullable indicates if the field is nullable (pointer type)
-	Nullable bool
+	// Nullable is an explicit override for whether the field is nullable.
+	// nil means no override (resolver determines from Go pointer-ness).
+	Nullable *bool
 
 	// Description is the field description
 	Description string

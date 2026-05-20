@@ -2,10 +2,8 @@ package resolver
 
 import (
 	"fmt"
-	"go/ast"
 	"go/types"
 	"reflect"
-	"strconv"
 	"strings"
 
 	"github.com/wontaeyang/go-specgen/pkg/parser"
@@ -482,118 +480,6 @@ func (r *Resolver) flattenEmbeddedParamField(field *types.Var, annotations []*pa
 	return r.resolveParameterFields(embeddedStruct, annotations, paramType, visited)
 }
 
-// flattenInlineEmbeddedType resolves an embedded type for inline struct fields.
-// It unwraps the type, gets the underlying struct, and resolves each field
-// using the same tag-type and schema-name rules as the parent inline resolver.
-func (r *Resolver) flattenInlineEmbeddedType(t types.Type, tagType string, schemaNames map[string]bool, fieldComments map[string]*parser.CommentBlock, visited map[string]bool) []*ResolvedField {
-	if visited == nil {
-		visited = make(map[string]bool)
-	}
-
-	embeddedStruct, cleanup := unwrapEmbeddedStruct(t, visited)
-	defer cleanup()
-	if embeddedStruct == nil {
-		return nil
-	}
-
-	var fields []*ResolvedField
-	for i := 0; i < embeddedStruct.NumFields(); i++ {
-		field := embeddedStruct.Field(i)
-		tag := embeddedStruct.Tag(i)
-
-		// Recurse into nested embedded fields
-		if field.Anonymous() {
-			nested := r.flattenInlineEmbeddedType(field.Type(), tagType, schemaNames, fieldComments, visited)
-			fields = append(fields, nested...)
-			continue
-		}
-
-		// Skip unexported fields
-		if !field.Exported() {
-			continue
-		}
-
-		fieldName := field.Name()
-
-		// Extract name from appropriate struct tag
-		var resolvedName string
-		var shouldSkip bool
-		switch tagType {
-		case "path":
-			resolvedName = extractTagName(tag, "path")
-		case "query":
-			resolvedName = extractTagName(tag, "query")
-		case "header":
-			resolvedName = extractTagName(tag, "header")
-		case "cookie":
-			resolvedName = extractTagName(tag, "cookie")
-		default:
-			resolvedName = resolveFieldNameFromTag(tag, fieldName)
-			if resolvedName == "" {
-				shouldSkip = true
-			}
-		}
-
-		if shouldSkip {
-			continue
-		}
-
-		if resolvedName == "" || resolvedName == "-" {
-			resolvedName = fieldName
-		}
-
-		resolved := &ResolvedField{
-			GoName:   fieldName,
-			Name:     resolvedName,
-			GoType:   field.Type().String(),
-			Required: resolveParamRequired(tag, tagType),
-		}
-
-		// Resolve type info
-		if schemaNames != nil {
-			if inlineFields := r.resolveAnonymousStruct(field.Type(), schemaNames); inlineFields != nil {
-				resolved.InlineFields = inlineFields
-				resolved.OpenAPIType = "object"
-			} else if itemFields := r.resolveSliceOfAnonymousStruct(field.Type(), schemaNames); itemFields != nil {
-				resolved.IsArray = true
-				resolved.OpenAPIType = "array"
-				resolved.ItemsType = "object"
-				resolved.ItemsInlineFields = itemFields
-			} else if mapValueFields := r.resolveMapOfAnonymousStruct(field.Type(), schemaNames); mapValueFields != nil {
-				resolved.IsMap = true
-				resolved.OpenAPIType = "object"
-				resolved.MapValueInlineFields = mapValueFields
-			}
-		}
-
-		if resolved.OpenAPIType == "" {
-			typeInfo := r.resolveType(field.Type())
-			resolved.OpenAPIType = typeInfo.OpenAPIType
-			resolved.Format = typeInfo.Format
-			resolved.IsArray = typeInfo.IsArray
-			resolved.ItemsType = typeInfo.ItemsType
-			resolved.Nullable = typeInfo.IsNullable
-			resolved.IsAnyValue = typeInfo.IsAnyValue
-			if typeInfo.IsNullable {
-				resolved.Required = false
-			}
-		}
-
-		// Apply field annotations if present
-		if fieldComments != nil {
-			if comment := fieldComments[fieldName]; comment != nil {
-				if err := r.applyFieldAnnotations(resolved, comment); err != nil {
-					continue
-				}
-			}
-		}
-
-		fields = append(fields, resolved)
-	}
-
-	return fields
-}
-
 // resolveField resolves a single struct field
 // schemaNames contains the names of all known @schema types for detecting unresolved struct references
 // Returns nil, nil if the field should be skipped (e.g., json:"-" or unexported fields)
@@ -946,8 +832,11 @@ func applyAnnotationOverrides(resolved *ResolvedField, annotation *parser.Field)
 	if annotation.ExclusiveMaximum != nil {
 		resolved.ExclusiveMaximum = annotation.ExclusiveMaximum
 	}
-	if annotation.Nullable {
-		resolved.Nullable = true
+	if annotation.Required != nil {
+		resolved.Required = *annotation.Required
+	}
+	if annotation.Nullable != nil {
+		resolved.Nullable = *annotation.Nullable
 	}
 	if annotation.Deprecated {
 		resolved.Deprecated = true
@@ -1176,24 +1065,6 @@ func (r *Resolver) resolveEndpoint(endpoint *parser.Endpoint, parameters map[str
 	return resolved, nil
 }
 
-// extractJSONName extracts the JSON field name from a struct tag
-func extractJSONName(tag string) string {
-	// Parse struct tag
-	st := reflect.StructTag(tag)
-	jsonTag := st.Get("json")
-	if jsonTag == "" {
-		return ""
-	}
-
-	// Split by comma to remove options like omitempty
-	parts := strings.Split(jsonTag, ",")
-	if len(parts) > 0 {
-		return parts[0]
-	}
-
-	return ""
-}
-
 // extractTagName extracts a field name from a specific struct tag key
 func extractTagName(tag string, key string) string {
 	// Parse struct tag
@@ -1303,43 +1174,34 @@ func (r *Resolver) resolveBindTarget(bind *parser.BindTarget, schemas map[string
 	return resolved
 }
 
-// resolveInlineDeclarations resolves inline struct declarations from function body
+// resolveInlineDeclarations resolves inline struct declarations from function body.
+// @query/@path/@header/@cookie are repeatable per schema — every inline struct in
+// each category is resolved and its fields concatenated into one *ResolvedInlineParams
+// (the downstream generator/validator consume a flat Fields list).
 func (r *Resolver) resolveInlineDeclarations(endpoint *ResolvedEndpoint, inlines *parser.FuncInlineInfo, parameters map[string]*ResolvedParameter, schemas map[string]*ResolvedSchema, defaultContentType string) error {
-	// Resolve inline path parameters
-	if inlines.Path != nil {
-		params, err := r.resolveInlineParams(inlines.Path, "path")
-		if err != nil {
-			return fmt.Errorf("failed to resolve inline path params: %w", err)
-		}
-		endpoint.InlinePathParams = params
+	mergedPath, err := r.mergeInlineParams(inlines.Path, "path")
+	if err != nil {
+		return err
 	}
+	endpoint.InlinePathParams = mergedPath
 
-	// Resolve inline query parameters
-	if inlines.Query != nil {
-		params, err := r.resolveInlineParams(inlines.Query, "query")
-		if err != nil {
-			return fmt.Errorf("failed to resolve inline query params: %w", err)
-		}
-		endpoint.InlineQueryParams = params
+	mergedQuery, err := r.mergeInlineParams(inlines.Query, "query")
+	if err != nil {
+		return err
 	}
+	endpoint.InlineQueryParams = mergedQuery
 
-	// Resolve inline header parameters
-	if inlines.Header != nil {
-		params, err := r.resolveInlineParams(inlines.Header, "header")
-		if err != nil {
-			return fmt.Errorf("failed to resolve inline header params: %w", err)
-		}
-		endpoint.InlineHeaderParams = params
+	mergedHeader, err := r.mergeInlineParams(inlines.Header, "header")
+	if err != nil {
+		return err
 	}
+	endpoint.InlineHeaderParams = mergedHeader
 
-	// Resolve inline cookie parameters
-	if inlines.Cookie != nil {
-		params, err := r.resolveInlineParams(inlines.Cookie, "cookie")
-		if err != nil {
-			return fmt.Errorf("failed to resolve inline cookie params: %w", err)
-		}
-		endpoint.InlineCookieParams = params
+	mergedCookie, err := r.mergeInlineParams(inlines.Cookie, "cookie")
+	if err != nil {
+		return err
 	}
+	endpoint.InlineCookieParams = mergedCookie
 
 	// Resolve inline request body
 	if inlines.Request != nil {
@@ -1376,14 +1238,69 @@ func (r *Resolver) resolveInlineDeclarations(endpoint *ResolvedEndpoint, inlines
 	return nil
 }
 
-// resolveInlineParams resolves an inline parameter struct
-func (r *Resolver) resolveInlineParams(info *parser.InlineStructInfo, paramType string) (*ResolvedInlineParams, error) {
-	if info == nil || info.StructType == nil {
+// inlineStructType looks up the *types.Struct for an inline var/type declaration
+// via TypesInfo.Defs. Works for both `var x struct{...}` (anonymous struct type)
+// and `type X struct{...}` (named type whose underlying is a struct) — calling
+// .Underlying() on either case returns the *types.Struct directly.
+func (r *Resolver) inlineStructType(info *parser.InlineStructInfo) (*types.Struct, error) {
+	if info == nil || info.Ident == nil {
+		return nil, fmt.Errorf("inline struct missing identifier")
+	}
+	if r.pkg == nil || r.pkg.TypesInfo == nil {
+		return nil, fmt.Errorf("type info unavailable for inline struct %q", info.VarName)
+	}
+	obj := r.pkg.TypesInfo.Defs[info.Ident]
+	if obj == nil {
+		return nil, fmt.Errorf("could not resolve type for inline struct %q", info.VarName)
+	}
+	st, ok := obj.Type().Underlying().(*types.Struct)
+	if !ok {
+		return nil, fmt.Errorf("inline declaration %q is not a struct", info.VarName)
+	}
+	return st, nil
+}
+
+// mergeInlineParams resolves every inline struct in a repeatable category (e.g.
+// all inline @query structs declared in one handler) and concatenates their fields
+// into a single *ResolvedInlineParams. Returns nil when no inline structs exist
+// for the category — preserving the "nil means none" contract downstream code relies on.
+// OpenAPI emits one flat parameters array per operation regardless of how many
+// inline structs the handler declared, so the merge happens here.
+func (r *Resolver) mergeInlineParams(infos []*parser.InlineStructInfo, paramType string) (*ResolvedInlineParams, error) {
+	if len(infos) == 0 {
 		return nil, nil
 	}
+	merged := &ResolvedInlineParams{}
+	for _, info := range infos {
+		params, err := r.resolveInlineParams(info, paramType)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve inline %s params %q: %w", paramType, info.VarName, err)
+		}
+		if params == nil {
+			continue
+		}
+		merged.Fields = append(merged.Fields, params.Fields...)
+	}
+	if len(merged.Fields) == 0 {
+		return nil, nil
+	}
+	return merged, nil
+}
 
-	// Parameters don't support anonymous struct fields, so pass nil for schemaNames
-	fields, err := r.resolveInlineStructFields(info.StructType, info.FieldComments, paramType, nil)
+// resolveInlineParams resolves an inline parameter struct via the same
+// *types.Struct + parsed *Field path as named parameter structs — no AST walk,
+// no resolver-side @field parsing.
+func (r *Resolver) resolveInlineParams(info *parser.InlineStructInfo, paramType string) (*ResolvedInlineParams, error) {
+	if info == nil {
+		return nil, nil
+	}
+	structType, err := r.inlineStructType(info)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parameters don't support anonymous struct fields, so pass nil for schemaNames.
+	fields, err := r.resolveParameterFields(structType, info.Fields, paramType, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1393,10 +1310,15 @@ func (r *Resolver) resolveInlineParams(info *parser.InlineStructInfo, paramType 
 	}, nil
 }
 
-// resolveInlineBody resolves an inline request/response body struct using parsed annotation
+// resolveInlineBody resolves an inline request/response body struct using parsed annotation.
+// Uses the same *types.Struct + parsed *Field path as @schema structs.
 func (r *Resolver) resolveInlineBody(info *parser.InlineStructInfo, parsed *parser.ParsedAnnotation, parameters map[string]*ResolvedParameter, schemas map[string]*ResolvedSchema, defaultContentType string) (*ResolvedInlineBody, error) {
-	if info == nil || info.StructType == nil {
+	if info == nil {
 		return nil, nil
+	}
+	structType, err := r.inlineStructType(info)
+	if err != nil {
+		return nil, err
 	}
 
 	// Build schemaNames for anonymous struct resolution
@@ -1405,8 +1327,7 @@ func (r *Resolver) resolveInlineBody(info *parser.InlineStructInfo, parsed *pars
 		schemaNames[name] = true
 	}
 
-	// Resolve AST struct fields (inline resolver's job)
-	fields, err := r.resolveInlineStructFields(info.StructType, info.FieldComments, "json", schemaNames)
+	fields, err := r.resolveSchemaFields(structType, info.Fields, schemaNames, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1450,264 +1371,4 @@ func (r *Resolver) resolveInlineBody(info *parser.InlineStructInfo, parsed *pars
 	}
 
 	return resolved, nil
-}
-
-// resolveInlineStructFields resolves fields from an AST struct type
-// schemaNames is optional - if provided, anonymous struct resolution is enabled
-func (r *Resolver) resolveInlineStructFields(structType *ast.StructType, fieldComments map[string]*parser.CommentBlock, tagType string, schemaNames map[string]bool) ([]*ResolvedField, error) {
-	if structType == nil || structType.Fields == nil {
-		return nil, nil
-	}
-
-	fields := make([]*ResolvedField, 0, len(structType.Fields.List))
-
-	for _, astField := range structType.Fields.List {
-		// Handle embedded fields by flattening
-		if len(astField.Names) == 0 {
-			if r.pkg != nil && r.pkg.TypesInfo != nil {
-				if typeAndValue, ok := r.pkg.TypesInfo.Types[astField.Type]; ok {
-					embeddedFields := r.flattenInlineEmbeddedType(typeAndValue.Type, tagType, schemaNames, fieldComments, nil)
-					fields = append(fields, embeddedFields...)
-				}
-			}
-			continue
-		}
-
-		fieldName := astField.Names[0].Name
-
-		// Get struct tag
-		var tag string
-		if astField.Tag != nil {
-			// Remove quotes from tag literal
-			tag = astField.Tag.Value
-			if len(tag) >= 2 && tag[0] == '`' && tag[len(tag)-1] == '`' {
-				tag = tag[1 : len(tag)-1]
-			}
-		}
-
-		// Resolve field type using TypesInfo
-		var fieldType types.Type
-		if r.pkg != nil && r.pkg.TypesInfo != nil {
-			if typeAndValue, ok := r.pkg.TypesInfo.Types[astField.Type]; ok {
-				fieldType = typeAndValue.Type
-			}
-		}
-
-		// Extract name from appropriate struct tag
-		var resolvedName string
-		var shouldSkip bool
-		switch tagType {
-		case "path":
-			resolvedName = extractTagName(tag, "path")
-		case "query":
-			resolvedName = extractTagName(tag, "query")
-		case "header":
-			resolvedName = extractTagName(tag, "header")
-		case "cookie":
-			resolvedName = extractTagName(tag, "cookie")
-		default:
-			// For schemas, use tag fallback chain (json -> xml -> Go field name)
-			resolvedName = resolveFieldNameFromTag(tag, fieldName)
-			if resolvedName == "" {
-				// Field should be skipped (e.g., json:"-")
-				shouldSkip = true
-			}
-		}
-
-		// Skip fields that should be omitted
-		if shouldSkip {
-			continue
-		}
-
-		// For parameter types, handle "-" and empty as fallback to Go field name
-		if resolvedName == "" || resolvedName == "-" {
-			resolvedName = fieldName
-		}
-
-		resolved := &ResolvedField{
-			GoName:   fieldName,
-			Name:     resolvedName,
-			Required: resolveParamRequired(tag, tagType),
-		}
-
-		// Resolve type info
-		if fieldType != nil {
-			resolved.GoType = fieldType.String()
-
-			// Check for anonymous structs (only when schemaNames is provided)
-			if schemaNames != nil {
-				if inlineFields := r.resolveAnonymousStruct(fieldType, schemaNames); inlineFields != nil {
-					resolved.InlineFields = inlineFields
-					resolved.OpenAPIType = "object"
-				} else if itemFields := r.resolveSliceOfAnonymousStruct(fieldType, schemaNames); itemFields != nil {
-					// Slice of anonymous struct
-					resolved.IsArray = true
-					resolved.OpenAPIType = "array"
-					resolved.ItemsType = "object"
-					resolved.ItemsInlineFields = itemFields
-				} else if mapValueFields := r.resolveMapOfAnonymousStruct(fieldType, schemaNames); mapValueFields != nil {
-					// Map with anonymous struct values
-					resolved.IsMap = true
-					resolved.OpenAPIType = "object"
-					resolved.MapValueInlineFields = mapValueFields
-				}
-			}
-
-			// If not an anonymous struct, resolve type normally
-			if resolved.OpenAPIType == "" {
-				typeInfo := r.resolveType(fieldType)
-				resolved.OpenAPIType = typeInfo.OpenAPIType
-				resolved.Format = typeInfo.Format
-				resolved.IsArray = typeInfo.IsArray
-				resolved.ItemsType = typeInfo.ItemsType
-				resolved.Nullable = typeInfo.IsNullable
-				resolved.IsAnyValue = typeInfo.IsAnyValue
-				if typeInfo.IsNullable {
-					resolved.Required = false
-				}
-			}
-		} else {
-			// Fallback to string if type resolution fails
-			resolved.GoType = "string"
-			resolved.OpenAPIType = "string"
-		}
-
-		// Apply field annotations if present
-		if comment := fieldComments[fieldName]; comment != nil {
-			if err := r.applyFieldAnnotations(resolved, comment); err != nil {
-				return nil, fmt.Errorf("invalid annotation for field %s: %w", fieldName, err)
-			}
-		}
-
-		fields = append(fields, resolved)
-	}
-
-	return fields, nil
-}
-
-// applyFieldAnnotations applies @field annotations to a resolved field
-func (r *Resolver) applyFieldAnnotations(field *ResolvedField, comment *parser.CommentBlock) error {
-	if comment == nil {
-		return nil
-	}
-
-	// Parse inline @field annotation
-	for _, line := range comment.Lines {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "@field") {
-			continue
-		}
-
-		// Extract content between braces
-		start := strings.Index(line, "{")
-		end := strings.LastIndex(line, "}")
-		if start == -1 || end == -1 || end <= start {
-			continue
-		}
-		content := line[start+1 : end]
-
-		// Parse individual annotations
-		parts := strings.Split(content, "@")
-		for _, part := range parts {
-			part = strings.TrimSpace(part)
-			if part == "" {
-				continue
-			}
-
-			// Split into annotation name and value
-			spaceIdx := strings.Index(part, " ")
-			var annotName, annotValue string
-			if spaceIdx > 0 {
-				annotName = "@" + part[:spaceIdx]
-				annotValue = strings.TrimSpace(part[spaceIdx+1:])
-			} else {
-				annotName = "@" + part
-			}
-
-			switch annotName {
-			case "@description":
-				field.Description = annotValue
-			case "@format":
-				field.Format = annotValue
-			case "@example":
-				field.Example = annotValue
-			case "@default":
-				field.Default = annotValue
-			case "@pattern":
-				field.Pattern = annotValue
-			case "@enum":
-				field.Enum = strings.Split(annotValue, ",")
-				for i := range field.Enum {
-					field.Enum[i] = strings.TrimSpace(field.Enum[i])
-				}
-			case "@deprecated":
-				field.Deprecated = true
-			case "@minimum":
-				if val, err := parseFloat(annotValue); err == nil {
-					field.Minimum = &val
-				} else {
-					return fmt.Errorf("@minimum value %q is not a valid number", annotValue)
-				}
-			case "@maximum":
-				if val, err := parseFloat(annotValue); err == nil {
-					field.Maximum = &val
-				} else {
-					return fmt.Errorf("@maximum value %q is not a valid number", annotValue)
-				}
-			case "@exclusiveMinimum":
-				if val, err := parseFloat(annotValue); err == nil {
-					field.ExclusiveMinimum = &val
-				} else {
-					return fmt.Errorf("@exclusiveMinimum value %q is not a valid number", annotValue)
-				}
-			case "@exclusiveMaximum":
-				if val, err := parseFloat(annotValue); err == nil {
-					field.ExclusiveMaximum = &val
-				} else {
-					return fmt.Errorf("@exclusiveMaximum value %q is not a valid number", annotValue)
-				}
-			case "@minLength":
-				if val, err := parseInt(annotValue); err == nil {
-					field.MinLength = &val
-				} else {
-					return fmt.Errorf("@minLength value %q is not a valid integer", annotValue)
-				}
-			case "@maxLength":
-				if val, err := parseInt(annotValue); err == nil {
-					field.MaxLength = &val
-				} else {
-					return fmt.Errorf("@maxLength value %q is not a valid integer", annotValue)
-				}
-			case "@minItems":
-				if val, err := parseInt(annotValue); err == nil {
-					field.MinItems = &val
-				} else {
-					return fmt.Errorf("@minItems value %q is not a valid integer", annotValue)
-				}
-			case "@maxItems":
-				if val, err := parseInt(annotValue); err == nil {
-					field.MaxItems = &val
-				} else {
-					return fmt.Errorf("@maxItems value %q is not a valid integer", annotValue)
-				}
-			case "@uniqueItems":
-				field.UniqueItems = true
-			case "@readOnly":
-				field.ReadOnly = true
-			case "@writeOnly":
-				field.WriteOnly = true
-			}
-		}
-	}
-	return nil
-}
-
-// parseFloat parses a string to float64
-func parseFloat(s string) (float64, error) {
-	return strconv.ParseFloat(s, 64)
-}
-
-// parseInt parses a string to int
-func parseInt(s string) (int, error) {
-	return strconv.Atoi(s)
 }

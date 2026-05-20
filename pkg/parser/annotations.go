@@ -39,17 +39,8 @@ type ParsedAnnotation struct {
 // Path params like {id} have no space before the brace.
 // Returns the position of '{' or -1 if no block delimiter found.
 func findBlockOpener(line string) int {
-	for i := 0; i < len(line)-1; i++ {
-		// Skip escape sequences
-		if line[i] == '\\' && i+1 < len(line) {
-			next := line[i+1]
-			if next == '{' || next == '}' || next == '@' || next == '\\' {
-				i++ // Skip the escaped character
-				continue
-			}
-		}
-		// Look for space/tab followed by {
-		if (line[i] == ' ' || line[i] == '\t') && line[i+1] == '{' {
+	for i, b := range unescapedBytes(line) {
+		if (b == ' ' || b == '\t') && i+1 < len(line) && line[i+1] == '{' {
 			return i + 1
 		}
 	}
@@ -60,21 +51,13 @@ func findBlockOpener(line string) int {
 // Returns the final depth.
 func countBracesFromPosition(line string, startPos int) int {
 	depth := 0
-	i := startPos
-	for i < len(line) {
-		if line[i] == '\\' && i+1 < len(line) {
-			next := line[i+1]
-			if next == '{' || next == '}' || next == '@' || next == '\\' {
-				i += 2
-				continue
-			}
-		}
-		if line[i] == '{' {
+	for _, b := range unescapedBytes(line[startPos:]) {
+		switch b {
+		case '{':
 			depth++
-		} else if line[i] == '}' {
+		case '}':
 			depth--
 		}
-		i++
 	}
 	return depth
 }
@@ -120,7 +103,7 @@ func ParseBracedBlock(lines []string) ([]string, error) {
 			line = line[openBracePos+1:]
 		} else {
 			// For subsequent lines, count all braces
-			lineDepth, _ := CountUnescapedBraces(line)
+			lineDepth := CountUnescapedBraces(line)
 			braceDepth += lineDepth
 		}
 
@@ -159,26 +142,6 @@ func ParseBracedBlock(lines []string) ([]string, error) {
 	return content, nil
 }
 
-// findUnescapedBrace finds the first unescaped occurrence of the given brace character.
-// Returns -1 if not found.
-func findUnescapedBrace(content string, brace byte) int {
-	i := 0
-	for i < len(content) {
-		if content[i] == '\\' && i+1 < len(content) {
-			next := content[i+1]
-			if next == '{' || next == '}' || next == '@' || next == '\\' {
-				i += 2
-				continue
-			}
-		}
-		if content[i] == brace {
-			return i
-		}
-		i++
-	}
-	return -1
-}
-
 // ExtractMetadata extracts metadata from the opening line of an annotation
 // Example: "@endpoint GET /users/{id} {" -> "GET /users/{id}"
 // Example: "@server https://api.com {" -> "https://api.com"
@@ -194,7 +157,20 @@ func ExtractMetadata(line, annotationName string) string {
 		line = line[:blockPos-1]
 	}
 
-	return strings.TrimSpace(line)
+	return UnescapeValue(strings.TrimSpace(line))
+}
+
+// resolveValue applies leaf-value rules for an annotation value.
+// RawValue nodes pass through verbatim; all others are validated for
+// unescaped specials ({, }, @) and then unescaped.
+func resolveValue(value string, node *schema.SchemaNode, annotationName string) (string, error) {
+	if node.RawValue {
+		return value, nil
+	}
+	if ch, found := FindUnescapedSpecial(value); found {
+		return "", fmt.Errorf("unescaped %q in %s value: use \\%c for literals", ch, annotationName, ch)
+	}
+	return UnescapeValue(value), nil
 }
 
 // ParseAnnotationBlock parses an annotation block using the schema
@@ -245,8 +221,11 @@ func ParseAnnotationBlock(lines []string, annotationName string, node *schema.Sc
 				}
 			}
 
-			// Unescape the final value
-			result.Value = UnescapeValue(value)
+			resolved, err := resolveValue(value, node, annotationName)
+			if err != nil {
+				return nil, err
+			}
+			result.Value = resolved
 		}
 		return result, nil
 	}
@@ -258,7 +237,11 @@ func ParseAnnotationBlock(lines []string, annotationName string, node *schema.Sc
 			firstLine := lines[0]
 			value := strings.TrimPrefix(firstLine, annotationName)
 			value = strings.TrimSpace(value)
-			result.Value = value
+			resolved, err := resolveValue(value, node, annotationName)
+			if err != nil {
+				return nil, err
+			}
+			result.Value = resolved
 		}
 		return result, nil
 	}
@@ -279,15 +262,15 @@ func ParseAnnotationBlock(lines []string, annotationName string, node *schema.Sc
 			return result, nil
 		}
 
-		// Check if content is inline format (single line with multiple @ annotations)
-		// This happens when the block opener and closer are on the same line
-		if len(content) == 1 && isInlineContent(content[0]) {
-			// Use inline parser for single-line content with multiple annotations
+		// Route by source syntax: a single input line means the user wrote inline
+		// format (opener and closer on the same line). Multiple input lines is a
+		// multi-line block, regardless of whether the inner content collapses to
+		// a single line.
+		if len(lines) == 1 {
 			if err := parseInlineChildren(content[0], node, result); err != nil {
 				return nil, fmt.Errorf("failed to parse %s children: %w", annotationName, err)
 			}
 		} else {
-			// Parse children line by line
 			if err := parseChildren(content, node, result); err != nil {
 				return nil, fmt.Errorf("failed to parse %s children: %w", annotationName, err)
 			}
@@ -347,7 +330,7 @@ func parseChildren(lines []string, parentNode *schema.SchemaNode, result *Parsed
 				nextLine := lines[i]
 				annotationLines = append(annotationLines, nextLine)
 
-				lineDepth, _ := CountUnescapedBraces(nextLine)
+				lineDepth := CountUnescapedBraces(nextLine)
 				braceDepth += lineDepth
 				i++
 			}
@@ -415,32 +398,6 @@ func extractAnnotationName(line string) string {
 	}
 
 	return line
-}
-
-// isInlineContent checks if content represents inline format (multiple @ annotations on one line)
-// Returns true if the content has multiple unescaped @ symbols, indicating inline format.
-func isInlineContent(content string) bool {
-	// Count unescaped @ symbols
-	count := 0
-	i := 0
-	for i < len(content) {
-		// Skip escape sequences
-		if content[i] == '\\' && i+1 < len(content) {
-			next := content[i+1]
-			if next == '@' || next == '{' || next == '}' || next == '\\' {
-				i += 2
-				continue
-			}
-		}
-		if content[i] == '@' {
-			count++
-			if count > 1 {
-				return true
-			}
-		}
-		i++
-	}
-	return false
 }
 
 // GetChildValue returns the value of a child annotation

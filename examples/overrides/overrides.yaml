@@ -1,0 +1,140 @@
+openapi: 3.1.0
+info:
+    title: Field Overrides Example
+    description: |-
+        Demonstrates @required and @nullable as explicit overrides on @field.
+        These let you decouple OpenAPI required/nullable from Go pointer-ness and json tags.
+    version: 1.0.0
+paths:
+    /login:
+        post:
+            summary: Log in
+            operationId: login
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/LoginRequest'
+                required: true
+            responses:
+                "200":
+                    description: Login succeeded
+    /profiles/{id}:
+        get:
+            summary: Get a profile
+            operationId: getProfile
+            parameters:
+                - name: id
+                  in: path
+                  description: Profile ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "200":
+                    description: ""
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/NullableProfile'
+    /promos:
+        post:
+            summary: Create a promo code
+            operationId: createPromo
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/CreatePromo'
+                required: true
+            responses:
+                "201":
+                    description: Promo created
+    /users/{id}:
+        patch:
+            summary: Patch user fields
+            operationId: patchUser
+            parameters:
+                - name: id
+                  in: path
+                  description: User ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/UpdateUserPatch'
+                required: true
+            responses:
+                "200":
+                    description: User updated
+components:
+    schemas:
+        CreatePromo:
+            type: object
+            properties:
+                code:
+                    type: string
+                    description: Promo code
+                percent:
+                    type:
+                        - integer
+                        - "null"
+                    maximum: 100
+                    minimum: 0
+                    description: Discount percent; 0 is a valid value
+            required:
+                - code
+                - percent
+        LoginRequest:
+            type: object
+            properties:
+                email:
+                    type: string
+                    format: email
+                    description: User email
+                password:
+                    type: string
+                    description: User password
+                tfa_code:
+                    type: string
+                    description: Two-factor auth code, optional
+            required:
+                - email
+                - password
+        NullableProfile:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: User ID
+                date_of_birth:
+                    type:
+                        - string
+                        - "null"
+                    format: date
+                    description: Date of birth; null if not provided
+                bio:
+                    type:
+                        - string
+                        - "null"
+                    description: Biography text; null if cleared
+            required:
+                - id
+                - date_of_birth
+                - bio
+        UpdateUserPatch:
+            type: object
+            properties:
+                email:
+                    type: string
+                    format: email
+                    description: Replace email; omit to leave unchanged
+                display_name:
+                    type: string
+                    description: Replace display name; omit to leave unchanged

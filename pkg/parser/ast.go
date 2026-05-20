@@ -46,28 +46,37 @@ type PackageComments struct {
 	FuncInlines map[string]*FuncInlineInfo // Key: function name
 }
 
-// FuncInlineInfo contains inline declarations extracted from a function body
+// FuncInlineInfo contains inline declarations extracted from a function body.
+// Cardinality matches the annotation schema:
+//   - @query/@path/@header/@cookie are Repeatable: true → slices, in declaration order.
+//   - @request is single-slot (not repeatable); a duplicate is an error.
+//   - @response is keyed by status code; a duplicate status code is an error.
 type FuncInlineInfo struct {
-	// Query is the inline query parameter struct
-	Query *InlineStructInfo
+	// Query are the inline query parameter structs, in declaration order
+	Query []*InlineStructInfo
 
-	// Path is the inline path parameter struct
-	Path *InlineStructInfo
+	// Path are the inline path parameter structs, in declaration order
+	Path []*InlineStructInfo
 
-	// Header is the inline header parameter struct
-	Header *InlineStructInfo
+	// Header are the inline header parameter structs, in declaration order
+	Header []*InlineStructInfo
 
-	// Cookie is the inline cookie parameter struct
-	Cookie *InlineStructInfo
+	// Cookie are the inline cookie parameter structs, in declaration order
+	Cookie []*InlineStructInfo
 
-	// Request is the inline request body struct
+	// Request is the inline request body struct (at most one per handler)
 	Request *InlineStructInfo
 
-	// Responses are the inline response body structs keyed by status code
+	// Responses are the inline response body structs keyed by status code.
+	// A duplicate status code within one handler is an error.
 	Responses map[string]*InlineStructInfo
 }
 
-// InlineStructInfo contains AST information for an inline struct declaration
+// InlineStructInfo contains the metadata captured for an inline struct declaration.
+// The resolver looks up the *types.Struct via TypesInfo.Defs[Ident] — no AST node
+// is stored here. FieldComments is parser-internal transport between extraction
+// (extractFuncInlines) and field parsing (parseStructFields), mirroring how
+// PackageComments.FieldComments carries raw comments for named @schema structs.
 type InlineStructInfo struct {
 	// VarName is the variable or type name
 	VarName string
@@ -78,17 +87,22 @@ type InlineStructInfo struct {
 	// Comment is the parsed comment block containing annotations
 	Comment *CommentBlock
 
-	// StructType is the AST struct type for field extraction
-	StructType *ast.StructType
-
 	// Ident is the AST identifier for type resolution via TypesInfo.Defs
 	Ident *ast.Ident
 
 	// StatusCode is the response status code (for response only)
 	StatusCode string
 
-	// FieldComments are the comments for struct fields
+	// FieldComments are the raw per-field comments collected at extraction time.
+	// Consumed by parseStructFields to populate Fields. Parser-internal — the
+	// resolver does not read this.
 	FieldComments map[string]*CommentBlock
+
+	// Fields are the parsed @field annotations. Populated by the parser so the
+	// resolver does not re-parse annotations. Shape mirrors Schema.Fields so both
+	// @schema structs and inline var structs feed the resolver through the same
+	// signature.
+	Fields []*Field
 }
 
 // TypeDeclInfo contains metadata about a type declaration
@@ -134,6 +148,11 @@ func ExtractComments(packagePath string) (*PackageComments, error) {
 		FuncInlines:      make(map[string]*FuncInlineInfo),
 	}
 
+	// extractFuncInlines can surface duplicate-inline errors. ast.Inspect's
+	// visitor signature is `func(ast.Node) bool`, so we capture the error via
+	// a closure variable and halt walking as soon as one is seen.
+	var extractErr error
+
 	// Traverse all files in the package
 	for _, file := range pkg.Syntax {
 		fset := pkg.Fset
@@ -152,6 +171,9 @@ func ExtractComments(packagePath string) (*PackageComments, error) {
 
 		// Traverse AST nodes
 		ast.Inspect(file, func(n ast.Node) bool {
+			if extractErr != nil {
+				return false
+			}
 			switch node := n.(type) {
 			case *ast.GenDecl:
 				// Handle type declarations
@@ -223,7 +245,11 @@ func ExtractComments(packagePath string) (*PackageComments, error) {
 				}
 				// Extract inline declarations from function body
 				if node.Body != nil {
-					inlines := extractFuncInlines(fset, pkg.TypesInfo, node.Body)
+					inlines, err := extractFuncInlines(fset, pkg.TypesInfo, node.Body)
+					if err != nil {
+						extractErr = fmt.Errorf("in function %s: %w", funcName, err)
+						return false
+					}
 					if inlines != nil {
 						comments.FuncInlines[funcName] = inlines
 					}
@@ -232,6 +258,10 @@ func ExtractComments(packagePath string) (*PackageComments, error) {
 
 			return true
 		})
+
+		if extractErr != nil {
+			return nil, extractErr
+		}
 	}
 
 	return comments, nil
@@ -421,11 +451,14 @@ func collectGenDecls(body *ast.BlockStmt) []*ast.GenDecl {
 	return decls
 }
 
-// extractFuncInlines extracts inline struct declarations from a function body
-// It looks for var/type declarations with @query, @path, @header, @cookie, @request, @response annotations
-func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.BlockStmt) *FuncInlineInfo {
+// extractFuncInlines extracts inline struct declarations from a function body.
+// Looks for var/type declarations with @query, @path, @header, @cookie, @request,
+// @response annotations. Only @response is repeatable (keyed by status code);
+// a duplicate in any other category — or a duplicate status code for @response —
+// is an error. Users needing composition should reference named @schema types.
+func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.BlockStmt) (*FuncInlineInfo, error) {
 	if body == nil {
-		return nil
+		return nil, nil
 	}
 
 	result := &FuncInlineInfo{
@@ -492,27 +525,34 @@ func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.Bl
 			VarName:       ident.Name,
 			Annotation:    annotation,
 			Comment:       commentBlock,
-			StructType:    structType,
 			Ident:         ident,
 			StatusCode:    statusCode,
 			FieldComments: fieldComments,
 		}
 
-		// Store based on annotation type
+		// Store based on annotation type. @query/@path/@header/@cookie are
+		// repeatable per schema — append. @request is single-slot. @response is
+		// keyed by status code; a duplicate status code is an error.
 		switch annotation {
 		case "query":
-			result.Query = inline
+			result.Query = append(result.Query, inline)
 		case "path":
-			result.Path = inline
+			result.Path = append(result.Path, inline)
 		case "header":
-			result.Header = inline
+			result.Header = append(result.Header, inline)
 		case "cookie":
-			result.Cookie = inline
+			result.Cookie = append(result.Cookie, inline)
 		case "request":
+			if result.Request != nil {
+				return nil, fmt.Errorf("duplicate inline @request on %q (previous: %q); only one inline @request per handler is allowed", ident.Name, result.Request.VarName)
+			}
 			result.Request = inline
 		case "response":
 			if statusCode == "" {
 				statusCode = "200" // default status code
+			}
+			if existing, ok := result.Responses[statusCode]; ok {
+				return nil, fmt.Errorf("duplicate inline @response %s on %q (previous: %q); each status code can have only one inline response per handler", statusCode, ident.Name, existing.VarName)
 			}
 			result.Responses[statusCode] = inline
 		}
@@ -520,9 +560,9 @@ func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.Bl
 	}
 
 	if !hasInlines {
-		return nil
+		return nil, nil
 	}
-	return result
+	return result, nil
 }
 
 // detectInlineAnnotation detects the annotation type from comment lines

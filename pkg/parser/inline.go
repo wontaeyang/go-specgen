@@ -37,10 +37,14 @@ func IsInlineFormat(lines []string) bool {
 // ParseInlineAnnotation parses an inline annotation
 // Example: @field { @description User email @format email }
 // Note: All block annotations support inline format, but nested blocks are not allowed.
+// The nested-brace check is skipped when the annotation has no block-producing children
+// (e.g. @field's children are all value/flag annotations), so values like a regex
+// quantifier `{64}` are not misread as a nested block.
 func ParseInlineAnnotation(line, annotationName string, node *schema.SchemaNode) (*ParsedAnnotation, error) {
-	// Validate no nested braces - inline blocks cannot contain other blocks
-	if err := validateNoNestedBraces(line); err != nil {
-		return nil, err
+	if node.HasBlockChildren() {
+		if err := validateNoNestedBraces(line); err != nil {
+			return nil, err
+		}
 	}
 
 	result := &ParsedAnnotation{
@@ -85,9 +89,7 @@ func parseInlineChildren(content string, parentNode *schema.SchemaNode, result *
 		return nil
 	}
 
-	// Protect escaped @ before splitting by @
-	protected := ProtectEscapedAt(content)
-	parts := strings.Split(protected, "@")
+	parts := SplitOnUnescapedAt(content)
 
 	for i, part := range parts {
 		// Skip empty parts (first part before first @)
@@ -95,8 +97,6 @@ func parseInlineChildren(content string, parentNode *schema.SchemaNode, result *
 			continue
 		}
 
-		// Restore escaped @ in this part
-		part = RestoreEscapedAt(part)
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
@@ -129,11 +129,13 @@ func parseInlineChildren(content string, parentNode *schema.SchemaNode, result *
 			}
 		}
 
-		// Create parsed annotation with unescaped value
-		unescapedValue := UnescapeValue(value)
+		resolvedValue, err := resolveValue(value, childNode, annotationName)
+		if err != nil {
+			return err
+		}
 		parsed := &ParsedAnnotation{
 			Name:             annotationName,
-			Value:            unescapedValue,
+			Value:            resolvedValue,
 			IsFlag:           childNode.Type == schema.FlagAnnotation,
 			Children:         make(map[string]*ParsedAnnotation),
 			RepeatedChildren: make(map[string][]*ParsedAnnotation),
@@ -141,7 +143,7 @@ func parseInlineChildren(content string, parentNode *schema.SchemaNode, result *
 
 		// For annotations with metadata (like @body), also set Metadata
 		if childNode.HasMetadata {
-			parsed.Metadata = unescapedValue
+			parsed.Metadata = resolvedValue
 		}
 
 		// Store in result
@@ -191,40 +193,4 @@ func validateNoNestedBraces(content string) error {
 	}
 
 	return nil
-}
-
-// ConvertToMultiLine converts inline format to multi-line for uniform processing
-// This is a helper for debugging/testing
-func ConvertToMultiLine(inlineLine, annotationName string) []string {
-	result := []string{annotationName + " {"}
-
-	// Extract content between braces
-	openIdx := strings.Index(inlineLine, "{")
-	closeIdx := strings.LastIndex(inlineLine, "}")
-
-	if openIdx == -1 || closeIdx == -1 {
-		return []string{inlineLine}
-	}
-
-	content := inlineLine[openIdx+1 : closeIdx]
-	content = strings.TrimSpace(content)
-
-	// Split by @ to find annotations
-	parts := strings.Split(content, "@")
-
-	for i, part := range parts {
-		if i == 0 && strings.TrimSpace(part) == "" {
-			continue
-		}
-
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-
-		result = append(result, "  @"+part)
-	}
-
-	result = append(result, "}")
-	return result
 }

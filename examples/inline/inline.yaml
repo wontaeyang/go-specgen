@@ -415,6 +415,77 @@ paths:
                                 required:
                                     - code
                                     - message
+    /users/search:
+        get:
+            parameters:
+                - name: limit
+                  in: query
+                  description: Maximum results
+                  required: false
+                  schema:
+                    type:
+                        - integer
+                        - "null"
+                    maximum: 100
+                    minimum: 1
+                    default: 20
+                - name: offset
+                  in: query
+                  description: Page offset
+                  required: false
+                  schema:
+                    type:
+                        - integer
+                        - "null"
+                    minimum: 0
+                    default: 0
+                - name: status
+                  in: query
+                  description: Filter by status
+                  required: false
+                  schema:
+                    type:
+                        - string
+                        - "null"
+                    enum:
+                        - active
+                        - inactive
+                        - banned
+                - name: email_contains
+                  in: query
+                  description: Substring match on email
+                  required: false
+                  schema:
+                    type:
+                        - string
+                        - "null"
+            responses:
+                "200":
+                    description: Response for status 200
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    users:
+                                        type: array
+                                        items:
+                                            type: object
+                                            properties:
+                                                id:
+                                                    type: string
+                                                email:
+                                                    type: string
+                                            required:
+                                                - id
+                                                - email
+                                        description: Matching users
+                                    total:
+                                        type: integer
+                                        description: Total count of matches
+                                required:
+                                    - users
+                                    - total
     /users/{id}:
         get:
             parameters:

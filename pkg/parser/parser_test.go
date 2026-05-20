@@ -141,6 +141,13 @@ func TestParser_ParseSchemas(t *testing.T) {
 		t.Fatalf("parseSchemas() error = %v", err)
 	}
 
+	// parseStructFields is the single place that parses @field annotations, so
+	// it must be invoked to populate Schema.Fields — identical path to inline
+	// var structs.
+	if err := parser.parseStructFields(result); err != nil {
+		t.Fatalf("parseStructFields() error = %v", err)
+	}
+
 	// Check if User schema was parsed
 	userSchema, ok := result.Schemas["User"]
 	if !ok {
@@ -183,6 +190,60 @@ func TestParser_ParseParameters(t *testing.T) {
 		// Verify type is set correctly
 		if param.Type == "" {
 			t.Errorf("Parameter %s has empty Type", name)
+		}
+	}
+}
+
+func TestParser_ParseStructFields_InlineStructs(t *testing.T) {
+	// Verifies that parseStructFields populates Fields for inline var structs
+	// declared inside handler bodies via the same path as @schema structs.
+	parser := NewParser("../../examples/inline")
+	parsed, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	listUsers := parsed.Endpoints
+	_ = listUsers
+
+	inlines := parser.comments.FuncInlines["ListUsers"]
+	if inlines == nil || len(inlines.Query) == 0 {
+		t.Fatal("ListUsers should have an inline @query struct")
+	}
+	query := inlines.Query[0]
+	if len(query.Fields) == 0 {
+		t.Fatal("inline @query Fields should be populated by parseStructFields")
+	}
+
+	want := map[string]struct {
+		description string
+		hasMinimum  bool
+		hasEnum     bool
+	}{
+		"Limit":  {description: "Maximum results", hasMinimum: true},
+		"Offset": {description: "Page offset", hasMinimum: true},
+		"Status": {description: "Filter by status", hasEnum: true},
+	}
+
+	got := make(map[string]*Field, len(query.Fields))
+	for _, f := range query.Fields {
+		got[f.GoName] = f
+	}
+
+	for name, expected := range want {
+		f, ok := got[name]
+		if !ok {
+			t.Errorf("Field %q not parsed onto info.Fields", name)
+			continue
+		}
+		if f.Description != expected.description {
+			t.Errorf("%s.Description = %q, want %q", name, f.Description, expected.description)
+		}
+		if expected.hasMinimum && f.Minimum == nil {
+			t.Errorf("%s should have @minimum populated", name)
+		}
+		if expected.hasEnum && len(f.Enum) == 0 {
+			t.Errorf("%s should have @enum populated", name)
 		}
 	}
 }
@@ -435,6 +496,123 @@ func TestParser_ConvertParsedField_ValidNumeric(t *testing.T) {
 	}
 }
 
+func TestParser_ConvertParsedField_RequiredNullableOverrides(t *testing.T) {
+	parser := &Parser{}
+
+	tests := []struct {
+		name         string
+		annotation   *ParsedAnnotation
+		wantRequired *bool
+		wantNullable *bool
+	}{
+		{
+			name:         "no overrides",
+			annotation:   &ParsedAnnotation{},
+			wantRequired: nil,
+			wantNullable: nil,
+		},
+		{
+			name: "@required true",
+			annotation: &ParsedAnnotation{
+				Children: map[string]*ParsedAnnotation{
+					"@required": {Value: "true"},
+				},
+			},
+			wantRequired: boolPtr(true),
+		},
+		{
+			name: "@required false",
+			annotation: &ParsedAnnotation{
+				Children: map[string]*ParsedAnnotation{
+					"@required": {Value: "false"},
+				},
+			},
+			wantRequired: boolPtr(false),
+		},
+		{
+			name: "@nullable true",
+			annotation: &ParsedAnnotation{
+				Children: map[string]*ParsedAnnotation{
+					"@nullable": {Value: "true"},
+				},
+			},
+			wantNullable: boolPtr(true),
+		},
+		{
+			name: "@nullable false",
+			annotation: &ParsedAnnotation{
+				Children: map[string]*ParsedAnnotation{
+					"@nullable": {Value: "false"},
+				},
+			},
+			wantNullable: boolPtr(false),
+		},
+		{
+			name: "both set",
+			annotation: &ParsedAnnotation{
+				Children: map[string]*ParsedAnnotation{
+					"@required": {Value: "false"},
+					"@nullable": {Value: "true"},
+				},
+			},
+			wantRequired: boolPtr(false),
+			wantNullable: boolPtr(true),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field, err := parser.convertParsedField("F", tt.annotation)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !boolPtrEqual(field.Required, tt.wantRequired) {
+				t.Errorf("Required = %v, want %v", boolPtrStr(field.Required), boolPtrStr(tt.wantRequired))
+			}
+			if !boolPtrEqual(field.Nullable, tt.wantNullable) {
+				t.Errorf("Nullable = %v, want %v", boolPtrStr(field.Nullable), boolPtrStr(tt.wantNullable))
+			}
+		})
+	}
+}
+
+func TestParser_ConvertParsedField_InvalidBool(t *testing.T) {
+	parser := &Parser{}
+
+	annotation := &ParsedAnnotation{
+		Children: map[string]*ParsedAnnotation{
+			"@required": {Value: "maybe"},
+		},
+	}
+
+	_, err := parser.convertParsedField("BadField", annotation)
+	if err == nil {
+		t.Fatal("expected error for invalid @required value")
+	}
+	if !strings.Contains(err.Error(), "@required") || !strings.Contains(err.Error(), "maybe") {
+		t.Errorf("error message = %q, want mention of @required and invalid value", err.Error())
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+func boolPtrEqual(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func boolPtrStr(b *bool) string {
+	if b == nil {
+		return "nil"
+	}
+	if *b {
+		return "true"
+	}
+	return "false"
+}
+
 func TestParser_ParseEndpoint_Metadata(t *testing.T) {
 	// Test that endpoint metadata (method and path) is parsed correctly
 	parser := &Parser{
@@ -656,7 +834,7 @@ func TestParser_ParseAPI_Contact(t *testing.T) {
 					"  @version 1.0.0",
 					"  @contact {",
 					"    @name API Team",
-					"    @email api@example.com",
+					"    @email api\\@example.com",
 					"    @url https://example.com",
 					"  }",
 					"}",

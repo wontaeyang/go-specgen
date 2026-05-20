@@ -140,46 +140,65 @@ func TestCountUnescapedBraces(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotDepth, gotBalanced := CountUnescapedBraces(tt.content)
+			gotDepth := CountUnescapedBraces(tt.content)
 			if gotDepth != tt.wantDepth {
 				t.Errorf("CountUnescapedBraces(%q) depth = %d, want %d", tt.content, gotDepth, tt.wantDepth)
 			}
-			if gotBalanced != tt.wantBalanced {
-				t.Errorf("CountUnescapedBraces(%q) balanced = %v, want %v", tt.content, gotBalanced, tt.wantBalanced)
+			if (gotDepth == 0) != tt.wantBalanced {
+				t.Errorf("CountUnescapedBraces(%q) balanced = %v, want %v", tt.content, gotDepth == 0, tt.wantBalanced)
 			}
 		})
 	}
 }
 
-func TestProtectAndRestoreEscapedAt(t *testing.T) {
+func TestSplitOnUnescapedAt(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
+		want    []string
 	}{
 		{
-			name:    "single escaped at",
-			content: `user\@example.com`,
-		},
-		{
-			name:    "multiple escaped at",
-			content: `admin\@example.com and support\@test.org`,
-		},
-		{
-			name:    "no escaped at",
+			name:    "no @",
 			content: "hello world",
+			want:    []string{"hello world"},
 		},
 		{
-			name:    "mixed",
-			content: `@description Contact \@admin for help`,
+			name:    "single bare @ at start",
+			content: "@foo bar",
+			want:    []string{"", "foo bar"},
+		},
+		{
+			name:    "two bare @",
+			content: "@foo bar @baz qux",
+			want:    []string{"", "foo bar ", "baz qux"},
+		},
+		{
+			name:    "escaped @ is not a split point",
+			content: `@example user\@example.com`,
+			want:    []string{"", `example user\@example.com`},
+		},
+		{
+			name:    "escaped @ followed by real annotation",
+			content: `@example user\@example.com @description x`,
+			want:    []string{"", `example user\@example.com `, "description x"},
+		},
+		{
+			name:    `\\@ consumes \\ first, then @ splits`,
+			content: `@x \\@y`,
+			want:    []string{"", `x \\`, "y"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			protected := ProtectEscapedAt(tt.content)
-			restored := RestoreEscapedAt(protected)
-			if restored != tt.content {
-				t.Errorf("Round-trip failed: got %q, want %q", restored, tt.content)
+			got := SplitOnUnescapedAt(tt.content)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d parts %q, want %d %q", len(got), got, len(tt.want), tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("part %d: got %q, want %q", i, got[i], tt.want[i])
+				}
 			}
 		})
 	}

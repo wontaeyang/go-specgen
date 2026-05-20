@@ -191,6 +191,37 @@ func TestParseInlineAnnotation_NestedBlocksNotAllowed(t *testing.T) {
 	}
 }
 
+func TestParseInlineAnnotation_BraceQuantifierInValue(t *testing.T) {
+	// Regression: @pattern values can legitimately contain `{N}` (regex quantifiers).
+	// When the parent annotation (@field) has no block-producing children, brace
+	// validation is skipped so {64} is not misread as a nested block.
+	fieldNode := schema.AnnotationSchema.GetChild("@field")
+	line := "@field { @pattern ^[a-fA-F0-9]{64}$ @description SHA-256 digest }"
+
+	parsed, err := ParseInlineAnnotation(line, "@field", fieldNode)
+	if err != nil {
+		t.Fatalf("ParseInlineAnnotation() error = %v, want nil for regex brace quantifier", err)
+	}
+	if got := parsed.GetChildValue("@pattern"); got != "^[a-fA-F0-9]{64}$" {
+		t.Errorf("@pattern = %q, want %q", got, "^[a-fA-F0-9]{64}$")
+	}
+	if got := parsed.GetChildValue("@description"); got != "SHA-256 digest" {
+		t.Errorf("@description = %q, want %q", got, "SHA-256 digest")
+	}
+}
+
+func TestParseInlineAnnotation_NestedBlockStillRejectedForBlockParents(t *testing.T) {
+	// HasBlockChildren is only false for annotations whose children are all
+	// value/flag — like @field. For annotations with block-producing children
+	// (e.g. @endpoint with @response/@request), nested-brace validation still applies.
+	endpointNode := schema.AnnotationSchema.GetChild("@endpoint")
+	line := "@endpoint GET /users { @response 200 { @body User } }"
+
+	if _, err := ParseInlineAnnotation(line, "@endpoint", endpointNode); err == nil {
+		t.Error("nested block under @endpoint should still error")
+	}
+}
+
 func TestParseInlineAnnotation_AllBlocksSupported(t *testing.T) {
 	// All block annotations now support inline format
 	apiNode := schema.AnnotationSchema.GetChild("@api")
@@ -206,34 +237,6 @@ func TestParseInlineAnnotation_AllBlocksSupported(t *testing.T) {
 	}
 	if parsed.GetChildValue("@version") != "1.0.0" {
 		t.Errorf("@version = %q, want %q", parsed.GetChildValue("@version"), "1.0.0")
-	}
-}
-
-func TestConvertToMultiLine(t *testing.T) {
-	inlineLine := "@field { @description Test @format email }"
-	annotationName := "@field"
-
-	result := ConvertToMultiLine(inlineLine, annotationName)
-
-	if len(result) < 3 {
-		t.Errorf("ConvertToMultiLine() returned %d lines, expected at least 3", len(result))
-	}
-
-	// Should start with opening brace
-	if result[0] != "@field {" {
-		t.Errorf("First line = %q, want %q", result[0], "@field {")
-	}
-
-	// Should end with closing brace
-	if result[len(result)-1] != "}" {
-		t.Errorf("Last line = %q, want %q", result[len(result)-1], "}")
-	}
-
-	// Middle lines should be indented annotations
-	for i := 1; i < len(result)-1; i++ {
-		if !strings.HasPrefix(result[i], "  @") {
-			t.Errorf("Line %d = %q, should start with '  @'", i, result[i])
-		}
 	}
 }
 
@@ -408,8 +411,8 @@ func TestParseInlineAnnotation_EscapedCharacters(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "escaped braces in pattern",
-			line:     `@field { @pattern ^[A-Z]\{2\}$ }`,
+			name:     "raw braces in pattern (RawValue passthrough)",
+			line:     `@field { @pattern ^[A-Z]{2}$ }`,
 			child:    "@pattern",
 			expected: "^[A-Z]{2}$",
 		},
@@ -433,7 +436,7 @@ func TestParseInlineAnnotation_EscapedCharacters(t *testing.T) {
 		},
 		{
 			name:     "regex quantifier range",
-			line:     `@field { @pattern ^[a-z]\{3,5\}$ }`,
+			line:     `@field { @pattern ^[a-z]{3,5}$ }`,
 			child:    "@pattern",
 			expected: "^[a-z]{3,5}$",
 		},
@@ -466,16 +469,16 @@ func TestParseInlineAnnotation_EscapedCharacters(t *testing.T) {
 	}
 }
 
-func TestParseInlineAnnotation_EscapedBracesAllowed(t *testing.T) {
-	// Test that escaped braces don't trigger "nested blocks" error
+func TestParseInlineAnnotation_RawPatternBraces(t *testing.T) {
+	// @pattern is a RawValue annotation: raw braces are passed through verbatim
+	// without being mistaken for a nested block.
 	fieldNode := schema.AnnotationSchema.GetChild("@field")
 
-	// This previously failed with "nested blocks cannot be inlined"
-	line := `@field { @pattern ^[A-Z]\{2\}$ @description Country code }`
+	line := `@field { @pattern ^[A-Z]{2}$ @description Country code }`
 
 	parsed, err := ParseInlineAnnotation(line, "@field", fieldNode)
 	if err != nil {
-		t.Fatalf("ParseInlineAnnotation() should not error for escaped braces, got: %v", err)
+		t.Fatalf("ParseInlineAnnotation() should not error for raw braces in @pattern, got: %v", err)
 	}
 
 	pattern := parsed.GetChildValue("@pattern")
@@ -489,30 +492,80 @@ func TestParseInlineAnnotation_EscapedBracesAllowed(t *testing.T) {
 	}
 }
 
+func TestParseAnnotation_RejectsUnescapedSpecials(t *testing.T) {
+	fieldNode := schema.AnnotationSchema.GetChild("@field")
+	apiNode := schema.AnnotationSchema.GetChild("@api")
+
+	tests := []struct {
+		name  string
+		lines []string
+		node  *schema.SchemaNode
+		root  string
+		want  string // substring expected in the error
+	}{
+		{
+			name: "unescaped @ in block @email value",
+			lines: []string{
+				"@api {",
+				"  @title T",
+				"  @version 1",
+				"  @contact {",
+				"    @email user@example.com",
+				"  }",
+				"}",
+			},
+			node: apiNode,
+			root: "@api",
+			want: "unescaped '@' in @email",
+		},
+		{
+			name:  "unescaped { in inline @description",
+			lines: []string{`@field { @description Use {placeholder} here }`},
+			node:  fieldNode,
+			root:  "@field",
+			want:  "unescaped '{' in @description",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseAnnotationBlock(tt.lines, tt.root, tt.node)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
 func TestFuncInlineInfo_Fields(t *testing.T) {
-	// Test that the FuncInlineInfo struct is correctly initialized
+	// Test that the FuncInlineInfo struct is correctly initialized.
+	// @query/@path/@header/@cookie are repeatable (slices); @request is single-slot;
+	// @response is keyed by status code.
 	info := &FuncInlineInfo{
-		Query:     &InlineStructInfo{VarName: "query"},
-		Path:      &InlineStructInfo{VarName: "path"},
-		Header:    &InlineStructInfo{VarName: "header"},
-		Cookie:    &InlineStructInfo{VarName: "cookie"},
+		Query:     []*InlineStructInfo{{VarName: "query"}},
+		Path:      []*InlineStructInfo{{VarName: "path"}},
+		Header:    []*InlineStructInfo{{VarName: "header"}},
+		Cookie:    []*InlineStructInfo{{VarName: "cookie"}},
 		Request:   &InlineStructInfo{VarName: "request"},
 		Responses: make(map[string]*InlineStructInfo),
 	}
 	info.Responses["200"] = &InlineStructInfo{VarName: "resp200", StatusCode: "200"}
 	info.Responses["404"] = &InlineStructInfo{VarName: "resp404", StatusCode: "404"}
 
-	if info.Query.VarName != "query" {
-		t.Errorf("Query.VarName = %q, want %q", info.Query.VarName, "query")
+	if len(info.Query) != 1 || info.Query[0].VarName != "query" {
+		t.Errorf("Query[0].VarName = %q, want %q", info.Query[0].VarName, "query")
 	}
-	if info.Path.VarName != "path" {
-		t.Errorf("Path.VarName = %q, want %q", info.Path.VarName, "path")
+	if len(info.Path) != 1 || info.Path[0].VarName != "path" {
+		t.Errorf("Path[0].VarName = %q, want %q", info.Path[0].VarName, "path")
 	}
-	if info.Header.VarName != "header" {
-		t.Errorf("Header.VarName = %q, want %q", info.Header.VarName, "header")
+	if len(info.Header) != 1 || info.Header[0].VarName != "header" {
+		t.Errorf("Header[0].VarName = %q, want %q", info.Header[0].VarName, "header")
 	}
-	if info.Cookie.VarName != "cookie" {
-		t.Errorf("Cookie.VarName = %q, want %q", info.Cookie.VarName, "cookie")
+	if len(info.Cookie) != 1 || info.Cookie[0].VarName != "cookie" {
+		t.Errorf("Cookie[0].VarName = %q, want %q", info.Cookie[0].VarName, "cookie")
 	}
 	if info.Request.VarName != "request" {
 		t.Errorf("Request.VarName = %q, want %q", info.Request.VarName, "request")
