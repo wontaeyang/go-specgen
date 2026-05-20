@@ -228,54 +228,6 @@ func TestResolver_ResolveAPI(t *testing.T) {
 	}
 }
 
-func TestExtractJSONName(t *testing.T) {
-	tests := []struct {
-		name     string
-		tag      string
-		expected string
-	}{
-		{
-			name:     "simple json tag",
-			tag:      `json:"id"`,
-			expected: "id",
-		},
-		{
-			name:     "json tag with omitempty",
-			tag:      `json:"email,omitempty"`,
-			expected: "email",
-		},
-		{
-			name:     "json tag with dash",
-			tag:      `json:"-"`,
-			expected: "-",
-		},
-		{
-			name:     "no json tag",
-			tag:      `validate:"required"`,
-			expected: "",
-		},
-		{
-			name:     "empty tag",
-			tag:      "",
-			expected: "",
-		},
-		{
-			name:     "multiple tags",
-			tag:      `json:"name" validate:"required"`,
-			expected: "name",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractJSONName(tt.tag)
-			if got != tt.expected {
-				t.Errorf("extractJSONName(%q) = %q, want %q", tt.tag, got, tt.expected)
-			}
-		})
-	}
-}
-
 func TestResolver_ResolveParameter(t *testing.T) {
 	// Parse the test package first
 	p := parser.NewParser("../parser/testdata")

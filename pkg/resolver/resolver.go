@@ -1065,24 +1065,6 @@ func (r *Resolver) resolveEndpoint(endpoint *parser.Endpoint, parameters map[str
 	return resolved, nil
 }
 
-// extractJSONName extracts the JSON field name from a struct tag
-func extractJSONName(tag string) string {
-	// Parse struct tag
-	st := reflect.StructTag(tag)
-	jsonTag := st.Get("json")
-	if jsonTag == "" {
-		return ""
-	}
-
-	// Split by comma to remove options like omitempty
-	parts := strings.Split(jsonTag, ",")
-	if len(parts) > 0 {
-		return parts[0]
-	}
-
-	return ""
-}
-
 // extractTagName extracts a field name from a specific struct tag key
 func extractTagName(tag string, key string) string {
 	// Parse struct tag

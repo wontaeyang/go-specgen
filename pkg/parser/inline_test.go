@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/wontaeyang/go-specgen/pkg/schema"
@@ -237,34 +236,6 @@ func TestParseInlineAnnotation_AllBlocksSupported(t *testing.T) {
 	}
 	if parsed.GetChildValue("@version") != "1.0.0" {
 		t.Errorf("@version = %q, want %q", parsed.GetChildValue("@version"), "1.0.0")
-	}
-}
-
-func TestConvertToMultiLine(t *testing.T) {
-	inlineLine := "@field { @description Test @format email }"
-	annotationName := "@field"
-
-	result := ConvertToMultiLine(inlineLine, annotationName)
-
-	if len(result) < 3 {
-		t.Errorf("ConvertToMultiLine() returned %d lines, expected at least 3", len(result))
-	}
-
-	// Should start with opening brace
-	if result[0] != "@field {" {
-		t.Errorf("First line = %q, want %q", result[0], "@field {")
-	}
-
-	// Should end with closing brace
-	if result[len(result)-1] != "}" {
-		t.Errorf("Last line = %q, want %q", result[len(result)-1], "}")
-	}
-
-	// Middle lines should be indented annotations
-	for i := 1; i < len(result)-1; i++ {
-		if !strings.HasPrefix(result[i], "  @") {
-			t.Errorf("Line %d = %q, should start with '  @'", i, result[i])
-		}
 	}
 }
 

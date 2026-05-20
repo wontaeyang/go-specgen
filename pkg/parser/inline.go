@@ -196,39 +196,3 @@ func validateNoNestedBraces(content string) error {
 
 	return nil
 }
-
-// ConvertToMultiLine converts inline format to multi-line for uniform processing
-// This is a helper for debugging/testing
-func ConvertToMultiLine(inlineLine, annotationName string) []string {
-	result := []string{annotationName + " {"}
-
-	// Extract content between braces
-	openIdx := strings.Index(inlineLine, "{")
-	closeIdx := strings.LastIndex(inlineLine, "}")
-
-	if openIdx == -1 || closeIdx == -1 {
-		return []string{inlineLine}
-	}
-
-	content := inlineLine[openIdx+1 : closeIdx]
-	content = strings.TrimSpace(content)
-
-	// Split by @ to find annotations
-	parts := strings.Split(content, "@")
-
-	for i, part := range parts {
-		if i == 0 && strings.TrimSpace(part) == "" {
-			continue
-		}
-
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-
-		result = append(result, "  @"+part)
-	}
-
-	result = append(result, "}")
-	return result
-}

@@ -159,26 +159,6 @@ func ParseBracedBlock(lines []string) ([]string, error) {
 	return content, nil
 }
 
-// findUnescapedBrace finds the first unescaped occurrence of the given brace character.
-// Returns -1 if not found.
-func findUnescapedBrace(content string, brace byte) int {
-	i := 0
-	for i < len(content) {
-		if content[i] == '\\' && i+1 < len(content) {
-			next := content[i+1]
-			if next == '{' || next == '}' || next == '@' || next == '\\' {
-				i += 2
-				continue
-			}
-		}
-		if content[i] == brace {
-			return i
-		}
-		i++
-	}
-	return -1
-}
-
 // ExtractMetadata extracts metadata from the opening line of an annotation
 // Example: "@endpoint GET /users/{id} {" -> "GET /users/{id}"
 // Example: "@server https://api.com {" -> "https://api.com"
