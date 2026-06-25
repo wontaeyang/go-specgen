@@ -351,19 +351,22 @@ func (g *Generator) generateRefSchema(refPath string, field *resolver.ResolvedFi
 		return base.CreateSchemaProxy(wrapper)
 	}
 
-	// Non-nullable: build the sibling keywords first, then decide. addFieldConstraints is
-	// the single source of truth for which keywords exist; if it wrote nothing the schema
-	// is still empty and a bare $ref suffices (the $ref alone carries the type).
+	// Non-nullable: build the sibling keywords; addFieldConstraints is the single source
+	// of truth for which keywords exist.
 	siblings := g.schemaBuilder.NewSchema()
 	g.addFieldConstraints(siblings, field)
+
+	if g.schemaBuilder.Is31Plus() {
+		// OpenAPI 3.1+: $ref carries siblings directly (JSON Schema 2020-12). An empty
+		// siblings schema renders as a bare $ref, so no special-casing is needed.
+		return base.CreateSchemaProxyRefWithSchema(refPath, siblings)
+	}
+
+	// OpenAPI 3.0: $ref cannot have siblings. Wrap in allOf only when there is something
+	// to carry; an unannotated ref stays a bare $ref rather than a noisy allOf wrapper.
 	if reflect.DeepEqual(siblings, g.schemaBuilder.NewSchema()) {
 		return base.CreateSchemaProxyRef(refPath)
 	}
-	if g.schemaBuilder.Is31Plus() {
-		// OpenAPI 3.1+: $ref carries siblings directly (JSON Schema 2020-12).
-		return base.CreateSchemaProxyRefWithSchema(refPath, siblings)
-	}
-	// OpenAPI 3.0: siblings forbidden next to $ref; combine via allOf on the same schema.
 	siblings.AllOf = []*base.SchemaProxy{base.CreateSchemaProxyRef(refPath)}
 	return base.CreateSchemaProxy(siblings)
 }
