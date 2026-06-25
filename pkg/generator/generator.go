@@ -3,6 +3,7 @@ package generator
 import (
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -327,18 +328,13 @@ func (g *Generator) generateFieldSchemaWithRefs(field *resolver.ResolvedField, s
 }
 
 // generateRefSchema builds the schema for a field whose type is a named @schema.
-// A bare $ref is emitted when the field has no annotations and is not nullable.
+// A bare $ref is emitted when the field has no annotation keywords and is not nullable.
 // Otherwise sibling keywords (description, deprecated, ...) are attached: natively in
 // OpenAPI 3.1+ ($ref can carry siblings per JSON Schema 2020-12), or via an allOf
 // wrapper in 3.0 (where $ref siblings are forbidden). Nullable refs always need a
 // composition wrapper, since a $ref cannot also be typed "null".
 func (g *Generator) generateRefSchema(refPath string, field *resolver.ResolvedField) *base.SchemaProxy {
-	// Bare $ref when there is nothing to attach.
-	if !field.Nullable && !refFieldHasSiblings(field) {
-		return base.CreateSchemaProxyRef(refPath)
-	}
-
-	// Nullable refs need a composition wrapper; siblings live on the wrapper.
+	// Nullable refs always need a composition wrapper; a $ref cannot also be typed "null".
 	if field.Nullable {
 		wrapper := g.schemaBuilder.NewSchema()
 		if g.schemaBuilder.Is31Plus() {
@@ -355,43 +351,21 @@ func (g *Generator) generateRefSchema(refPath string, field *resolver.ResolvedFi
 		return base.CreateSchemaProxy(wrapper)
 	}
 
-	// Non-nullable ref with siblings.
+	// Non-nullable: build the sibling keywords first, then decide. addFieldConstraints is
+	// the single source of truth for which keywords exist; if it wrote nothing the schema
+	// is still empty and a bare $ref suffices (the $ref alone carries the type).
+	siblings := g.schemaBuilder.NewSchema()
+	g.addFieldConstraints(siblings, field)
+	if reflect.DeepEqual(siblings, g.schemaBuilder.NewSchema()) {
+		return base.CreateSchemaProxyRef(refPath)
+	}
 	if g.schemaBuilder.Is31Plus() {
 		// OpenAPI 3.1+: $ref carries siblings directly (JSON Schema 2020-12).
-		siblings := g.schemaBuilder.NewSchema()
-		g.addFieldConstraints(siblings, field)
 		return base.CreateSchemaProxyRefWithSchema(refPath, siblings)
 	}
-	// OpenAPI 3.0: siblings forbidden next to $ref; wrap in allOf.
-	wrapper := g.schemaBuilder.NewSchema()
-	wrapper.AllOf = []*base.SchemaProxy{base.CreateSchemaProxyRef(refPath)}
-	g.addFieldConstraints(wrapper, field)
-	return base.CreateSchemaProxy(wrapper)
-}
-
-// refFieldHasSiblings reports whether a $ref field carries annotation-derived keywords
-// that must render alongside the reference. Nullable is excluded; it is handled separately.
-// Keep this in sync with addFieldConstraints: every keyword written there (except Nullable)
-// must be detected here, or that keyword will be silently dropped on a bare $ref.
-func refFieldHasSiblings(field *resolver.ResolvedField) bool {
-	return field.Description != "" ||
-		field.Format != "" ||
-		len(field.Enum) > 0 ||
-		field.Default != "" ||
-		field.Example != "" ||
-		field.Pattern != "" ||
-		field.MinLength != nil ||
-		field.MaxLength != nil ||
-		field.MinItems != nil ||
-		field.MaxItems != nil ||
-		field.UniqueItems ||
-		field.Minimum != nil ||
-		field.Maximum != nil ||
-		field.ExclusiveMinimum != nil ||
-		field.ExclusiveMaximum != nil ||
-		field.Deprecated ||
-		field.ReadOnly ||
-		field.WriteOnly
+	// OpenAPI 3.0: siblings forbidden next to $ref; combine via allOf on the same schema.
+	siblings.AllOf = []*base.SchemaProxy{base.CreateSchemaProxyRef(refPath)}
+	return base.CreateSchemaProxy(siblings)
 }
 
 // buildInlineObjectSchema builds an object schema from inline fields
@@ -417,9 +391,7 @@ func (g *Generator) buildInlineObjectSchema(fields []*resolver.ResolvedField, sc
 	return base.CreateSchemaProxy(schema)
 }
 
-// addFieldConstraints adds common field constraints to a schema.
-// When adding a new constraint here, also update refFieldHasSiblings so the keyword
-// is not dropped on a bare $ref field.
+// addFieldConstraints adds common field constraints to a schema
 func (g *Generator) addFieldConstraints(schema *base.Schema, field *resolver.ResolvedField) {
 	if field.Description != "" {
 		schema.Description = field.Description
