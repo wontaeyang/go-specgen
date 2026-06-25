@@ -696,6 +696,95 @@ func TestGenerator_GenerateSchemaRef_Primitive(t *testing.T) {
 	}
 }
 
+// renderRefField renders a $ref field through generateFieldSchemaWithRefs and
+// returns the YAML so sibling keywords (which live on the proxy, not the built
+// schema) can be asserted.
+func renderRefField(t *testing.T, version string, field *resolver.ResolvedField) string {
+	t.Helper()
+	gen := NewGenerator(version)
+	schemas := map[string]*resolver.ResolvedSchema{
+		"Address": {Name: "Address"},
+	}
+	proxy := gen.generateFieldSchemaWithRefs(field, schemas)
+	out, err := yaml.Marshal(proxy)
+	if err != nil {
+		t.Fatalf("yaml.Marshal() error = %v", err)
+	}
+	return string(out)
+}
+
+func TestGenerator_RefField_BareWhenNoSiblings(t *testing.T) {
+	field := &resolver.ResolvedField{Name: "home_address", GoName: "HomeAddress", GoType: "Address"}
+	got := renderRefField(t, "3.1", field)
+
+	if !strings.Contains(got, "$ref: '#/components/schemas/Address'") {
+		t.Errorf("expected bare $ref, got:\n%s", got)
+	}
+	if strings.Contains(got, "allOf") || strings.Contains(got, "oneOf") {
+		t.Errorf("unannotated non-nullable ref should not be wrapped, got:\n%s", got)
+	}
+}
+
+func TestGenerator_RefField_Deprecated_31Siblings(t *testing.T) {
+	field := &resolver.ResolvedField{
+		Name: "home_address", GoName: "HomeAddress", GoType: "Address",
+		Description: "Home address", Deprecated: true,
+	}
+	got := renderRefField(t, "3.1", field)
+
+	// 3.1+: $ref carries siblings directly, no wrapper.
+	if strings.Contains(got, "allOf") || strings.Contains(got, "oneOf") {
+		t.Errorf("3.1 ref with siblings should not be wrapped, got:\n%s", got)
+	}
+	if !strings.Contains(got, "$ref: '#/components/schemas/Address'") {
+		t.Errorf("missing $ref, got:\n%s", got)
+	}
+	if !strings.Contains(got, "deprecated: true") {
+		t.Errorf("missing deprecated sibling, got:\n%s", got)
+	}
+	if !strings.Contains(got, "description: Home address") {
+		t.Errorf("missing description sibling, got:\n%s", got)
+	}
+}
+
+func TestGenerator_RefField_Deprecated_30AllOf(t *testing.T) {
+	field := &resolver.ResolvedField{
+		Name: "home_address", GoName: "HomeAddress", GoType: "Address",
+		Description: "Home address", Deprecated: true,
+	}
+	got := renderRefField(t, "3.0", field)
+
+	// 3.0: $ref cannot have siblings, must be wrapped in allOf.
+	if !strings.Contains(got, "allOf") {
+		t.Errorf("3.0 ref with siblings should be wrapped in allOf, got:\n%s", got)
+	}
+	if !strings.Contains(got, "$ref: '#/components/schemas/Address'") {
+		t.Errorf("missing $ref, got:\n%s", got)
+	}
+	if !strings.Contains(got, "deprecated: true") {
+		t.Errorf("missing deprecated, got:\n%s", got)
+	}
+}
+
+func TestGenerator_RefField_NullableDeprecated_31OneOf(t *testing.T) {
+	field := &resolver.ResolvedField{
+		Name: "work_address", GoName: "WorkAddress", GoType: "Address",
+		Description: "Work address", Deprecated: true, Nullable: true,
+	}
+	got := renderRefField(t, "3.1", field)
+
+	// Nullable refs need oneOf in 3.1 ($ref siblings would intersect, not union).
+	if !strings.Contains(got, "oneOf") {
+		t.Errorf("nullable 3.1 ref should use oneOf, got:\n%s", got)
+	}
+	if !strings.Contains(got, `type: "null"`) {
+		t.Errorf("nullable 3.1 ref should include null type, got:\n%s", got)
+	}
+	if !strings.Contains(got, "deprecated: true") {
+		t.Errorf("missing deprecated sibling, got:\n%s", got)
+	}
+}
+
 func TestIsPrimitive(t *testing.T) {
 	tests := []struct {
 		input string

@@ -506,10 +506,12 @@ components:
                     oneOf:
                         - $ref: '#/components/schemas/Address'
                         - type: "null"
+                    description: Optional mailing address
                 billing_address:
                     oneOf:
                         - $ref: '#/components/schemas/Address'
                         - type: "null"
+                    description: Billing address (nullable but required)
             required:
                 - id
                 - email
