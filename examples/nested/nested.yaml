@@ -125,6 +125,7 @@ components:
                     oneOf:
                         - $ref: '#/components/schemas/Employee'
                         - type: "null"
+                    description: Employee's manager (another Employee)
                 direct_reports:
                     type: array
                     items:
@@ -164,10 +165,13 @@ components:
                     description: Order ID
                 customer:
                     $ref: '#/components/schemas/User'
+                    description: Customer who placed the order
                 shipping_address:
                     $ref: '#/components/schemas/Address'
+                    description: Shipping address
                 billing_address:
                     $ref: '#/components/schemas/Address'
+                    description: Billing address
                 items:
                     type: array
                     items:
@@ -228,6 +232,7 @@ components:
                     description: Organization name
                 headquarters:
                     $ref: '#/components/schemas/Address'
+                    description: Headquarters address
                 teams:
                     type: array
                     items:
@@ -235,6 +240,7 @@ components:
                     description: Organization teams
                 primary_contact:
                     $ref: '#/components/schemas/User'
+                    description: Primary contact
             required:
                 - id
                 - name
@@ -253,6 +259,7 @@ components:
                     description: Team name
                 lead:
                     $ref: '#/components/schemas/Member'
+                    description: Team lead
                 members:
                     type: array
                     items:
@@ -279,10 +286,12 @@ components:
                     description: User display name
                 home_address:
                     $ref: '#/components/schemas/Address'
+                    description: User's home address
                 work_address:
                     oneOf:
                         - $ref: '#/components/schemas/Address'
                         - type: "null"
+                    description: User's work address (optional)
             required:
                 - id
                 - email

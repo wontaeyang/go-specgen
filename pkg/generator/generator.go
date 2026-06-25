@@ -3,6 +3,7 @@ package generator
 import (
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -299,24 +300,7 @@ func (g *Generator) generateFieldSchemaWithRefs(field *resolver.ResolvedField, s
 	// Handle schema references: User (named type that is a schema)
 	if isSchemaReference(goType, schemas) {
 		refPath := fmt.Sprintf("#/components/schemas/%s", extractTypeName(goType))
-		if field.Nullable {
-			if g.schemaBuilder.Is31Plus() {
-				// OpenAPI 3.1+: $ref can have siblings, use oneOf with null type
-				schema := g.schemaBuilder.NewSchema()
-				schema.OneOf = []*base.SchemaProxy{
-					base.CreateSchemaProxyRef(refPath),
-					base.CreateSchemaProxy(&base.Schema{Type: []string{"null"}}),
-				}
-				return base.CreateSchemaProxy(schema)
-			}
-			// OpenAPI 3.0: $ref cannot have siblings. Wrap in allOf to add nullable.
-			ref := base.CreateSchemaProxyRef(refPath)
-			wrapper := g.schemaBuilder.NewSchema()
-			wrapper.AllOf = []*base.SchemaProxy{ref}
-			g.schemaBuilder.SetNullable(wrapper, true)
-			return base.CreateSchemaProxy(wrapper)
-		}
-		return base.CreateSchemaProxyRef(refPath)
+		return g.generateRefSchema(refPath, field)
 	}
 
 	// Handle any value (empty schema)
@@ -341,6 +325,50 @@ func (g *Generator) generateFieldSchemaWithRefs(field *resolver.ResolvedField, s
 
 	g.addFieldConstraints(schema, field)
 	return base.CreateSchemaProxy(schema)
+}
+
+// generateRefSchema builds the schema for a field whose type is a named @schema.
+// A bare $ref is emitted when the field has no annotation keywords and is not nullable.
+// Otherwise sibling keywords (description, deprecated, ...) are attached: natively in
+// OpenAPI 3.1+ ($ref can carry siblings per JSON Schema 2020-12), or via an allOf
+// wrapper in 3.0 (where $ref siblings are forbidden). Nullable refs always need a
+// composition wrapper, since a $ref cannot also be typed "null".
+func (g *Generator) generateRefSchema(refPath string, field *resolver.ResolvedField) *base.SchemaProxy {
+	// Nullable refs always need a composition wrapper; a $ref cannot also be typed "null".
+	if field.Nullable {
+		wrapper := g.schemaBuilder.NewSchema()
+		if g.schemaBuilder.Is31Plus() {
+			// OpenAPI 3.1+: express null via oneOf (siblings would intersect, not union).
+			wrapper.OneOf = []*base.SchemaProxy{
+				base.CreateSchemaProxyRef(refPath),
+				base.CreateSchemaProxy(&base.Schema{Type: []string{"null"}}),
+			}
+		} else {
+			// OpenAPI 3.0: $ref cannot have siblings; wrap in allOf and mark nullable.
+			wrapper.AllOf = []*base.SchemaProxy{base.CreateSchemaProxyRef(refPath)}
+		}
+		g.addFieldConstraints(wrapper, field)
+		return base.CreateSchemaProxy(wrapper)
+	}
+
+	// Non-nullable: build the sibling keywords; addFieldConstraints is the single source
+	// of truth for which keywords exist.
+	siblings := g.schemaBuilder.NewSchema()
+	g.addFieldConstraints(siblings, field)
+
+	if g.schemaBuilder.Is31Plus() {
+		// OpenAPI 3.1+: $ref carries siblings directly (JSON Schema 2020-12). An empty
+		// siblings schema renders as a bare $ref, so no special-casing is needed.
+		return base.CreateSchemaProxyRefWithSchema(refPath, siblings)
+	}
+
+	// OpenAPI 3.0: $ref cannot have siblings. Wrap in allOf only when there is something
+	// to carry; an unannotated ref stays a bare $ref rather than a noisy allOf wrapper.
+	if reflect.DeepEqual(siblings, g.schemaBuilder.NewSchema()) {
+		return base.CreateSchemaProxyRef(refPath)
+	}
+	siblings.AllOf = []*base.SchemaProxy{base.CreateSchemaProxyRef(refPath)}
+	return base.CreateSchemaProxy(siblings)
 }
 
 // buildInlineObjectSchema builds an object schema from inline fields

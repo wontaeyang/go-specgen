@@ -88,6 +88,7 @@ components:
                     description: Post content
                 author:
                     $ref: '#/components/schemas/User'
+                    description: Post author
             required:
                 - id
                 - title
@@ -124,6 +125,7 @@ components:
                     description: Whether the request was successful
                 data:
                     $ref: '#/components/schemas/Post'
+                    description: Response data
                 error:
                     type:
                         - string
@@ -181,6 +183,7 @@ components:
                     description: Whether the request was successful
                 data:
                     $ref: '#/components/schemas/User'
+                    description: Response data
                 error:
                     type:
                         - string
