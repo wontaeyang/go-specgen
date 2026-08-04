@@ -32,9 +32,7 @@ paths:
                   description: Maximum results to return
                   required: false
                   schema:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     maximum: 100
                     minimum: 1
                     default: 20
@@ -43,9 +41,7 @@ paths:
                   description: Offset for pagination
                   required: false
                   schema:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     minimum: 0
                     default: 0
                 - name: status
@@ -53,9 +49,7 @@ paths:
                   description: Filter by status
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - available
                         - pending
@@ -65,9 +59,7 @@ paths:
                   description: Filter by category
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - dog
                         - cat

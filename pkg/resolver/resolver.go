@@ -803,8 +803,17 @@ func (r *Resolver) resolveFieldWithParamType(field *types.Var, tag string, annot
 	resolved.Format = typeInfo.Format
 	resolved.IsArray = typeInfo.IsArray
 	resolved.ItemsType = typeInfo.ItemsType
-	resolved.Nullable = typeInfo.IsNullable
 	resolved.IsAnyValue = typeInfo.IsAnyValue
+
+	// Parameters serialize as plain strings, which cannot represent null,
+	// so pointer-ness never implies nullable — a pointer only lets the
+	// handler distinguish absent from zero. @nullable true can still opt in.
+	switch paramType {
+	case "path", "query", "header", "cookie":
+		resolved.Nullable = false
+	default:
+		resolved.Nullable = typeInfo.IsNullable
+	}
 
 	applyAnnotationOverrides(resolved, annotation)
 

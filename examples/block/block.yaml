@@ -25,9 +25,7 @@ paths:
                   description: Include deleted users
                   required: false
                   schema:
-                    type:
-                        - boolean
-                        - "null"
+                    type: boolean
                     default: false
             responses:
                 "200":

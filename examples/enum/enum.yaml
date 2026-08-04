@@ -15,9 +15,7 @@ paths:
                   description: Filter by status
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - pending
                         - in_progress
@@ -28,9 +26,7 @@ paths:
                   description: Filter by priority
                   required: false
                   schema:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     enum:
                         - 1
                         - 2
@@ -53,9 +49,7 @@ paths:
                   description: Sort order
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - asc
                         - desc
