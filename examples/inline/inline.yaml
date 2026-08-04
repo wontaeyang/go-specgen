@@ -66,9 +66,7 @@ paths:
                                                 - total_cents
                                         description: List of orders
                                     next_cursor:
-                                        type:
-                                            - string
-                                            - "null"
+                                        type: string
                                         description: Next page cursor
                                     has_more:
                                         type: boolean

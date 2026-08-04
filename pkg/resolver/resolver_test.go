@@ -869,9 +869,21 @@ func TestResolver_PointerImpliesNotRequired(t *testing.T) {
 		{"value", true, false},           // string: required, not nullable
 		{"value_ptr", true, true},        // *string: required, nullable
 		{"value_omit", false, false},     // string,omitempty: not required, not nullable
-		{"value_ptr_omit", false, true},  // *string,omitempty: not required, nullable
+		{"value_ptr_omit", false, false}, // *string,omitempty: omitted when nil, never null on the wire
+		{"value_zero", false, false},     // string,omitzero: not required, not nullable
+		{"value_ptr_zero", false, false}, // *string,omitzero: omitted when nil, never null on the wire
 		{"value_struct", true, false},    // User: required, not nullable
 		{"value_struct_ptr", true, true}, // *User: required, nullable
+
+		// Slices and maps follow the same tag-based rule. Note: a nil slice/map
+		// without omitempty marshals as null, but non-nullable is the deliberate
+		// default (most handlers guarantee non-nil); use @nullable true to opt in.
+		{"value_slice", true, false},           // []string: required, not nullable (documented gap)
+		{"value_slice_omit", false, false},     // []string,omitempty: optional, never null on the wire
+		{"value_slice_ptr", true, true},        // *[]string: required, nullable
+		{"value_slice_ptr_omit", false, false}, // *[]string,omitempty: optional, nil ptr omitted
+		{"value_map", true, false},             // map: required, not nullable (documented gap)
+		{"value_map_omit", false, false},       // map,omitempty: optional, never null on the wire
 	}
 
 	for _, tt := range tests {
@@ -1047,10 +1059,10 @@ func TestResolver_NestedEmbedFlattening(t *testing.T) {
 		}
 	}
 
-	// Verify nullable fields from Auditable (pointer types)
+	// Verify pointer+omitempty fields from Auditable are optional but not nullable
 	if f, ok := fields["deleted_at"]; ok {
-		if !f.Nullable {
-			t.Error("deleted_at should be nullable (pointer type)")
+		if f.Nullable {
+			t.Error("deleted_at should not be nullable (omitempty omits nil instead of encoding null)")
 		}
 		if f.Required {
 			t.Error("deleted_at should not be required (omitempty)")

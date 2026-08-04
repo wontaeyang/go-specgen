@@ -18,7 +18,11 @@ import "net/http"
 //   string                           | true     | false
 //   string,omitempty                 | false    | false
 //   *string                          | true     | true
-//   *string,omitempty                | false    | true
+//   *string,omitempty                | false    | false
+//
+// A pointer with omitempty is optional but NOT nullable: encoding/json omits
+// a nil pointer instead of encoding null, so null never appears on the wire.
+// omitzero (Go 1.24+) is treated the same as omitempty.
 //
 // `omitempty` only affects JSON encoding (response side), so using it to mark
 // a request field as optional conflates two concerns. The @required override
@@ -54,17 +58,18 @@ type CreatePromo struct {
 	Percent *int `json:"percent"`
 }
 
-// UpdateUserPatch demonstrates @nullable false on a pointer field.
+// UpdateUserPatch demonstrates @nullable true on a pointer+omitempty field.
 //
-// PATCH semantics: omit the field to leave it unchanged. Pointer is used to
-// detect presence, but explicit `null` is rejected — clients must either
-// send a real value or omit the key entirely.
+// PATCH semantics: omit the field to leave it unchanged, send explicit `null`
+// to clear the value. Pointer+omitempty defaults to non-nullable (nil is
+// omitted, never encoded as null), so accepting null in requests requires
+// opting back in with @nullable true.
 // @schema
 type UpdateUserPatch struct {
-	// @field { @description Replace email; omit to leave unchanged @format email @nullable false @required false }
+	// @field { @description Replace email; omit to leave unchanged, null to clear @format email @nullable true }
 	Email *string `json:"email,omitempty"`
 
-	// @field { @description Replace display name; omit to leave unchanged @nullable false @required false }
+	// @field { @description Replace display name; omit to leave unchanged, null to clear @nullable true }
 	DisplayName *string `json:"display_name,omitempty"`
 }
 
@@ -113,7 +118,7 @@ func Login(w http.ResponseWriter, r *http.Request) {}
 //	}
 func CreatePromoCode(w http.ResponseWriter, r *http.Request) {}
 
-// PatchUser updates user fields (demonstrates @nullable false on pointer)
+// PatchUser updates user fields (demonstrates @nullable true on pointer+omitempty)
 //
 //	@endpoint PATCH /users/{id} {
 //	  @operationID patchUser

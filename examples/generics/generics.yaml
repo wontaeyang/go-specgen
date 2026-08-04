@@ -109,9 +109,7 @@ components:
                     type: integer
                     description: Total count of items
                 error:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     description: Error message if unsuccessful
             required:
                 - success
@@ -127,9 +125,7 @@ components:
                     $ref: '#/components/schemas/Post'
                     description: Response data
                 error:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     description: Error message if unsuccessful
             required:
                 - success
@@ -167,9 +163,7 @@ components:
                     type: integer
                     description: Total count of items
                 error:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     description: Error message if unsuccessful
             required:
                 - success
@@ -185,9 +179,7 @@ components:
                     $ref: '#/components/schemas/User'
                     description: Response data
                 error:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     description: Error message if unsuccessful
             required:
                 - success

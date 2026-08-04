@@ -214,7 +214,17 @@ type Tags []string      // -> type: array, items: string
 | `string` | Yes | No |
 | `*string` | Yes | Yes |
 | `string` with `omitempty` | No | No |
-| `*string` with `omitempty` | No | Yes |
+| `*string` with `omitempty` | No | No |
+
+A pointer alone makes a field nullable because `encoding/json` marshals a nil
+pointer as `null`. Adding `omitempty` changes that: a nil pointer is omitted
+entirely, so the field can never appear as `null` on the wire — it is optional,
+not nullable. Use `@nullable true` to opt back in (e.g., a PATCH API that
+accepts explicit `null` to clear a value).
+
+`omitzero` (Go 1.24+) is treated the same as `omitempty`: the field becomes
+optional and non-nullable, since a nil pointer is the zero value and is
+omitted rather than encoded as `null`.
 
 **Parameter fields** — determined by parameter type:
 
@@ -245,8 +255,9 @@ type CreatePromo struct {
 
 // @schema
 type UpdateUserPatch struct {
-    // PATCH semantics: pointer detects presence, but explicit null is rejected
-    // @field { @description Replace email; omit to leave unchanged @nullable false @required false }
+    // PATCH semantics: omit to leave unchanged, send null to clear.
+    // Pointer+omitempty defaults to non-nullable, so opt back in explicitly
+    // @field { @description Replace email; omit to leave unchanged, null to clear @nullable true }
     Email *string `json:"email,omitempty"`
 }
 ```

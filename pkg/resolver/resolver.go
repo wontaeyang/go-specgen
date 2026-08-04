@@ -503,8 +503,9 @@ func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser
 		GoType: field.Type().String(),
 	}
 
-	// Check if field is required/nullable from JSON tag
-	resolved.Required = !strings.Contains(tag, "omitempty")
+	// Check if field is required from JSON tag
+	omitted := omitsWhenEmpty(tag)
+	resolved.Required = !omitted
 
 	// Check for anonymous struct types and resolve their fields inline
 	if inlineFields := r.resolveAnonymousStruct(field.Type(), schemaNames); inlineFields != nil {
@@ -531,7 +532,9 @@ func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser
 		resolved.Format = typeInfo.Format
 		resolved.IsArray = typeInfo.IsArray
 		resolved.ItemsType = typeInfo.ItemsType
-		resolved.Nullable = typeInfo.IsNullable
+		// omitempty/omitzero omit a nil pointer instead of encoding null,
+		// so the field can never appear as null on the wire
+		resolved.Nullable = typeInfo.IsNullable && !omitted
 		resolved.IsAnyValue = typeInfo.IsAnyValue
 	}
 
@@ -591,7 +594,8 @@ func (r *Resolver) resolveAnonymousStruct(t types.Type, schemaNames map[string]b
 		}
 
 		// Check if field is required from JSON tag
-		resolvedField.Required = !strings.Contains(tag, "omitempty")
+		omitted := omitsWhenEmpty(tag)
+		resolvedField.Required = !omitted
 
 		// Check for nested anonymous structs (recursive)
 		if nestedFields := r.resolveAnonymousStruct(field.Type(), schemaNames); nestedFields != nil {
@@ -618,7 +622,9 @@ func (r *Resolver) resolveAnonymousStruct(t types.Type, schemaNames map[string]b
 			resolvedField.Format = typeInfo.Format
 			resolvedField.IsArray = typeInfo.IsArray
 			resolvedField.ItemsType = typeInfo.ItemsType
-			resolvedField.Nullable = typeInfo.IsNullable
+			// omitempty/omitzero omit a nil pointer instead of encoding null,
+			// so the field can never appear as null on the wire
+			resolvedField.Nullable = typeInfo.IsNullable && !omitted
 			resolvedField.IsAnyValue = typeInfo.IsAnyValue
 		}
 
@@ -712,9 +718,16 @@ func (r *Resolver) checkUnresolvedStruct(t types.Type, resolved *ResolvedField, 
 	}
 }
 
+// omitsWhenEmpty reports whether the JSON tag drops the field for empty/zero
+// values. Both omitempty and omitzero omit a nil pointer instead of encoding
+// null, so either one makes the field optional and non-nullable.
+func omitsWhenEmpty(tag string) bool {
+	return strings.Contains(tag, "omitempty") || strings.Contains(tag, "omitzero")
+}
+
 // resolveParamRequired determines if a parameter field is required based on the parameter type.
 // Path parameters are always required. Query, header, and cookie parameters are optional by default
-// and only required if the tag contains ",required". Schema/JSON fields use the existing omitempty logic.
+// and only required if the tag contains ",required". Schema/JSON fields use the omitempty/omitzero logic.
 func resolveParamRequired(tag string, paramType string) bool {
 	switch paramType {
 	case "path":
@@ -722,7 +735,7 @@ func resolveParamRequired(tag string, paramType string) bool {
 	case "query", "header", "cookie":
 		return strings.Contains(tag, ",required")
 	default:
-		return !strings.Contains(tag, "omitempty")
+		return !omitsWhenEmpty(tag)
 	}
 }
 

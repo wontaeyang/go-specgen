@@ -251,9 +251,7 @@ components:
                         - other
                     description: Pet category
                 status:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - available
                         - pending
@@ -265,9 +263,7 @@ components:
                         type: string
                     description: Pet tags for searching
                 age:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     maximum: 100
                     minimum: 0
                     description: Pet age in years
@@ -330,9 +326,7 @@ components:
                         type: string
                     description: Pet tags for searching
                 age:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     maximum: 100
                     minimum: 0
                     description: Pet age in years
@@ -357,16 +351,12 @@ components:
             type: object
             properties:
                 name:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     maxLength: 100
                     minLength: 1
                     description: Pet name
                 category:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - dog
                         - cat
@@ -375,9 +365,7 @@ components:
                         - other
                     description: Pet category
                 status:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - available
                         - pending
@@ -389,9 +377,7 @@ components:
                         type: string
                     description: Pet tags for searching
                 age:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     maximum: 100
                     minimum: 0
                     description: Pet age in years

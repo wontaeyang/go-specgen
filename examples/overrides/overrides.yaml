@@ -132,9 +132,13 @@ components:
             type: object
             properties:
                 email:
-                    type: string
+                    type:
+                        - string
+                        - "null"
                     format: email
-                    description: Replace email; omit to leave unchanged
+                    description: Replace email; omit to leave unchanged, null to clear
                 display_name:
-                    type: string
-                    description: Replace display name; omit to leave unchanged
+                    type:
+                        - string
+                        - "null"
+                    description: Replace display name; omit to leave unchanged, null to clear
