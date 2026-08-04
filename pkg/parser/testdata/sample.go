@@ -70,6 +70,9 @@ type FieldRequiredTest struct {
 	ValueStruct    User    `json:"value_struct"`
 	ValueStructPtr *User   `json:"value_struct_ptr"`
 
+	ValueStructOmit User `json:"value_struct_omit,omitempty"`
+	ValueStructZero User `json:"value_struct_zero,omitzero"`
+
 	ValueSlice        []string          `json:"value_slice"`
 	ValueSliceOmit    []string          `json:"value_slice_omit,omitempty"`
 	ValueSlicePtr     *[]string         `json:"value_slice_ptr"`

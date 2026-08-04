@@ -504,7 +504,7 @@ func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser
 	}
 
 	// Check if field is required from JSON tag
-	omitted := omitsWhenEmpty(tag)
+	omitted := omitsWhenEmpty(tag, field.Type())
 	resolved.Required = !omitted
 
 	// Check for anonymous struct types and resolve their fields inline
@@ -594,7 +594,7 @@ func (r *Resolver) resolveAnonymousStruct(t types.Type, schemaNames map[string]b
 		}
 
 		// Check if field is required from JSON tag
-		omitted := omitsWhenEmpty(tag)
+		omitted := omitsWhenEmpty(tag, field.Type())
 		resolvedField.Required = !omitted
 
 		// Check for nested anonymous structs (recursive)
@@ -718,24 +718,30 @@ func (r *Resolver) checkUnresolvedStruct(t types.Type, resolved *ResolvedField, 
 	}
 }
 
-// omitsWhenEmpty reports whether the JSON tag drops the field for empty/zero
-// values. Both omitempty and omitzero omit a nil pointer instead of encoding
-// null, so either one makes the field optional and non-nullable.
-func omitsWhenEmpty(tag string) bool {
-	return strings.Contains(tag, "omitempty") || strings.Contains(tag, "omitzero")
+// omitsWhenEmpty reports whether the JSON tag actually drops the field for
+// empty/zero values of the given type. omitzero omits any zero value,
+// including zero structs. omitempty follows encoding/json's isEmptyValue,
+// which never considers structs empty (and arrays only at length zero), so
+// such fields always appear on the wire despite the tag.
+func omitsWhenEmpty(tag string, fieldType types.Type) bool {
+	if strings.Contains(tag, "omitzero") {
+		return true
+	}
+	return strings.Contains(tag, "omitempty") && canBeEmpty(fieldType)
 }
 
-// resolveParamRequired determines if a parameter field is required based on the parameter type.
-// Path parameters are always required. Query, header, and cookie parameters are optional by default
-// and only required if the tag contains ",required". Schema/JSON fields use the omitempty/omitzero logic.
-func resolveParamRequired(tag string, paramType string) bool {
-	switch paramType {
-	case "path":
+// canBeEmpty mirrors encoding/json's isEmptyValue: reports whether some value
+// of the type is ever considered empty by omitempty.
+func canBeEmpty(fieldType types.Type) bool {
+	switch u := fieldType.Underlying().(type) {
+	case *types.Pointer, *types.Interface, *types.Map, *types.Slice:
 		return true
-	case "query", "header", "cookie":
-		return strings.Contains(tag, ",required")
+	case *types.Basic:
+		return u.Info()&(types.IsBoolean|types.IsNumeric|types.IsString) != 0
+	case *types.Array:
+		return u.Len() == 0
 	default:
-		return !omitsWhenEmpty(tag)
+		return false
 	}
 }
 
@@ -778,8 +784,18 @@ func (r *Resolver) resolveFieldWithParamType(field *types.Var, tag string, annot
 		GoType: field.Type().String(),
 	}
 
-	// Check if field is required based on parameter type
-	resolved.Required = resolveParamRequired(tag, paramType)
+	// Check if field is required based on parameter type.
+	// Path parameters are always required. Query, header, and cookie parameters
+	// are optional by default and only required if the tag contains ",required".
+	// Schema/JSON fields use the omitempty/omitzero logic.
+	switch paramType {
+	case "path":
+		resolved.Required = true
+	case "query", "header", "cookie":
+		resolved.Required = strings.Contains(tag, ",required")
+	default:
+		resolved.Required = !omitsWhenEmpty(tag, field.Type())
+	}
 
 	// Resolve Go type to OpenAPI type
 	typeInfo := r.resolveType(field.Type())

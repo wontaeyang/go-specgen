@@ -215,6 +215,11 @@ type Tags []string      // -> type: array, items: string
 | `*string` | Yes | Yes |
 | `string` with `omitempty` | No | No |
 | `*string` with `omitempty` | No | No |
+| struct (e.g. `time.Time`) with `omitempty` | Yes | No |
+| struct with `omitzero` | No | No |
+
+These defaults are outcome-oriented: they describe what `encoding/json`
+actually puts on the wire, not what the tag text says.
 
 A pointer alone makes a field nullable because `encoding/json` marshals a nil
 pointer as `null`. Adding `omitempty` changes that: a nil pointer is omitted
@@ -222,9 +227,15 @@ entirely, so the field can never appear as `null` on the wire — it is optional
 not nullable. Use `@nullable true` to opt back in (e.g., a PATCH API that
 accepts explicit `null` to clear a value).
 
-`omitzero` (Go 1.24+) is treated the same as `omitempty`: the field becomes
-optional and non-nullable, since a nil pointer is the zero value and is
-omitted rather than encoded as `null`.
+`omitempty` can only drop values `encoding/json` considers empty — `false`,
+`0`, `""`, a nil pointer or interface, and an empty string, slice, map, or
+array. A non-pointer struct is never empty, so `time.Time` with `omitempty`
+is still emitted on every response and stays required.
+
+`omitzero` (Go 1.24+) omits the zero value of any type, so it always makes a
+field optional — including structs, where it omits the zero value `omitempty`
+cannot. On pointers it behaves like `omitempty`: the nil pointer is omitted
+rather than encoded as `null`, so the field is optional and non-nullable.
 
 **Parameter fields** — determined by parameter type:
 
