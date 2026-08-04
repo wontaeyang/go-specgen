@@ -70,6 +70,7 @@ components:
                     required:
                         - street
                         - city
+                    description: Inline address
                 location:
                     type: object
                     properties:
@@ -104,6 +105,7 @@ components:
                         - name
                         - address
                         - coordinates
+                    description: Nested location
             required:
                 - id
                 - status

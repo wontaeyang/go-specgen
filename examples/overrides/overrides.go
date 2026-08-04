@@ -26,6 +26,8 @@ import (
 //   []string                         | true     | false
 //   []string,omitempty               | false    | false
 //   map[string]string,omitempty      | false    | false
+//   struct{...},omitempty            | true     | false
+//   struct{...},omitzero             | false    | false
 //   time.Time,omitempty              | true     | false
 //   time.Time,omitzero               | false    | false
 //
@@ -35,10 +37,13 @@ import (
 // A pointer with omitempty is optional but NOT nullable: encoding/json omits
 // a nil pointer instead of encoding null, so null never appears on the wire.
 //
-// omitempty only drops values encoding/json considers empty, and a non-pointer
-// struct is never empty — so time.Time,omitempty is always emitted and stays
-// required. omitzero (Go 1.24+) omits the zero value of any type, including
-// structs, so it always makes the field optional.
+// omitempty only drops values encoding/json considers empty (zero-length
+// strings/slices/maps, zero numbers, nil pointers), and a non-pointer struct
+// is never empty — so struct,omitempty is always emitted and stays required.
+// This applies to any struct-kinded type: time.Time is a struct, so
+// time.Time,omitempty still emits the zero time. omitzero (Go 1.24+) omits
+// the zero value of any type, including structs, so it always makes the
+// field optional.
 //
 // `omitempty` only affects JSON encoding (response side), so using it to mark
 // a request field as optional conflates two concerns. The @required override
@@ -72,7 +77,17 @@ type TagDefaults struct {
 	// @field { @description map,omitempty: optional; nil and empty are both omitted }
 	Labels map[string]string `json:"labels,omitempty"`
 
-	// @field { @description time.Time,omitempty: still required — a non-pointer struct is never empty, so omitempty has no effect }
+	// @field { @description struct,omitempty: still required — a non-pointer struct is never empty, so omitempty has no effect }
+	Audit struct {
+		By string `json:"by"`
+	} `json:"audit,omitempty"`
+
+	// @field { @description struct,omitzero: optional — omitzero omits the zero struct }
+	AuditZero struct {
+		By string `json:"by"`
+	} `json:"audit_zero,omitzero"`
+
+	// @field { @description time.Time,omitempty: still required — time.Time is a struct, so omitempty has no effect }
 	CreatedAt time.Time `json:"created_at,omitempty"`
 
 	// @field { @description time.Time,omitzero: optional — omitzero omits the zero time }

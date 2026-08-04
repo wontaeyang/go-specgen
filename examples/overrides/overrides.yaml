@@ -163,10 +163,26 @@ components:
                     additionalProperties:
                         type: string
                     description: 'map,omitempty: optional; nil and empty are both omitted'
+                audit:
+                    type: object
+                    properties:
+                        by:
+                            type: string
+                    required:
+                        - by
+                    description: 'struct,omitempty: still required — a non-pointer struct is never empty, so omitempty has no effect'
+                audit_zero:
+                    type: object
+                    properties:
+                        by:
+                            type: string
+                    required:
+                        - by
+                    description: 'struct,omitzero: optional — omitzero omits the zero struct'
                 created_at:
                     type: string
                     format: date-time
-                    description: 'time.Time,omitempty: still required — a non-pointer struct is never empty, so omitempty has no effect'
+                    description: 'time.Time,omitempty: still required — time.Time is a struct, so omitempty has no effect'
                 updated_at:
                     type: string
                     format: date-time
@@ -175,6 +191,7 @@ components:
                 - plain
                 - ptr
                 - tags
+                - audit
                 - created_at
         UpdateUserPatch:
             type: object

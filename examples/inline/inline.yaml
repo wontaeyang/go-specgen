@@ -122,6 +122,7 @@ paths:
                                         - city
                                         - postal_code
                                         - country
+                                    description: Shipping address
                             required:
                                 - customer_id
                                 - items

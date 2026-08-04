@@ -214,7 +214,9 @@ func (g *Generator) generateSchema(schema *resolver.ResolvedSchema, allSchemas m
 func (g *Generator) generateFieldSchemaWithRefs(field *resolver.ResolvedField, schemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
 	// Handle anonymous structs - inline their fields
 	if len(field.InlineFields) > 0 {
-		return g.buildInlineObjectSchema(field.InlineFields, schemas)
+		proxy := g.buildInlineObjectSchema(field.InlineFields, schemas)
+		g.addFieldConstraints(proxy.Schema(), field)
+		return proxy
 	}
 
 	// Handle arrays of anonymous structs
@@ -499,7 +501,9 @@ func (g *Generator) generateFieldSchema(field *resolver.ResolvedField) *base.Sch
 
 	// Handle anonymous structs - inline their fields
 	if len(field.InlineFields) > 0 {
-		return g.buildInlineObjectSchemaSimple(field.InlineFields)
+		proxy := g.buildInlineObjectSchemaSimple(field.InlineFields)
+		g.addFieldConstraints(proxy.Schema(), field)
+		return proxy
 	}
 
 	// Handle arrays of anonymous structs
