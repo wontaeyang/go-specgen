@@ -19,6 +19,10 @@ import "net/http"
 //   string,omitempty                 | false    | false
 //   *string                          | true     | true
 //   *string,omitempty                | false    | false
+//   *string,omitzero                 | false    | false
+//   []string                         | true     | false
+//   []string,omitempty               | false    | false
+//   map[string]string,omitempty      | false    | false
 //
 // A pointer with omitempty is optional but NOT nullable: encoding/json omits
 // a nil pointer instead of encoding null, so null never appears on the wire.
@@ -27,6 +31,35 @@ import "net/http"
 // `omitempty` only affects JSON encoding (response side), so using it to mark
 // a request field as optional conflates two concerns. The @required override
 // lets you mark a request field optional without touching the json tag.
+
+// TagDefaults exercises every row of the table above with no overrides, so the
+// generated output is golden-verified documentation of the defaults.
+// @schema
+type TagDefaults struct {
+	// @field { @description string: required, not nullable }
+	Plain string `json:"plain"`
+
+	// @field { @description string,omitempty: optional, not nullable }
+	PlainOmit string `json:"plain_omit,omitempty"`
+
+	// @field { @description *string: required, nullable — nil encodes as null }
+	Ptr *string `json:"ptr"`
+
+	// @field { @description *string,omitempty: optional, not nullable — nil is omitted, never null }
+	PtrOmit *string `json:"ptr_omit,omitempty"`
+
+	// @field { @description *string,omitzero: same as omitempty — optional, not nullable }
+	PtrZero *string `json:"ptr_zero,omitzero"`
+
+	// @field { @description []string: required, not nullable by default; add \@nullable true if the handler can return a nil slice }
+	Tags []string `json:"tags"`
+
+	// @field { @description []string,omitempty: optional; nil and empty are both omitted }
+	OptTags []string `json:"opt_tags,omitempty"`
+
+	// @field { @description map,omitempty: optional; nil and empty are both omitted }
+	Labels map[string]string `json:"labels,omitempty"`
+}
 
 // LoginRequest demonstrates @required false on a non-pointer optional input.
 //
