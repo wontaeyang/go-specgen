@@ -13,9 +13,9 @@ import (
 var update = flag.Bool("update", false, "update golden files")
 
 // examples are the packages under examples/. Each one is rendered at every
-// supported OpenAPI version, so version-specific emission (nullability,
-// exclusive bounds, $ref siblings) is covered by the same sources that
-// document the annotations.
+// version that has its own emission behavior, so version-specific emission
+// (nullability, exclusive bounds, $ref siblings) is covered by the same
+// sources that document the annotations.
 var examples = []string{
 	"block",
 	"closure",
@@ -36,15 +36,20 @@ var examples = []string{
 	"tags",
 }
 
-// openAPIVersions are the versions the CLI accepts. The suffix names the
-// golden file: examples/petstore/petstore_31.yaml.
+// openAPIVersions are the versions with golden files. The suffix names the
+// file: examples/petstore/petstore_31.yaml.
+//
+// 3.2 is absent on purpose. The generator has no 3.2-specific emission —
+// SchemaBuilder treats "3.1" and "3.2" identically in every method, and the
+// only thing that differs is the version header — so a 3.2 golden could never
+// hold anything its 3.1 twin does not. Add it here when 3.2 grows emission of
+// its own; until then there is nothing for it to lock.
 var openAPIVersions = []struct {
 	version string
 	suffix  string
 }{
 	{"3.0", "30"},
 	{"3.1", "31"},
-	{"3.2", "32"},
 }
 
 func TestGoldenFiles(t *testing.T) {

@@ -174,9 +174,14 @@ func (g *Generator) inlineObjectSchema(fields []*resolver.Field) *base.SchemaPro
 }
 
 // applyConstraints applies description, format, and every @field constraint
-// to a schema. It is the single source of truth for which keywords exist.
-// Array enums land inside the items schema; everything else lands on the
-// schema itself.
+// to a schema. Array enums land inside the items schema; everything else lands
+// on the schema itself.
+//
+// This is not the only place the constraint set is written out:
+// parameterFieldSchema applies the same keywords separately, because parameter
+// schemas differ in two ways it cannot express by calling here (no
+// description, and array enums typed by the item type). Adding a @field
+// constraint means adding it in both.
 func (g *Generator) applyConstraints(schema *base.Schema, field *resolver.Field) {
 	if field.Description != "" {
 		schema.Description = field.Description
@@ -262,6 +267,9 @@ func (g *Generator) applyConstraints(schema *base.Schema, field *resolver.Field)
 // deliberately differs from fieldSchema: no description (it lives on the
 // parameter), no inline or ref support, and array enums are typed by the
 // item type (so integer items get !!int tags, unlike field schemas).
+//
+// The constraint keywords below repeat applyConstraints on purpose, for those
+// two differences. Adding a @field constraint means adding it in both.
 func (g *Generator) parameterFieldSchema(field *resolver.Field) *base.SchemaProxy {
 	schema := g.schemaBuilder.NewSchema()
 

@@ -77,17 +77,7 @@ func (sb *SchemaBuilder) SetExclusiveMaximum(schema *base.Schema, value float64)
 	}
 }
 
-// Is30 returns true if the target version is OpenAPI 3.0.
-func (sb *SchemaBuilder) Is30() bool {
-	return sb.version == "3.0"
-}
-
 // Is31Plus returns true if the target version is OpenAPI 3.1 or later.
 func (sb *SchemaBuilder) Is31Plus() bool {
 	return sb.version == "3.1" || sb.version == "3.2"
-}
-
-// Version returns the OpenAPI version string.
-func (sb *SchemaBuilder) Version() string {
-	return sb.version
 }
