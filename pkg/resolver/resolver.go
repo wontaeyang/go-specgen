@@ -60,12 +60,12 @@ func isSpecialType(pkgPath, typeName string) bool {
 type Resolver struct {
 	packagePath string
 	pkg         *packages.Package
-	typeCache   map[string]*TypeInfo
+	typeCache   map[string]*legacyTypeInfo
 	comments    *parser.PackageComments // For inline type resolution
 }
 
-// TypeInfo contains resolved type information
-type TypeInfo struct {
+// legacyTypeInfo contains resolved type information
+type legacyTypeInfo struct {
 	OpenAPIType string
 	Format      string
 	IsArray     bool
@@ -111,7 +111,7 @@ func NewResolver(packagePath string, comments *parser.PackageComments) (*Resolve
 	return &Resolver{
 		packagePath: packagePath,
 		pkg:         pkg,
-		typeCache:   make(map[string]*TypeInfo),
+		typeCache:   make(map[string]*legacyTypeInfo),
 		comments:    comments,
 	}, nil
 }
@@ -888,14 +888,14 @@ func applyAnnotationOverrides(resolved *ResolvedField, annotation *parser.Field)
 }
 
 // resolveType resolves a Go type to OpenAPI type information
-func (r *Resolver) resolveType(t types.Type) *TypeInfo {
+func (r *Resolver) resolveType(t types.Type) *legacyTypeInfo {
 	// Check cache first
 	typeStr := t.String()
 	if cached, ok := r.typeCache[typeStr]; ok {
 		return cached
 	}
 
-	info := &TypeInfo{}
+	info := &legacyTypeInfo{}
 
 	// Handle pointer types
 	if ptr, ok := t.(*types.Pointer); ok {

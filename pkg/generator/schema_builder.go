@@ -27,11 +27,6 @@ func (sb *SchemaBuilder) SetType(schema *base.Schema, t string) {
 	schema.Type = []string{t}
 }
 
-// SetTypes sets multiple types for the schema (3.1+ feature).
-func (sb *SchemaBuilder) SetTypes(schema *base.Schema, types []string) {
-	schema.Type = types
-}
-
 // SetNullable handles nullable differently per OpenAPI version:
 // - OpenAPI 3.0: Sets nullable: true
 // - OpenAPI 3.1+: Appends "null" to the type array

@@ -96,11 +96,11 @@ func generate(packagePath, outputPath string, format generator.OutputFormat, ope
 
 	// Step 4: Generate OpenAPI spec
 	fmt.Println("Generating OpenAPI spec...")
-	gen := generator.NewGenerator(openapiVersion)
-	spec, err := gen.Generate(resolved)
+	gen, err := generator.NewGenerator(openapiVersion)
 	if err != nil {
-		return fmt.Errorf("failed to generate spec: %w", err)
+		return fmt.Errorf("failed to create generator: %w", err)
 	}
+	spec := gen.Generate(resolver.ConvertLegacy(resolved))
 
 	// Step 5: Render to output format
 	fmt.Println("Rendering output...")

@@ -67,11 +67,11 @@ func TestFeatureFixtures(t *testing.T) {
 				t.Fatalf("validate: %v", err)
 			}
 
-			gen := generator.NewGenerator(fx.version)
-			spec, err := gen.Generate(resolved)
+			gen, err := generator.NewGenerator(fx.version)
 			if err != nil {
-				t.Fatalf("generate: %v", err)
+				t.Fatalf("generator: %v", err)
 			}
+			spec := gen.Generate(resolver.ConvertLegacy(resolved))
 
 			got, err := gen.Render(spec, fx.format)
 			if err != nil {

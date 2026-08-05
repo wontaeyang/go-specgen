@@ -14,7 +14,7 @@ paths:
                                 type: object
                                 properties:
                                     widget:
-                                        type: string
+                                        $ref: '#/components/schemas/Widget'
                                         description: The boxed widget
                                 required:
                                     - widget

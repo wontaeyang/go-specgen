@@ -64,11 +64,11 @@ func TestGoldenFiles(t *testing.T) {
 			}
 
 			// Step 4: Generate
-			gen := generator.NewGenerator("3.1")
-			spec, err := gen.Generate(resolved)
+			gen, err := generator.NewGenerator("3.1")
 			if err != nil {
-				t.Fatalf("generate: %v", err)
+				t.Fatalf("generator: %v", err)
 			}
+			spec := gen.Generate(resolver.ConvertLegacy(resolved))
 
 			got, err := gen.Render(spec, generator.FormatYAML)
 			if err != nil {
