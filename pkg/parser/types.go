@@ -240,6 +240,9 @@ type Response struct {
 	Status      string
 	Description string
 
+	// Pos is the position of the @response line.
+	Pos token.Position
+
 	// ContentType is already MIME-expanded.
 	ContentType string
 

@@ -351,6 +351,7 @@ func parseEndpoint(fn *funcDecl) (*Endpoint, error) {
 	for _, response := range parsed.RepeatedChildren("@response") {
 		endpoint.addResponse(&Response{
 			Status:      response.Metadata,
+			Pos:         response.Pos,
 			ContentType: ExpandContentType(response.ChildValue("@contentType")),
 			Description: response.ChildValue("@description"),
 			Body:        parseBody(response),

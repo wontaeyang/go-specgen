@@ -90,13 +90,23 @@ func Resolve(pkg *parser.Package) (*Package, error) {
 	}
 
 	for _, endpoint := range pkg.Endpoints {
-		out.Endpoints = append(out.Endpoints, r.resolveEndpoint(endpoint))
+		resolved, err := r.resolveEndpoint(endpoint)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		out.Endpoints = append(out.Endpoints, resolved)
 	}
 
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
 	return out, nil
+}
+
+// errorf builds a positioned error, rendered as "file.go:12:3: message".
+func errorf(pos token.Position, format string, args ...any) *parser.Error {
+	return &parser.Error{Pos: pos, Msg: fmt.Sprintf(format, args...)}
 }
 
 // resolveSchema resolves the Go struct behind a @schema and its fields.
@@ -133,12 +143,12 @@ func (r *resolver) resolveParameterStruct(param *parser.ParameterStruct) ([]*Fie
 func (r *resolver) structType(name string, pos token.Position) (*types.Struct, error) {
 	obj := r.scope.Lookup(name)
 	if obj == nil {
-		return nil, &parser.Error{Pos: pos, Msg: fmt.Sprintf("struct %s not found in package", name)}
+		return nil, errorf(pos, "struct %s not found in package", name)
 	}
 
 	st, ok := obj.Type().Underlying().(*types.Struct)
 	if !ok {
-		return nil, &parser.Error{Pos: pos, Msg: fmt.Sprintf("%s is not a struct", name)}
+		return nil, errorf(pos, "%s is not a struct", name)
 	}
 	return st, nil
 }
@@ -346,7 +356,17 @@ func applyOverrides(field *Field, anno *parser.Field) {
 
 // resolveEndpoint resolves an endpoint into an operation with its parameters
 // and responses already in emission order.
-func (r *resolver) resolveEndpoint(endpoint *parser.Endpoint) *Endpoint {
+func (r *resolver) resolveEndpoint(endpoint *parser.Endpoint) (*Endpoint, error) {
+	params, err := r.resolveParameters(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	responses, err := r.resolveResponses(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Endpoint{
 		Method:      endpoint.Method,
 		Path:        endpoint.Path,
@@ -356,31 +376,33 @@ func (r *resolver) resolveEndpoint(endpoint *parser.Endpoint) *Endpoint {
 		Auth:        endpoint.Auth,
 		Tags:        endpoint.Tags,
 		Deprecated:  endpoint.Deprecated,
-		Parameters:  r.resolveParameters(endpoint),
+		Parameters:  params,
 		Request:     r.resolveRequest(endpoint),
-		Responses:   r.resolveResponses(endpoint),
-	}
+		Responses:   responses,
+	}, nil
 }
 
 // resolveParameters builds the operation parameters in emission order: the
 // referenced parameter structs by kind first, then the inline declarations by
 // kind. Fields are emitted under the kind they were referenced as, which is
 // not necessarily the kind their struct was declared with.
-func (r *resolver) resolveParameters(endpoint *parser.Endpoint) []*Param {
+func (r *resolver) resolveParameters(endpoint *parser.Endpoint) ([]*Param, error) {
 	var params []*Param
 
 	for _, kind := range paramKinds {
 		for _, name := range namedParams(endpoint, kind) {
-			// PINNED: a reference to an unknown parameter struct is dropped
-			// silently. Phase 4 turns it into a validation error.
-			for _, field := range r.groups[name] {
+			fields, err := r.group(name, kind, endpoint.Pos)
+			if err != nil {
+				return nil, err
+			}
+			for _, field := range fields {
 				params = append(params, &Param{In: kind, Field: field})
 			}
 		}
 	}
 
 	if endpoint.Inline == nil {
-		return params
+		return params, nil
 	}
 
 	for _, kind := range paramKinds {
@@ -391,7 +413,18 @@ func (r *resolver) resolveParameters(endpoint *parser.Endpoint) []*Param {
 		}
 	}
 
-	return params
+	return params, nil
+}
+
+// group returns the resolved fields of a referenced parameter struct. A name
+// with no declaration behind it is an error: dropping it would emit an
+// operation quietly missing the parameters the annotation asked for.
+func (r *resolver) group(name, kind string, pos token.Position) ([]*Field, error) {
+	fields, declared := r.groups[name]
+	if !declared {
+		return nil, errorf(pos, "@%s references unknown parameter struct: %s", kind, name)
+	}
+	return fields, nil
 }
 
 // namedParams returns the parameter structs an endpoint references for a kind.
@@ -460,7 +493,7 @@ func (r *resolver) resolveRequest(endpoint *parser.Endpoint) *Request {
 // resolveResponses builds the responses in emission order: the statuses
 // declared in the endpoint comment sorted, then the inline ones sorted, with
 // a declared status winning over an inline one.
-func (r *resolver) resolveResponses(endpoint *parser.Endpoint) []*Response {
+func (r *resolver) resolveResponses(endpoint *parser.Endpoint) ([]*Response, error) {
 	named := slices.Clone(endpoint.Responses)
 	slices.SortFunc(named, func(a, b *parser.Response) int {
 		return strings.Compare(a.Status, b.Status)
@@ -468,11 +501,15 @@ func (r *resolver) resolveResponses(endpoint *parser.Endpoint) []*Response {
 
 	var responses []*Response
 	for _, response := range named {
-		responses = append(responses, r.namedResponse(response))
+		resolved, err := r.namedResponse(response)
+		if err != nil {
+			return nil, err
+		}
+		responses = append(responses, resolved)
 	}
 
 	if endpoint.Inline == nil {
-		return responses
+		return responses, nil
 	}
 
 	inline := slices.Clone(endpoint.Inline.Responses)
@@ -486,25 +523,34 @@ func (r *resolver) resolveResponses(endpoint *parser.Endpoint) []*Response {
 		if taken {
 			continue
 		}
-		responses = append(responses, r.inlineResponse(response))
+		resolved, err := r.inlineResponse(response)
+		if err != nil {
+			return nil, err
+		}
+		responses = append(responses, resolved)
 	}
 
-	return responses
+	return responses, nil
 }
 
 // namedResponse resolves an @response block of the endpoint comment. The
 // content type is defaulted only when the response has a body, so a bodyless
 // response emits no content at all.
-func (r *resolver) namedResponse(response *parser.Response) *Response {
+func (r *resolver) namedResponse(response *parser.Response) (*Response, error) {
+	headers, err := r.headerFields(response.Headers, response.Pos)
+	if err != nil {
+		return nil, err
+	}
+
 	out := &Response{
 		Status:      response.Status,
 		Description: response.Description,
 		ContentType: response.ContentType,
-		Headers:     r.headerFields(response.Headers),
+		Headers:     headers,
 	}
 
 	if response.Body == nil {
-		return out
+		return out, nil
 	}
 	out.ContentType = r.contentType(response.ContentType)
 
@@ -516,13 +562,18 @@ func (r *resolver) namedResponse(response *parser.Response) *Response {
 			Bind: r.bindTarget(response.Body.Bind),
 		}
 	}
-	return out
+	return out, nil
 }
 
 // inlineResponse resolves a response declared in the handler body. The struct
 // is the body, so there is always a content type, and an undescribed response
 // gets a generated description.
-func (r *resolver) inlineResponse(response *parser.InlineResponse) *Response {
+func (r *resolver) inlineResponse(response *parser.InlineResponse) (*Response, error) {
+	headers, err := r.headerFields(response.Headers, response.Pos)
+	if err != nil {
+		return nil, err
+	}
+
 	description := response.Description
 	if description == "" {
 		description = fmt.Sprintf("Response for status %s", response.Status)
@@ -532,24 +583,26 @@ func (r *resolver) inlineResponse(response *parser.InlineResponse) *Response {
 		Status:      response.Status,
 		Description: description,
 		ContentType: r.contentType(response.ContentType),
-		Headers:     r.headerFields(response.Headers),
+		Headers:     headers,
 	}
 	if fields := r.resolveStructFields(response.Struct, response.Fields, "", nil); len(fields) > 0 {
 		out.Content = &Content{Fields: fields, Bind: r.bindTarget(response.Bind)}
 	}
-	return out
+	return out, nil
 }
 
 // headerFields flattens the @header parameter structs a response references
 // into fields, in group-then-field order.
-func (r *resolver) headerFields(refs []string) []*Field {
+func (r *resolver) headerFields(refs []string, pos token.Position) ([]*Field, error) {
 	var fields []*Field
 	for _, ref := range refs {
-		// PINNED: an unknown header reference is dropped silently. Phase 4
-		// turns it into a validation error.
-		fields = append(fields, r.groups[ref]...)
+		group, err := r.group(ref, parser.ParamHeader, pos)
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, group...)
 	}
-	return fields
+	return fields, nil
 }
 
 // contentType applies the content-type defaulting chain: what the annotation

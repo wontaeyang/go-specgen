@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/wontaeyang/go-specgen/pkg/parser"
@@ -419,8 +420,7 @@ func TestResolve_ParameterRules(t *testing.T) {
 		order = append(order, param.Field.Name)
 	}
 
-	// Embedded parameter fields flatten ahead of the embedding struct's own,
-	// and a reference to an unknown struct is dropped silently.
+	// Embedded parameter fields flatten ahead of the embedding struct's own.
 	want := []string{"id", "offset", "q", "limit", "Ignored", "Untagged", "list"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("parameters = %v, want %v", order, want)
@@ -662,6 +662,35 @@ func TestResolve_NonStructSchema(t *testing.T) {
 	_, err = Resolve(parsed)
 	if err == nil {
 		t.Fatal("a @schema on a non-struct alias should fail to resolve")
+	}
+
+	var positioned *parser.Error
+	if !errors.As(err, &positioned) {
+		t.Fatalf("error should carry a position: %v", err)
+	}
+	if positioned.Pos.Filename == "" {
+		t.Errorf("error position is empty: %v", err)
+	}
+}
+
+func TestResolve_UnknownReferences(t *testing.T) {
+	parsed, err := parser.Parse("./testdata/badrefs")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	_, err = Resolve(parsed)
+	if err == nil {
+		t.Fatal("references to undeclared structs should fail to resolve")
+	}
+
+	// Both endpoints report: resolution accumulates per endpoint.
+	message := err.Error()
+	for _, want := range []string{"@query references unknown parameter struct: Ghost",
+		"@header references unknown parameter struct: GhostHeaders"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("error %q should mention %q", message, want)
+		}
 	}
 
 	var positioned *parser.Error

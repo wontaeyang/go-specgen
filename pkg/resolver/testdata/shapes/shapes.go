@@ -124,7 +124,6 @@ type Key struct {
 //	@endpoint GET /shapes/{id} {
 //	  @path Key
 //	  @query Filters
-//	  @query Missing
 //	  @response 200 { @body Shapes }
 //	}
 func List() {}
