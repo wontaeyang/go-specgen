@@ -26,9 +26,8 @@
 - Comparison is byte-for-byte exact match — always update golden files when output changes
 - Any golden change must be intentional and traceable to a named bug fix or feature; review every changed line before committing (a single behavior change now moves up to three files per example)
 
-# Feature fixture tests
-- `cmd/specgen/testdata/*/` covers only what examples cannot reach: JSON rendering, and edge cases that would read as noise in documentation (empty components, block/inline response merge order, the primitive type matrix, inline-body builder behavior)
-- Version-specific output belongs in examples, since every example renders at 3.0, 3.1, and 3.2
-- To run: `go test ./cmd/specgen -run TestFeatureFixtures`; update with `-update` (same review rule as goldens)
-- Version-specific emission (nullability, exclusive bounds, `$ref` siblings) is decided by `pkg/generator/schema_builder.go` and `refSchema` — that logic is ours; libopenapi only serializes it
-- Output formatting is owned by libopenapi + go.yaml.in/yaml/v4 — do not upgrade those pins or replace `doc.Render()` without expecting every golden byte to move
+# Test layout
+- `cmd/specgen` has one spec-output harness, `TestGoldenFiles`. There is no separate fixture harness: if a behavior is worth locking, demonstrate it in an example
+- Version-specific emission (nullability, exclusive bounds, `$ref` siblings) is decided by `pkg/generator/schema_builder.go` and `refSchema`. That logic is ours, and every example covers it at all three versions
+- Don't write tests that assert libopenapi's own behavior (that JSON parses as JSON, that keys are ordered). Output formatting is owned by libopenapi + go.yaml.in/yaml/v4 — do not upgrade those pins or replace `doc.Render()` without expecting every golden byte to move
+- `pkg/parser/testdata` and `pkg/resolver/testdata` hold negative fixtures: packages that must fail to parse or validate, which is why they cannot be examples

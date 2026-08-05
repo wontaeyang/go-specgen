@@ -4,6 +4,17 @@ info:
     description: Demonstrates field type resolution for custom types within schemas.
     version: 1.0.0
 paths:
+    /primitives:
+        get:
+            summary: Get primitive type resolution
+            operationId: getPrimitives
+            responses:
+                "200":
+                    description: ""
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Primitives'
     /user:
         get:
             summary: Get a user
@@ -30,6 +41,90 @@ components:
                 - street
                 - city
                 - country
+        Primitives:
+            type: object
+            properties:
+                int32:
+                    type: integer
+                    format: int32
+                    description: Signed 32-bit
+                int64:
+                    type: integer
+                    format: int64
+                    description: Signed 64-bit
+                uint32:
+                    type: integer
+                    description: Unsigned 32-bit
+                uint64:
+                    type: integer
+                    description: Unsigned 64-bit
+                float32:
+                    type: number
+                    format: float
+                    description: Single precision
+                float64:
+                    type: number
+                    format: double
+                    description: Double precision
+                bool:
+                    type: boolean
+                    description: Flag
+                when:
+                    type: string
+                    format: date-time
+                    description: Timestamp
+                blob:
+                    type: array
+                    items:
+                        type: string
+                    format: byte
+                    description: Raw bytes
+                int64s:
+                    type: array
+                    items:
+                        type: integer
+                    description: Counts
+                float32s:
+                    type: array
+                    items:
+                        type: number
+                    description: Ratios
+                times:
+                    type: array
+                    items:
+                        type: string
+                    description: Timestamps
+                counts_by_key:
+                    type: object
+                    additionalProperties:
+                        type: integer
+                    description: Counts by key
+                flags_by_key:
+                    type: object
+                    additionalProperties:
+                        type: boolean
+                    description: Flags by key
+                times_by_key:
+                    type: object
+                    additionalProperties:
+                        type: string
+                    description: Timestamps by key
+            required:
+                - int32
+                - int64
+                - uint32
+                - uint64
+                - float32
+                - float64
+                - bool
+                - when
+                - blob
+                - int64s
+                - float32s
+                - times
+                - counts_by_key
+                - flags_by_key
+                - times_by_key
         User:
             type: object
             properties:

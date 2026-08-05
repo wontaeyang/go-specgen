@@ -589,6 +589,7 @@ See the [examples/](examples/) directory for complete working examples:
 - Field constraints: read/write visibility, array bounds and uniqueness, numeric bounds, deprecation
 - Enums and nullability overrides
 - Schema references, including nullable and annotated refs
+- APIs defined entirely from in-function structs, with no package-level schemas
 - Security schemes
 - Inline structs
 - Closure handler factories

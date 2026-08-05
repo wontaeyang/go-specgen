@@ -317,6 +317,27 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Error'
+                "409":
+                    description: Response for status 409
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    reason:
+                                        type: string
+                                        description: Why the delete was rejected
+                                    detail:
+                                        allOf:
+                                            - $ref: '#/components/schemas/Error'
+                                        description: Structured error detail
+                                    diagnostics:
+                                        description: Arbitrary diagnostic payload
+                                        example: 42
+                                required:
+                                    - reason
+                                    - detail
+                                    - diagnostics
     /users:
         get:
             parameters:

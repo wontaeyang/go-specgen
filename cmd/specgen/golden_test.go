@@ -25,6 +25,7 @@ var examples = []string{
 	"overrides",
 	"generics",
 	"inline",
+	"inlineonly",
 	"nested",
 	"parameters",
 	"petstore",

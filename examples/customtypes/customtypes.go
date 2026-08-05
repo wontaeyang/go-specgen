@@ -6,7 +6,10 @@
 //	}
 package customtypes
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 // =============================================================================
 // SUPPORTED: Custom Primitive Types
@@ -111,6 +114,65 @@ type User struct {
 }
 
 // =============================================================================
+// Built-in Type Resolution
+// =============================================================================
+
+// Primitives documents how each built-in Go type resolves, including the
+// integer and float formats, and the same types inside slices and maps.
+// Unsigned integers carry no format.
+//
+// @schema
+type Primitives struct {
+	// @field { @description Signed 32-bit }
+	Int32 int32 `json:"int32"` // -> integer, format: int32
+
+	// @field { @description Signed 64-bit }
+	Int64 int64 `json:"int64"` // -> integer, format: int64
+
+	// @field { @description Unsigned 32-bit }
+	Uint32 uint32 `json:"uint32"` // -> integer, no format
+
+	// @field { @description Unsigned 64-bit }
+	Uint64 uint64 `json:"uint64"` // -> integer, no format
+
+	// @field { @description Single precision }
+	Float32 float32 `json:"float32"` // -> number, format: float
+
+	// @field { @description Double precision }
+	Float64 float64 `json:"float64"` // -> number, format: double
+
+	// @field { @description Flag }
+	Bool bool `json:"bool"` // -> boolean
+
+	// @field { @description Timestamp }
+	When time.Time `json:"when"` // -> string, format: date-time
+
+	// @field { @description Raw bytes }
+	Blob []byte `json:"blob"` // -> format: byte
+
+	// Slices and maps carry the element resolution into items and
+	// additionalProperties.
+
+	// @field { @description Counts }
+	Int64s []int64 `json:"int64s"`
+
+	// @field { @description Ratios }
+	Float32s []float32 `json:"float32s"`
+
+	// @field { @description Timestamps }
+	Times []time.Time `json:"times"`
+
+	// @field { @description Counts by key }
+	CountsByKey map[string]int64 `json:"counts_by_key"`
+
+	// @field { @description Flags by key }
+	FlagsByKey map[string]bool `json:"flags_by_key"`
+
+	// @field { @description Timestamps by key }
+	TimesByKey map[string]time.Time `json:"times_by_key"`
+}
+
+// =============================================================================
 // Endpoint
 // =============================================================================
 
@@ -124,3 +186,14 @@ type User struct {
 //	  }
 //	}
 func GetUser(w http.ResponseWriter, r *http.Request) {}
+
+// GetPrimitives returns the built-in type matrix.
+//
+//	@endpoint GET /primitives {
+//	  @operationID getPrimitives
+//	  @summary Get primitive type resolution
+//	  @response 200 {
+//	    @body Primitives
+//	  }
+//	}
+func GetPrimitives(w http.ResponseWriter, r *http.Request) {}

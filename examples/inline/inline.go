@@ -285,7 +285,10 @@ func ListOrders(w http.ResponseWriter, r *http.Request) {
 	_ = list
 }
 
-// DeleteOrder demonstrates inline path with explicit responses in endpoint block
+// DeleteOrder mixes both response styles on one endpoint: statuses that
+// reference shared schemas are declared in the block, while a status with a
+// one-off body is declared inline. Block declarations are emitted first,
+// followed by the inline ones, each sorted by status.
 //
 //	@endpoint DELETE /orders/{id} {
 //	  @response 204 {
@@ -304,7 +307,34 @@ func DeleteOrder(w http.ResponseWriter, r *http.Request) {
 		ID string `path:"id"`
 	}
 
+	// @response 409
+	var conflict struct {
+		// @field { @description Why the delete was rejected }
+		Reason string `json:"reason"`
+
+		// A field inside an inline struct may reference a package-level
+		// @schema; it is emitted as a $ref like anywhere else.
+		// @field { @description Structured error detail }
+		Detail Error `json:"detail"`
+
+		// An any-typed field accepts any JSON value, and still carries its
+		// annotations.
+		// @field { @description Arbitrary diagnostic payload @example 42 }
+		Diagnostics any `json:"diagnostics"`
+	}
+
+	// A status declared in the @endpoint block wins over an inline declaration
+	// of the same status, so this struct is not emitted: 404 above already
+	// references the Error schema.
+	// @response 404
+	var ignored struct {
+		// @field { @description Never emitted }
+		Ignored string `json:"ignored"`
+	}
+
 	_ = path
+	_ = conflict
+	_ = ignored
 }
 
 // SearchUsers demonstrates multiple inline @query structs in one handler.

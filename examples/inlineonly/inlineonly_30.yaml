@@ -1,0 +1,65 @@
+openapi: 3.0.3
+info:
+    title: Inline Only Example
+    description: |-
+        Demonstrates an API defined entirely from in-function structs.
+        No package-level schema is declared, so nothing is registered under
+        components and every body is emitted inline at its use site.
+    version: 1.0.0
+paths:
+    /echo:
+        post:
+            summary: Echo a message
+            operationId: echo
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                message:
+                                    type: string
+                                    minLength: 1
+                                    description: Message to echo
+                            required:
+                                - message
+                required: true
+            responses:
+                "200":
+                    description: Response for status 200
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        description: The echoed message
+                                required:
+                                    - message
+    /health:
+        get:
+            summary: Health check
+            operationId: health
+            responses:
+                "200":
+                    description: Response for status 200
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    status:
+                                        type: string
+                                        enum:
+                                            - ok
+                                            - degraded
+                                        description: Service status
+                                    uptime_seconds:
+                                        type: integer
+                                        minimum: 0
+                                        description: Seconds since start
+                                required:
+                                    - status
+                                    - uptime_seconds
+components: {}
