@@ -361,7 +361,9 @@ func (v *Validator) validateEndpoint(endpoint *resolver.ResolvedEndpoint, pkg *r
 	v.validateParameterConflicts(path, endpoint)
 
 	// Validate tags reference defined API-level tags
-	if len(pkg.API.Tags) > 0 && len(endpoint.Tags) > 0 {
+	// pkg.API can be nil when @api is missing; Validate records that error but
+	// still validates endpoints
+	if pkg.API != nil && len(pkg.API.Tags) > 0 && len(endpoint.Tags) > 0 {
 		v.validateEndpointTags(path, endpoint.Tags, pkg.API.Tags)
 	}
 }

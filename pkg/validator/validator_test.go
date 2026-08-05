@@ -80,6 +80,36 @@ func TestValidator_Validate_MissingAPI(t *testing.T) {
 	}
 }
 
+func TestValidator_Validate_MissingAPIWithEndpoints(t *testing.T) {
+	pkg := &resolver.ResolvedPackage{
+		PackageName: "test",
+		API:         nil,
+		Schemas:     map[string]*resolver.ResolvedSchema{},
+		Parameters:  map[string]*resolver.ResolvedParameter{},
+		Endpoints: []*resolver.ResolvedEndpoint{
+			{
+				Method: "GET",
+				Path:   "/users",
+				Responses: map[string]*resolver.ResolvedResponse{
+					"200": {
+						Description: "Success",
+					},
+				},
+			},
+		},
+	}
+
+	v := NewValidator()
+	err := v.Validate(pkg)
+	if err == nil {
+		t.Fatal("Validate() should error when API is missing")
+	}
+
+	if !strings.Contains(err.Error(), "@api") {
+		t.Errorf("Error should mention @api, got: %v", err)
+	}
+}
+
 func TestValidator_ValidateAPI_MissingRequired(t *testing.T) {
 	tests := []struct {
 		name    string
