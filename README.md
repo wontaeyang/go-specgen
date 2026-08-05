@@ -186,14 +186,18 @@ Go types map to OpenAPI types automatically:
 | Go Type | OpenAPI Type | Format |
 |---------|--------------|--------|
 | `string` | `string` | - |
-| `int`, `int32` | `integer` | `int32` |
+| `int`, `int8`, `int16` | `integer` | - |
+| `int32` | `integer` | `int32` |
 | `int64` | `integer` | `int64` |
+| `uint`, `uint8` … `uint64` | `integer` | - (OpenAPI has no unsigned formats) |
 | `float32` | `number` | `float` |
 | `float64` | `number` | `double` |
 | `bool` | `boolean` | - |
 | `time.Time` | `string` | `date-time` |
 | `url.URL` | `string` | `uri` |
-| `[]T` | `array` | items: T |
+| `[]byte` | `string` | `byte` (base64, not an array) |
+| `[]T` | `array` | items: T, keeping T's format |
+| `map[string]T` | `object` | additionalProperties: T, keeping T's format |
 | `*T` | nullable T | - |
 | `any` | `{}` | any JSON value |
 

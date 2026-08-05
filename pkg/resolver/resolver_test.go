@@ -247,17 +247,20 @@ func TestResolve_TypeShapes(t *testing.T) {
 		{field: "flag", want: TypeInfo{OpenAPI: "boolean"}},
 		{field: "created", want: TypeInfo{OpenAPI: "string"}, format: "date-time"},
 		{field: "link", want: TypeInfo{OpenAPI: "string"}, format: "uri"},
-		// []byte is base64 text, carried as a format on the array.
-		{field: "blob", want: TypeInfo{IsArray: true, Items: "string"}, format: "byte"},
+		// []byte is base64 text: a string with the byte format, not an array.
+		{field: "blob", want: TypeInfo{OpenAPI: "string"}, format: "byte"},
 		{field: "names", want: TypeInfo{IsArray: true, Items: "string"}},
 		{field: "fixed", want: TypeInfo{IsArray: true, Items: "integer"}},
+		// An element format is kept, so it can qualify items.
+		{field: "stamps", want: TypeInfo{IsArray: true, Items: "string", ItemsFormat: "date-time"}},
 		// Items keeps the element's scalar type alongside the reference,
 		// because parameter schemas emit that instead of the reference.
 		{field: "addresses", want: TypeInfo{IsArray: true, Items: "string", ItemsRef: "Address"}},
 		{field: "ptr_addrs", want: TypeInfo{IsArray: true, Items: "string", ItemsRef: "Address"}},
 		{field: "book", want: TypeInfo{IsMap: true, MapValueRef: "Address"}},
 		{field: "counts", want: TypeInfo{IsMap: true, MapValue: "integer"}},
-		{field: "times", want: TypeInfo{IsMap: true, MapValue: "string"}},
+		// ... and likewise on additionalProperties.
+		{field: "times", want: TypeInfo{IsMap: true, MapValue: "string", MapValueFormat: "date-time"}},
 		{field: "anything", want: TypeInfo{IsAny: true}},
 		{field: "home", want: TypeInfo{Ref: "Address"}},
 		{field: "optional", want: TypeInfo{Ref: "Address"}},

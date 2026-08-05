@@ -71,10 +71,9 @@ func (r *resolver) typeInfo(t types.Type) (info TypeInfo, format string, nullabl
 	switch u := t.(type) {
 	case *types.Slice:
 		if isByteSlice(u) {
-			// encoding/json writes []byte as base64 text, but the emitted
-			// shape keeps the array with the format hung off the field
-			// (locked by cmd/specgen/testdata/primitivearrays).
-			return TypeInfo{IsArray: true, Items: "string"}, "byte", nullable
+			// encoding/json writes []byte as base64 text, so it is a string
+			// with the byte format, not an array of anything.
+			return TypeInfo{OpenAPI: "string"}, "byte", nullable
 		}
 		return r.arrayInfo(u.Elem()), "", nullable
 
@@ -112,10 +111,12 @@ func (r *resolver) typeInfo(t types.Type) (info TypeInfo, format string, nullabl
 // keeps the element's scalar type even when ItemsRef is set, because parameter
 // schemas ignore references and emit the scalar instead.
 func (r *resolver) arrayInfo(elem types.Type) TypeInfo {
+	openAPI, format := scalarShape(elem)
 	return TypeInfo{
-		IsArray:  true,
-		Items:    scalarType(elem),
-		ItemsRef: r.schemaRef(elem),
+		IsArray:     true,
+		Items:       openAPI,
+		ItemsFormat: format,
+		ItemsRef:    r.schemaRef(elem),
 	}
 }
 
@@ -126,11 +127,11 @@ func (r *resolver) mapInfo(value types.Type) TypeInfo {
 		return TypeInfo{IsMap: true, MapValueRef: ref}
 	}
 
-	scalar := scalarType(value)
-	if scalar == "" {
-		scalar = "string"
+	openAPI, format := scalarShape(value)
+	if openAPI == "" {
+		openAPI = "string"
 	}
-	return TypeInfo{IsMap: true, MapValue: scalar}
+	return TypeInfo{IsMap: true, MapValue: openAPI, MapValueFormat: format}
 }
 
 // schemaRef returns the name of the @schema type t refers to, or "" when it
@@ -157,10 +158,10 @@ func (r *resolver) schemaRef(t types.Type) string {
 	return ""
 }
 
-// scalarType is the OpenAPI type a Go type collapses to where only a type name
-// fits: array items and map values. Structs collapse to "string", the
+// scalarShape is the OpenAPI type and format a Go type collapses to where only
+// a scalar fits: array items and map values. Structs collapse to "string", the
 // long-standing fallback for anything that is not a primitive.
-func scalarType(t types.Type) string {
+func scalarShape(t types.Type) (openAPI, format string) {
 	if ptr, ok := t.(*types.Pointer); ok {
 		t = ptr.Elem()
 	}
@@ -168,25 +169,24 @@ func scalarType(t types.Type) string {
 	switch u := t.(type) {
 	case *types.Slice:
 		if isByteSlice(u) {
-			return "string"
+			return "string", "byte"
 		}
-		return "array"
+		return "array", ""
 	case *types.Array:
-		return "array"
+		return "array", ""
 	case *types.Alias:
-		return scalarType(u.Rhs())
+		return scalarShape(u.Rhs())
 	case *types.Named:
 		if special, ok := specialFor(u); ok {
-			return special.openAPI
+			return special.openAPI, special.format
 		}
-		return scalarType(u.Underlying())
+		return scalarShape(u.Underlying())
 	case *types.Basic:
-		openAPI, _ := basicType(u)
-		return openAPI
+		return basicType(u)
 	case *types.Interface:
-		return ""
+		return "", ""
 	}
-	return "string"
+	return "string", ""
 }
 
 // basicType maps a Go basic type to its OpenAPI type and format. Unsigned

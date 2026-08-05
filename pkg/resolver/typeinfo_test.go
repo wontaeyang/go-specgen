@@ -153,26 +153,32 @@ func TestTypeRef(t *testing.T) {
 	}
 }
 
-func TestScalarType(t *testing.T) {
+func TestScalarShape(t *testing.T) {
 	tests := []struct {
-		name string
-		typ  types.Type
-		want string
+		name       string
+		typ        types.Type
+		want       string
+		wantFormat string
 	}{
-		{"string", stringType, "string"},
-		{"pointer", types.NewPointer(types.Typ[types.Int]), "integer"},
-		{"slice", types.NewSlice(stringType), "array"},
+		{"string", stringType, "string", ""},
+		{"pointer", types.NewPointer(types.Typ[types.Int]), "integer", ""},
+		{"slice", types.NewSlice(stringType), "array", ""},
 		// []byte is base64 text rather than an array of numbers.
-		{"byte slice", types.NewSlice(types.Typ[types.Byte]), "string"},
-		{"map", types.NewMap(stringType, stringType), "string"},
-		{"struct", structType, "string"},
-		{"interface", types.NewInterfaceType(nil, nil), ""},
+		{"byte slice", types.NewSlice(types.Typ[types.Byte]), "string", "byte"},
+		{"map", types.NewMap(stringType, stringType), "string", ""},
+		{"struct", structType, "string", ""},
+		{"interface", types.NewInterfaceType(nil, nil), "", ""},
+		// A format qualifies the element wherever a scalar fits, so a
+		// collection of these keeps it on items or additionalProperties.
+		{"int64", types.Typ[types.Int64], "integer", "int64"},
+		{"float32", types.Typ[types.Float32], "number", "float"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := scalarType(tt.typ); got != tt.want {
-				t.Errorf("scalarType(%s) = %q, want %q", tt.typ, got, tt.want)
+			got, gotFormat := scalarShape(tt.typ)
+			if got != tt.want || gotFormat != tt.wantFormat {
+				t.Errorf("scalarShape(%s) = %q/%q, want %q/%q", tt.typ, got, gotFormat, tt.want, tt.wantFormat)
 			}
 		})
 	}

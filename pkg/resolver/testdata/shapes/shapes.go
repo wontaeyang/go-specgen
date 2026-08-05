@@ -39,6 +39,7 @@ type Shapes struct {
 	Blob      []byte               `json:"blob"`
 	Names     []string             `json:"names"`
 	Fixed     [3]int               `json:"fixed"`
+	Stamps    []time.Time          `json:"stamps"`
 	Addresses []Address            `json:"addresses"`
 	PtrAddrs  []*Address           `json:"ptr_addrs"`
 	Book      map[string]Address   `json:"book"`

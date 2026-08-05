@@ -51,6 +51,7 @@ func (g *Generator) fieldSchema(field *resolver.Field) *base.SchemaProxy {
 		} else {
 			itemSchema := g.schemaBuilder.NewSchema()
 			g.schemaBuilder.SetType(itemSchema, ti.Items)
+			itemSchema.Format = ti.ItemsFormat
 			items = base.CreateSchemaProxy(itemSchema)
 		}
 		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{A: items}
@@ -67,6 +68,7 @@ func (g *Generator) fieldSchema(field *resolver.Field) *base.SchemaProxy {
 		} else {
 			valueSchema := g.schemaBuilder.NewSchema()
 			g.schemaBuilder.SetType(valueSchema, ti.MapValue)
+			valueSchema.Format = ti.MapValueFormat
 			values = base.CreateSchemaProxy(valueSchema)
 		}
 		schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{A: values}
@@ -267,6 +269,7 @@ func (g *Generator) parameterFieldSchema(field *resolver.Field) *base.SchemaProx
 		g.schemaBuilder.SetType(schema, "array")
 		itemSchema := g.schemaBuilder.NewSchema()
 		g.schemaBuilder.SetType(itemSchema, field.Type.Items)
+		itemSchema.Format = field.Type.ItemsFormat
 		if len(field.Enum) > 0 {
 			itemSchema.Enum = enumNodes(field.Enum, field.Type.Items)
 		}

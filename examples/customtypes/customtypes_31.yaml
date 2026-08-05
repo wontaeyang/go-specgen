@@ -74,30 +74,32 @@ components:
                     format: date-time
                     description: Timestamp
                 blob:
-                    type: array
-                    items:
-                        type: string
+                    type: string
                     format: byte
                     description: Raw bytes
                 int64s:
                     type: array
                     items:
                         type: integer
+                        format: int64
                     description: Counts
                 float32s:
                     type: array
                     items:
                         type: number
+                        format: float
                     description: Ratios
                 times:
                     type: array
                     items:
                         type: string
+                        format: date-time
                     description: Timestamps
                 counts_by_key:
                     type: object
                     additionalProperties:
                         type: integer
+                        format: int64
                     description: Counts by key
                 flags_by_key:
                     type: object
@@ -108,6 +110,7 @@ components:
                     type: object
                     additionalProperties:
                         type: string
+                        format: date-time
                     description: Timestamps by key
             required:
                 - int32

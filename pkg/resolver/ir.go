@@ -94,14 +94,18 @@ type TypeInfo struct {
 	// Items is the OpenAPI type of array items when they are not a schema
 	// ref. Kept even when ItemsRef is set because parameter schemas ignore
 	// refs and emit this instead (legacy behavior).
-	Items    string
-	ItemsRef string // schema name when items reference a named schema
+	Items string
+	// ItemsFormat qualifies Items, so []time.Time keeps date-time on its
+	// items rather than losing it.
+	ItemsFormat string
+	ItemsRef    string // schema name when items reference a named schema
 
 	IsMap bool
 	// MapValue mirrors Items for map values, including the legacy "string"
 	// fallback for unresolvable value types.
-	MapValue    string
-	MapValueRef string
+	MapValue       string
+	MapValueFormat string
+	MapValueRef    string
 
 	// Ref is the schema name when the field itself is a named schema.
 	Ref string
