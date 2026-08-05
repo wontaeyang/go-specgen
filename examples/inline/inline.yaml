@@ -14,9 +14,7 @@ paths:
                   description: Filter by status
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - pending
                         - processing
@@ -27,9 +25,7 @@ paths:
                   description: Maximum results
                   required: false
                   schema:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     maximum: 100
                     minimum: 1
                     default: 20
@@ -38,9 +34,7 @@ paths:
                   description: Pagination cursor
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
             responses:
                 "200":
                     description: Response for status 200
@@ -66,9 +60,7 @@ paths:
                                                 - total_cents
                                         description: List of orders
                                     next_cursor:
-                                        type:
-                                            - string
-                                            - "null"
+                                        type: string
                                         description: Next page cursor
                                     has_more:
                                         type: boolean
@@ -124,6 +116,7 @@ paths:
                                         - city
                                         - postal_code
                                         - country
+                                    description: Shipping address
                             required:
                                 - customer_id
                                 - items
@@ -217,9 +210,7 @@ paths:
                   description: Whether to include metadata
                   required: false
                   schema:
-                    type:
-                        - boolean
-                        - "null"
+                    type: boolean
             responses:
                 "200":
                     description: Response for status 200
@@ -307,9 +298,7 @@ paths:
                   description: Maximum results
                   required: false
                   schema:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     maximum: 100
                     minimum: 1
                 - name: offset
@@ -317,18 +306,14 @@ paths:
                   description: Page offset
                   required: false
                   schema:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     minimum: 0
                 - name: status
                   in: query
                   description: Filter by status
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - active
                         - inactive
@@ -423,9 +408,7 @@ paths:
                   description: Maximum results
                   required: false
                   schema:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     maximum: 100
                     minimum: 1
                     default: 20
@@ -434,9 +417,7 @@ paths:
                   description: Page offset
                   required: false
                   schema:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     minimum: 0
                     default: 0
                 - name: status
@@ -444,9 +425,7 @@ paths:
                   description: Filter by status
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - active
                         - inactive
@@ -456,9 +435,7 @@ paths:
                   description: Substring match on email
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
             responses:
                 "200":
                     description: Response for status 200

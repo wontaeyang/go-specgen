@@ -275,95 +275,70 @@ func TestResolver_ResolveParameter(t *testing.T) {
 	}
 }
 
-func TestResolveParamRequired(t *testing.T) {
+func TestOmitsWhenEmpty(t *testing.T) {
+	structType := types.NewStruct(nil, nil)
+
 	tests := []struct {
 		name      string
 		tag       string
-		paramType string
+		fieldType types.Type
 		want      bool
 	}{
-		// Path parameters are always required
 		{
-			name:      "path param without any flags",
-			tag:       `path:"id"`,
-			paramType: "path",
-			want:      true,
-		},
-		{
-			name:      "path param with omitempty is still required",
-			tag:       `path:"id,omitempty"`,
-			paramType: "path",
-			want:      true,
-		},
-
-		// Query parameters are optional by default
-		{
-			name:      "query param without flags is optional",
-			tag:       `query:"q"`,
-			paramType: "query",
-			want:      false,
-		},
-		{
-			name:      "query param with required flag is required",
-			tag:       `query:"q,required"`,
-			paramType: "query",
-			want:      true,
-		},
-		{
-			name:      "query param with omitempty is optional",
-			tag:       `query:"q,omitempty"`,
-			paramType: "query",
-			want:      false,
-		},
-
-		// Header parameters are optional by default
-		{
-			name:      "header param without flags is optional",
-			tag:       `header:"X-Request-ID"`,
-			paramType: "header",
-			want:      false,
-		},
-		{
-			name:      "header param with required flag is required",
-			tag:       `header:"X-Request-ID,required"`,
-			paramType: "header",
-			want:      true,
-		},
-
-		// Cookie parameters are optional by default
-		{
-			name:      "cookie param without flags is optional",
-			tag:       `cookie:"session_id"`,
-			paramType: "cookie",
-			want:      false,
-		},
-		{
-			name:      "cookie param with required flag is required",
-			tag:       `cookie:"session_id,required"`,
-			paramType: "cookie",
-			want:      true,
-		},
-
-		// Default (schema/json) uses omitempty logic
-		{
-			name:      "json field without omitempty is required",
+			name:      "no omit options keeps field",
 			tag:       `json:"name"`,
-			paramType: "json",
+			fieldType: types.Typ[types.String],
+			want:      false,
+		},
+		{
+			name:      "omitempty on string omits",
+			tag:       `json:"name,omitempty"`,
+			fieldType: types.Typ[types.String],
 			want:      true,
 		},
 		{
-			name:      "json field with omitempty is optional",
-			tag:       `json:"name,omitempty"`,
-			paramType: "json",
+			name:      "omitempty on struct never omits",
+			tag:       `json:"created_at,omitempty"`,
+			fieldType: structType,
 			want:      false,
+		},
+		{
+			name:      "omitzero on struct omits",
+			tag:       `json:"created_at,omitzero"`,
+			fieldType: structType,
+			want:      true,
+		},
+		{
+			name:      "omitempty on pointer to struct omits",
+			tag:       `json:"created_at,omitempty"`,
+			fieldType: types.NewPointer(structType),
+			want:      true,
+		},
+		{
+			name:      "omitempty on slice omits",
+			tag:       `json:"tags,omitempty"`,
+			fieldType: types.NewSlice(types.Typ[types.String]),
+			want:      true,
+		},
+		{
+			name:      "omitempty on non-zero-length array never omits",
+			tag:       `json:"coords,omitempty"`,
+			fieldType: types.NewArray(types.Typ[types.Float64], 2),
+			want:      false,
+		},
+		{
+			name:      "omitempty on zero-length array omits",
+			tag:       `json:"empty,omitempty"`,
+			fieldType: types.NewArray(types.Typ[types.Float64], 0),
+			want:      true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := resolveParamRequired(tt.tag, tt.paramType)
+			got := omitsWhenEmpty(tt.tag, tt.fieldType)
 			if got != tt.want {
-				t.Errorf("resolveParamRequired(%q, %q) = %v, want %v", tt.tag, tt.paramType, got, tt.want)
+				t.Errorf("omitsWhenEmpty(%q, %s) = %v, want %v", tt.tag, tt.fieldType, got, tt.want)
 			}
 		})
 	}
@@ -869,9 +844,21 @@ func TestResolver_PointerImpliesNotRequired(t *testing.T) {
 		{"value", true, false},           // string: required, not nullable
 		{"value_ptr", true, true},        // *string: required, nullable
 		{"value_omit", false, false},     // string,omitempty: not required, not nullable
-		{"value_ptr_omit", false, true},  // *string,omitempty: not required, nullable
+		{"value_ptr_omit", false, false}, // *string,omitempty: omitted when nil, never null on the wire
+		{"value_zero", false, false},     // string,omitzero: not required, not nullable
+		{"value_ptr_zero", false, false}, // *string,omitzero: omitted when nil, never null on the wire
 		{"value_struct", true, false},    // User: required, not nullable
 		{"value_struct_ptr", true, true}, // *User: required, nullable
+
+		// Slices and maps follow the same tag-based rule. Note: a nil slice/map
+		// without omitempty marshals as null, but non-nullable is the deliberate
+		// default (most handlers guarantee non-nil); use @nullable true to opt in.
+		{"value_slice", true, false},           // []string: required, not nullable (documented gap)
+		{"value_slice_omit", false, false},     // []string,omitempty: optional, never null on the wire
+		{"value_slice_ptr", true, true},        // *[]string: required, nullable
+		{"value_slice_ptr_omit", false, false}, // *[]string,omitempty: optional, nil ptr omitted
+		{"value_map", true, false},             // map: required, not nullable (documented gap)
+		{"value_map_omit", false, false},       // map,omitempty: optional, never null on the wire
 	}
 
 	for _, tt := range tests {
@@ -1047,10 +1034,10 @@ func TestResolver_NestedEmbedFlattening(t *testing.T) {
 		}
 	}
 
-	// Verify nullable fields from Auditable (pointer types)
+	// Verify pointer+omitempty fields from Auditable are optional but not nullable
 	if f, ok := fields["deleted_at"]; ok {
-		if !f.Nullable {
-			t.Error("deleted_at should be nullable (pointer type)")
+		if f.Nullable {
+			t.Error("deleted_at should not be nullable (omitempty omits nil instead of encoding null)")
 		}
 		if f.Required {
 			t.Error("deleted_at should not be required (omitempty)")

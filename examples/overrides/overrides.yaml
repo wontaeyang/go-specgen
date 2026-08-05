@@ -128,13 +128,82 @@ components:
                 - id
                 - date_of_birth
                 - bio
+        TagDefaults:
+            type: object
+            properties:
+                plain:
+                    type: string
+                    description: 'string: required, not nullable'
+                plain_omit:
+                    type: string
+                    description: 'string,omitempty: optional, not nullable'
+                ptr:
+                    type:
+                        - string
+                        - "null"
+                    description: '*string: required, nullable — nil encodes as null'
+                ptr_omit:
+                    type: string
+                    description: '*string,omitempty: optional, not nullable — nil is omitted, never null'
+                ptr_zero:
+                    type: string
+                    description: '*string,omitzero: same as omitempty — optional, not nullable'
+                tags:
+                    type: array
+                    items:
+                        type: string
+                    description: '[]string: required, not nullable by default; add @nullable true if the handler can return a nil slice'
+                opt_tags:
+                    type: array
+                    items:
+                        type: string
+                    description: '[]string,omitempty: optional; nil and empty are both omitted'
+                labels:
+                    type: object
+                    additionalProperties:
+                        type: string
+                    description: 'map,omitempty: optional; nil and empty are both omitted'
+                audit:
+                    type: object
+                    properties:
+                        by:
+                            type: string
+                    required:
+                        - by
+                    description: 'struct,omitempty: still required — a non-pointer struct is never empty, so omitempty has no effect'
+                audit_zero:
+                    type: object
+                    properties:
+                        by:
+                            type: string
+                    required:
+                        - by
+                    description: 'struct,omitzero: optional — omitzero omits the zero struct'
+                created_at:
+                    type: string
+                    format: date-time
+                    description: 'time.Time,omitempty: still required — time.Time is a struct, so omitempty has no effect'
+                updated_at:
+                    type: string
+                    format: date-time
+                    description: 'time.Time,omitzero: optional — omitzero omits the zero time'
+            required:
+                - plain
+                - ptr
+                - tags
+                - audit
+                - created_at
         UpdateUserPatch:
             type: object
             properties:
                 email:
-                    type: string
+                    type:
+                        - string
+                        - "null"
                     format: email
-                    description: Replace email; omit to leave unchanged
+                    description: Replace email; omit to leave unchanged, null to clear
                 display_name:
-                    type: string
-                    description: Replace display name; omit to leave unchanged
+                    type:
+                        - string
+                        - "null"
+                    description: Replace display name; omit to leave unchanged, null to clear

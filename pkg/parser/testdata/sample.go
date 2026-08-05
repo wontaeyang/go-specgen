@@ -65,8 +65,20 @@ type FieldRequiredTest struct {
 	ValuePtr       *string `json:"value_ptr"`
 	ValueOmit      string  `json:"value_omit,omitempty"`
 	ValuePtrOmit   *string `json:"value_ptr_omit,omitempty"`
+	ValueZero      string  `json:"value_zero,omitzero"`
+	ValuePtrZero   *string `json:"value_ptr_zero,omitzero"`
 	ValueStruct    User    `json:"value_struct"`
 	ValueStructPtr *User   `json:"value_struct_ptr"`
+
+	ValueStructOmit User `json:"value_struct_omit,omitempty"`
+	ValueStructZero User `json:"value_struct_zero,omitzero"`
+
+	ValueSlice        []string          `json:"value_slice"`
+	ValueSliceOmit    []string          `json:"value_slice_omit,omitempty"`
+	ValueSlicePtr     *[]string         `json:"value_slice_ptr"`
+	ValueSlicePtrOmit *[]string         `json:"value_slice_ptr_omit,omitempty"`
+	ValueMap          map[string]string `json:"value_map"`
+	ValueMapOmit      map[string]string `json:"value_map_omit,omitempty"`
 }
 
 // BaseModel is a common base struct for embedding

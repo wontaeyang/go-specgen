@@ -7,7 +7,10 @@
 //	}
 package overrides
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 // -----------------------------------------------------------------------------
 // Default behavior (no overrides) — for comparison
@@ -18,11 +21,78 @@ import "net/http"
 //   string                           | true     | false
 //   string,omitempty                 | false    | false
 //   *string                          | true     | true
-//   *string,omitempty                | false    | true
+//   *string,omitempty                | false    | false
+//   *string,omitzero                 | false    | false
+//   []string                         | true     | false
+//   []string,omitempty               | false    | false
+//   map[string]string,omitempty      | false    | false
+//   struct{...},omitempty            | true     | false
+//   struct{...},omitzero             | false    | false
+//   time.Time,omitempty              | true     | false
+//   time.Time,omitzero               | false    | false
+//
+// Defaults are outcome-oriented: they describe what encoding/json actually
+// puts on the wire, not what the tag text says.
+//
+// A pointer with omitempty is optional but NOT nullable: encoding/json omits
+// a nil pointer instead of encoding null, so null never appears on the wire.
+//
+// omitempty only drops values encoding/json considers empty (zero-length
+// strings/slices/maps, zero numbers, nil pointers), and a non-pointer struct
+// is never empty — so struct,omitempty is always emitted and stays required.
+// This applies to any struct-kinded type: time.Time is a struct, so
+// time.Time,omitempty still emits the zero time. omitzero (Go 1.24+) omits
+// the zero value of any type, including structs, so it always makes the
+// field optional.
 //
 // `omitempty` only affects JSON encoding (response side), so using it to mark
 // a request field as optional conflates two concerns. The @required override
 // lets you mark a request field optional without touching the json tag.
+
+// TagDefaults exercises every row of the table above with no overrides, so the
+// generated output is golden-verified documentation of the defaults.
+// @schema
+type TagDefaults struct {
+	// @field { @description string: required, not nullable }
+	Plain string `json:"plain"`
+
+	// @field { @description string,omitempty: optional, not nullable }
+	PlainOmit string `json:"plain_omit,omitempty"`
+
+	// @field { @description *string: required, nullable — nil encodes as null }
+	Ptr *string `json:"ptr"`
+
+	// @field { @description *string,omitempty: optional, not nullable — nil is omitted, never null }
+	PtrOmit *string `json:"ptr_omit,omitempty"`
+
+	// @field { @description *string,omitzero: same as omitempty — optional, not nullable }
+	PtrZero *string `json:"ptr_zero,omitzero"`
+
+	// @field { @description []string: required, not nullable by default; add \@nullable true if the handler can return a nil slice }
+	Tags []string `json:"tags"`
+
+	// @field { @description []string,omitempty: optional; nil and empty are both omitted }
+	OptTags []string `json:"opt_tags,omitempty"`
+
+	// @field { @description map,omitempty: optional; nil and empty are both omitted }
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// @field { @description struct,omitempty: still required — a non-pointer struct is never empty, so omitempty has no effect }
+	Audit struct {
+		By string `json:"by"`
+	} `json:"audit,omitempty"`
+
+	// @field { @description struct,omitzero: optional — omitzero omits the zero struct }
+	AuditZero struct {
+		By string `json:"by"`
+	} `json:"audit_zero,omitzero"`
+
+	// @field { @description time.Time,omitempty: still required — time.Time is a struct, so omitempty has no effect }
+	CreatedAt time.Time `json:"created_at,omitempty"`
+
+	// @field { @description time.Time,omitzero: optional — omitzero omits the zero time }
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
+}
 
 // LoginRequest demonstrates @required false on a non-pointer optional input.
 //
@@ -54,17 +124,18 @@ type CreatePromo struct {
 	Percent *int `json:"percent"`
 }
 
-// UpdateUserPatch demonstrates @nullable false on a pointer field.
+// UpdateUserPatch demonstrates @nullable true on a pointer+omitempty field.
 //
-// PATCH semantics: omit the field to leave it unchanged. Pointer is used to
-// detect presence, but explicit `null` is rejected — clients must either
-// send a real value or omit the key entirely.
+// PATCH semantics: omit the field to leave it unchanged, send explicit `null`
+// to clear the value. Pointer+omitempty defaults to non-nullable (nil is
+// omitted, never encoded as null), so accepting null in requests requires
+// opting back in with @nullable true.
 // @schema
 type UpdateUserPatch struct {
-	// @field { @description Replace email; omit to leave unchanged @format email @nullable false @required false }
+	// @field { @description Replace email; omit to leave unchanged, null to clear @format email @nullable true }
 	Email *string `json:"email,omitempty"`
 
-	// @field { @description Replace display name; omit to leave unchanged @nullable false @required false }
+	// @field { @description Replace display name; omit to leave unchanged, null to clear @nullable true }
 	DisplayName *string `json:"display_name,omitempty"`
 }
 
@@ -113,7 +184,7 @@ func Login(w http.ResponseWriter, r *http.Request) {}
 //	}
 func CreatePromoCode(w http.ResponseWriter, r *http.Request) {}
 
-// PatchUser updates user fields (demonstrates @nullable false on pointer)
+// PatchUser updates user fields (demonstrates @nullable true on pointer+omitempty)
 //
 //	@endpoint PATCH /users/{id} {
 //	  @operationID patchUser

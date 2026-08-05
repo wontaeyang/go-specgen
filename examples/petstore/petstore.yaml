@@ -32,9 +32,7 @@ paths:
                   description: Maximum results to return
                   required: false
                   schema:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     maximum: 100
                     minimum: 1
                     default: 20
@@ -43,9 +41,7 @@ paths:
                   description: Offset for pagination
                   required: false
                   schema:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     minimum: 0
                     default: 0
                 - name: status
@@ -53,9 +49,7 @@ paths:
                   description: Filter by status
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - available
                         - pending
@@ -65,9 +59,7 @@ paths:
                   description: Filter by category
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - dog
                         - cat
@@ -251,9 +243,7 @@ components:
                         - other
                     description: Pet category
                 status:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - available
                         - pending
@@ -265,9 +255,7 @@ components:
                         type: string
                     description: Pet tags for searching
                 age:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     maximum: 100
                     minimum: 0
                     description: Pet age in years
@@ -330,9 +318,7 @@ components:
                         type: string
                     description: Pet tags for searching
                 age:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     maximum: 100
                     minimum: 0
                     description: Pet age in years
@@ -357,16 +343,12 @@ components:
             type: object
             properties:
                 name:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     maxLength: 100
                     minLength: 1
                     description: Pet name
                 category:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - dog
                         - cat
@@ -375,9 +357,7 @@ components:
                         - other
                     description: Pet category
                 status:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - available
                         - pending
@@ -389,9 +369,7 @@ components:
                         type: string
                     description: Pet tags for searching
                 age:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     maximum: 100
                     minimum: 0
                     description: Pet age in years

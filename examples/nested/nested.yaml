@@ -122,9 +122,7 @@ components:
                     type: string
                     description: Employee title
                 manager:
-                    oneOf:
-                        - $ref: '#/components/schemas/Employee'
-                        - type: "null"
+                    $ref: '#/components/schemas/Employee'
                     description: Employee's manager (another Employee)
                 direct_reports:
                     type: array
@@ -288,9 +286,7 @@ components:
                     $ref: '#/components/schemas/Address'
                     description: User's home address
                 work_address:
-                    oneOf:
-                        - $ref: '#/components/schemas/Address'
-                        - type: "null"
+                    $ref: '#/components/schemas/Address'
                     description: User's work address (optional)
             required:
                 - id

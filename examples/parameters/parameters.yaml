@@ -49,9 +49,7 @@ paths:
                   description: User's preferred theme
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - light
                         - dark
@@ -61,9 +59,7 @@ paths:
                   description: User's preferred language
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     pattern: ^[a-z]{2}(-[A-Z]{2})?$
             responses:
                 "200":
@@ -91,9 +87,7 @@ paths:
                   description: Maximum results
                   required: false
                   schema:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     maximum: 100
                     minimum: 1
                     default: 20
@@ -102,9 +96,7 @@ paths:
                   description: Page offset
                   required: false
                   schema:
-                    type:
-                        - integer
-                        - "null"
+                    type: integer
                     minimum: 0
                     default: 0
                 - name: sort
@@ -112,9 +104,7 @@ paths:
                   description: Sort order
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - asc
                         - desc
@@ -132,17 +122,13 @@ paths:
                   description: Include deleted items
                   required: false
                   schema:
-                    type:
-                        - boolean
-                        - "null"
+                    type: boolean
                 - name: status
                   in: query
                   description: Filter by status
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - active
                         - inactive
@@ -152,9 +138,7 @@ paths:
                   description: Filter by type
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     enum:
                         - a
                         - b
@@ -164,9 +148,7 @@ paths:
                   description: Filter by creation date (ISO 8601)
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     format: date
                 - name: ids
                   in: query
@@ -243,18 +225,14 @@ paths:
                   description: API version to use
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
                     default: v1
                 - name: X-Correlation-ID
                   in: header
                   description: Correlation ID for distributed tracing
                   required: false
                   schema:
-                    type:
-                        - string
-                        - "null"
+                    type: string
             responses:
                 "200":
                     description: Resource found

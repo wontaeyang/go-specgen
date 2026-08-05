@@ -214,7 +214,28 @@ type Tags []string      // -> type: array, items: string
 | `string` | Yes | No |
 | `*string` | Yes | Yes |
 | `string` with `omitempty` | No | No |
-| `*string` with `omitempty` | No | Yes |
+| `*string` with `omitempty` | No | No |
+| struct (e.g. `time.Time`) with `omitempty` | Yes | No |
+| struct with `omitzero` | No | No |
+
+These defaults are outcome-oriented: they describe what `encoding/json`
+actually puts on the wire, not what the tag text says.
+
+A pointer alone makes a field nullable because `encoding/json` marshals a nil
+pointer as `null`. Adding `omitempty` changes that: a nil pointer is omitted
+entirely, so the field can never appear as `null` on the wire — it is optional,
+not nullable. Use `@nullable true` to opt back in (e.g., a PATCH API that
+accepts explicit `null` to clear a value).
+
+`omitempty` can only drop values `encoding/json` considers empty — `false`,
+`0`, `""`, a nil pointer or interface, and an empty string, slice, map, or
+array. A non-pointer struct is never empty, so `time.Time` with `omitempty`
+is still emitted on every response and stays required.
+
+`omitzero` (Go 1.24+) omits the zero value of any type, so it always makes a
+field optional — including structs, where it omits the zero value `omitempty`
+cannot. On pointers it behaves like `omitempty`: the nil pointer is omitted
+rather than encoded as `null`, so the field is optional and non-nullable.
 
 **Parameter fields** — determined by parameter type:
 
@@ -245,8 +266,9 @@ type CreatePromo struct {
 
 // @schema
 type UpdateUserPatch struct {
-    // PATCH semantics: pointer detects presence, but explicit null is rejected
-    // @field { @description Replace email; omit to leave unchanged @nullable false @required false }
+    // PATCH semantics: omit to leave unchanged, send null to clear.
+    // Pointer+omitempty defaults to non-nullable, so opt back in explicitly
+    // @field { @description Replace email; omit to leave unchanged, null to clear @nullable true }
     Email *string `json:"email,omitempty"`
 }
 ```
