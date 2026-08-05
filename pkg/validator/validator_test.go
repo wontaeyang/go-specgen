@@ -419,6 +419,25 @@ func TestValidate_EndpointRules(t *testing.T) {
 	}
 }
 
+func TestValidate_DuplicateRoutes(t *testing.T) {
+	pkg := validPackage()
+	duplicate := *pkg.Endpoints[0]
+	pkg.Endpoints = append(pkg.Endpoints, &duplicate)
+
+	assertReported(t, Validate(pkg), "@endpoint[GET /users/{id}]", "duplicate operation")
+}
+
+func TestValidate_SamePathDifferentMethods(t *testing.T) {
+	pkg := validPackage()
+	other := *pkg.Endpoints[0]
+	other.Method = "DELETE"
+	pkg.Endpoints = append(pkg.Endpoints, &other)
+
+	if err := Validate(pkg); err != nil {
+		t.Errorf("one path may carry several methods: %v", err)
+	}
+}
+
 func TestValidate_EndpointTags(t *testing.T) {
 	pkg := validPackage()
 	pkg.API.Tags = []*parser.Tag{{Name: "users"}}

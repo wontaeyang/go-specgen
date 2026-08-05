@@ -89,6 +89,8 @@ func Validate(pkg *resolver.Package) error {
 		v.validateSchema(schema)
 	}
 
+	v.validateUniqueRoutes(pkg.Endpoints)
+
 	for _, endpoint := range pkg.Endpoints {
 		v.validateEndpoint(endpoint, pkg.API)
 	}
@@ -257,10 +259,29 @@ func emittedType(field *resolver.Field) string {
 	return field.Type.OpenAPI
 }
 
+// validateUniqueRoutes checks that no two operations share a method and path.
+// A document has one operation per method per path, so a repeat would silently
+// drop everything but the last one.
+func (v *validator) validateUniqueRoutes(endpoints []*resolver.Endpoint) {
+	seen := make(map[string]bool, len(endpoints))
+	for _, endpoint := range endpoints {
+		route := endpoint.Method + " " + endpoint.Path
+		if seen[route] {
+			v.add(endpointPath(endpoint), "duplicate operation: %s is declared by more than one endpoint", route)
+		}
+		seen[route] = true
+	}
+}
+
+// endpointPath is the annotation path an endpoint's errors are reported at.
+func endpointPath(endpoint *resolver.Endpoint) string {
+	return fmt.Sprintf("@endpoint[%s %s]", endpoint.Method, endpoint.Path)
+}
+
 // validateEndpoint checks one operation: its method and path, the parameters
 // against the path variables, and its request and responses.
 func (v *validator) validateEndpoint(endpoint *resolver.Endpoint, api *parser.APIInfo) {
-	path := fmt.Sprintf("@endpoint[%s %s]", endpoint.Method, endpoint.Path)
+	path := endpointPath(endpoint)
 
 	if !validMethods[endpoint.Method] {
 		v.add(path, "invalid HTTP method: %s", endpoint.Method)
