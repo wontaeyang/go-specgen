@@ -90,6 +90,7 @@ func Validate(pkg *resolver.Package) error {
 	}
 
 	v.validateUniqueRoutes(pkg.Endpoints)
+	v.validateUniqueOperationIDs(pkg.Endpoints)
 
 	for _, endpoint := range pkg.Endpoints {
 		v.validateEndpoint(endpoint, pkg.API)
@@ -270,6 +271,25 @@ func (v *validator) validateUniqueRoutes(endpoints []*resolver.Endpoint) {
 			v.add(endpointPath(endpoint), "duplicate operation: %s is declared by more than one endpoint", route)
 		}
 		seen[route] = true
+	}
+}
+
+// validateUniqueOperationIDs checks that no two operations share an
+// operationId. OpenAPI requires it to be unique across the document, because
+// client generators use it to name the generated method.
+//
+// An endpoint without an @operationID is unnamed, not named "": those are not
+// compared against each other.
+func (v *validator) validateUniqueOperationIDs(endpoints []*resolver.Endpoint) {
+	seen := make(map[string]bool, len(endpoints))
+	for _, endpoint := range endpoints {
+		if endpoint.OperationID == "" {
+			continue
+		}
+		if seen[endpoint.OperationID] {
+			v.add(endpointPath(endpoint), "duplicate @operationID: %s is used by more than one endpoint", endpoint.OperationID)
+		}
+		seen[endpoint.OperationID] = true
 	}
 }
 

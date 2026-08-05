@@ -438,6 +438,28 @@ func TestValidate_SamePathDifferentMethods(t *testing.T) {
 	}
 }
 
+func TestValidate_DuplicateOperationIDs(t *testing.T) {
+	pkg := validPackage()
+	pkg.Endpoints[0].OperationID = "getUser"
+
+	other := *pkg.Endpoints[0]
+	other.Path = "/people/{id}"
+	pkg.Endpoints = append(pkg.Endpoints, &other)
+
+	assertReported(t, Validate(pkg), "@endpoint[GET /people/{id}]", "duplicate @operationID: getUser")
+}
+
+func TestValidate_MissingOperationIDsAreNotDuplicates(t *testing.T) {
+	pkg := validPackage()
+	other := *pkg.Endpoints[0]
+	other.Path = "/people/{id}"
+	pkg.Endpoints = append(pkg.Endpoints, &other)
+
+	if err := Validate(pkg); err != nil {
+		t.Errorf("endpoints without an @operationID are unnamed, not duplicates: %v", err)
+	}
+}
+
 func TestValidate_EndpointTags(t *testing.T) {
 	pkg := validPackage()
 	pkg.API.Tags = []*parser.Tag{{Name: "users"}}
