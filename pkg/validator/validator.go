@@ -422,6 +422,12 @@ func (v *validator) validateParameterField(path string, param *resolver.Param) {
 
 	switch param.In {
 	case parser.ParamPath:
+		// The resolver makes every path parameter required; only an explicit
+		// @required false can undo it, and OpenAPI forbids that — the
+		// parameter is part of the URL, so there is no request without it.
+		if !param.Field.Required {
+			v.add(fieldPath, "path parameters are always required: remove the @required false override")
+		}
 		if param.Field.Nullable {
 			v.add(fieldPath, "path parameters cannot be nullable (no pointer types)")
 		}

@@ -286,12 +286,17 @@ func TestValidate_ParameterRules(t *testing.T) {
 	}{
 		{
 			name:    "nullable path parameter",
-			param:   &resolver.Param{In: parser.ParamPath, Field: &resolver.Field{Name: "id", GoName: "ID", Nullable: true, Type: resolver.TypeInfo{OpenAPI: "string"}}},
+			param:   &resolver.Param{In: parser.ParamPath, Field: &resolver.Field{Name: "id", GoName: "ID", Required: true, Nullable: true, Type: resolver.TypeInfo{OpenAPI: "string"}}},
 			keyword: "cannot be nullable",
 		},
 		{
+			name:    "optional path parameter",
+			param:   &resolver.Param{In: parser.ParamPath, Field: &resolver.Field{Name: "id", GoName: "ID", Type: resolver.TypeInfo{OpenAPI: "string"}}},
+			keyword: "always required",
+		},
+		{
 			name:    "array path parameter",
-			param:   &resolver.Param{In: parser.ParamPath, Field: &resolver.Field{Name: "id", GoName: "ID", Type: array}},
+			param:   &resolver.Param{In: parser.ParamPath, Field: &resolver.Field{Name: "id", GoName: "ID", Required: true, Type: array}},
 			keyword: "path parameters cannot be arrays",
 		},
 		{
