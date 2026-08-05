@@ -1,1294 +1,680 @@
 package resolver
 
 import (
-	"go/types"
+	"errors"
+	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/wontaeyang/go-specgen/pkg/parser"
 )
 
-func TestNewResolver(t *testing.T) {
-	resolver, err := NewResolver("../parser/testdata", nil)
+// These tests go through the real pipeline — parser.Parse then Resolve — over
+// two fixture packages: pkg/parser/testdata/valid, which carries the
+// annotation surface, and testdata/shapes, which carries the Go type shapes.
+
+const (
+	validPkg  = "../parser/testdata/valid"
+	shapesPkg = "./testdata/shapes"
+)
+
+func resolvePackage(t *testing.T, dir string) *Package {
+	t.Helper()
+
+	parsed, err := parser.Parse(dir)
 	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
+		t.Fatalf("parse %s: %v", dir, err)
+	}
+	pkg, err := Resolve(parsed)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", dir, err)
+	}
+	return pkg
+}
+
+func schema(t *testing.T, pkg *Package, name string) *Schema {
+	t.Helper()
+
+	for _, s := range pkg.Schemas {
+		if s.Name == name {
+			return s
+		}
+	}
+	t.Fatalf("schema %s not resolved", name)
+	return nil
+}
+
+func field(t *testing.T, s *Schema, name string) *Field {
+	t.Helper()
+
+	for _, f := range s.Fields {
+		if f.Name == name {
+			return f
+		}
+	}
+	t.Fatalf("schema %s has no field %q", s.Name, name)
+	return nil
+}
+
+func endpoint(t *testing.T, pkg *Package, method, path string) *Endpoint {
+	t.Helper()
+
+	for _, e := range pkg.Endpoints {
+		if e.Method == method && e.Path == path {
+			return e
+		}
+	}
+	t.Fatalf("endpoint %s %s not resolved", method, path)
+	return nil
+}
+
+func fieldNames(fields []*Field) []string {
+	names := make([]string, len(fields))
+	for i, f := range fields {
+		names[i] = f.Name
+	}
+	return names
+}
+
+func TestResolve_SchemasSortedByName(t *testing.T) {
+	pkg := resolvePackage(t, validPkg)
+
+	var names []string
+	for _, s := range pkg.Schemas {
+		names = append(names, s.Name)
 	}
 
-	if resolver == nil {
-		t.Fatal("NewResolver() returned nil")
+	want := []string{
+		"EmbeddedPtrTest", "EmbeddedTest", "Envelope", "Error", "Escapes",
+		"FieldRequiredTest", "LegacyUser", "NestedEmbedTest", "Pair",
+		"Response", "StringUserPair", "User", "UserResponse",
 	}
-
-	if resolver.pkg == nil {
-		t.Error("Resolver.pkg is nil")
-	}
-
-	if resolver.typeCache == nil {
-		t.Error("Resolver.typeCache is nil")
+	if !reflect.DeepEqual(names, want) {
+		t.Errorf("schema names = %v, want %v", names, want)
 	}
 }
 
-func TestNewResolver_InvalidPath(t *testing.T) {
-	_, err := NewResolver("./nonexistent", nil)
+func TestResolve_SchemaMetadata(t *testing.T) {
+	pkg := resolvePackage(t, validPkg)
+
+	user := schema(t, pkg, "User")
+	if user.Description != "A user of the system.\nSecond line of the schema description." {
+		t.Errorf("User description = %q", user.Description)
+	}
+	if user.Deprecated {
+		t.Error("User should not be deprecated")
+	}
+
+	if legacy := schema(t, pkg, "LegacyUser"); !legacy.Deprecated {
+		t.Error("LegacyUser should be deprecated")
+	}
+}
+
+// TestResolve_RequiredAndNullable is the outcome table from
+// examples/overrides/overrides.go: required and nullable describe what
+// encoding/json puts on the wire, not what the tag text says.
+func TestResolve_RequiredAndNullable(t *testing.T) {
+	pkg := resolvePackage(t, validPkg)
+	s := schema(t, pkg, "FieldRequiredTest")
+
+	tests := []struct {
+		field    string
+		required bool
+		nullable bool
+	}{
+		{"value", true, false},
+		{"value_ptr", true, true},
+		{"value_omit", false, false},
+		{"value_ptr_omit", false, false},
+		{"value_zero", false, false},
+		{"value_ptr_zero", false, false},
+		{"value_struct", true, false},
+		{"value_struct_ptr", true, true},
+		// A non-pointer struct is never empty, so omitempty cannot drop it.
+		{"value_struct_omit", true, false},
+		{"value_struct_zero", false, false},
+		{"value_slice", true, false},
+		{"value_slice_omit", false, false},
+		{"value_slice_ptr", true, true},
+		{"value_slice_ptr_omit", false, false},
+		{"value_map", true, false},
+		{"value_map_omit", false, false},
+	}
+
+	for _, tt := range tests {
+		f := field(t, s, tt.field)
+		if f.Required != tt.required {
+			t.Errorf("%s: required = %v, want %v", tt.field, f.Required, tt.required)
+		}
+		if f.Nullable != tt.nullable {
+			t.Errorf("%s: nullable = %v, want %v", tt.field, f.Nullable, tt.nullable)
+		}
+	}
+}
+
+func TestResolve_AnnotationOverrides(t *testing.T) {
+	pkg := resolvePackage(t, validPkg)
+	user := schema(t, pkg, "User")
+
+	// @required false and @nullable true override what the tag and the
+	// pointer implied.
+	nickname := field(t, user, "nickname")
+	if nickname.Required || !nickname.Nullable {
+		t.Errorf("nickname: required = %v, nullable = %v; want false, true", nickname.Required, nickname.Nullable)
+	}
+
+	id := field(t, user, "id")
+	if id.Description != "User ID" || id.Format != "uuid" || !id.ReadOnly {
+		t.Errorf("id = %+v; want description, format uuid, readOnly", id)
+	}
+
+	role := field(t, user, "role")
+	if !reflect.DeepEqual(role.Enum, []string{"admin", "user", "guest"}) {
+		t.Errorf("role enum = %v", role.Enum)
+	}
+	if role.Default != "user" {
+		t.Errorf("role default = %q", role.Default)
+	}
+
+	age := field(t, user, "age")
+	if age.Minimum == nil || *age.Minimum != 0 || age.Maximum == nil || *age.Maximum != 130 {
+		t.Errorf("age bounds = %v..%v", age.Minimum, age.Maximum)
+	}
+	if age.ExclusiveMinimum == nil || *age.ExclusiveMinimum != 0.5 {
+		t.Errorf("age exclusiveMinimum = %v", age.ExclusiveMinimum)
+	}
+
+	labels := field(t, user, "labels")
+	if labels.MinItems == nil || *labels.MinItems != 1 || !labels.UniqueItems {
+		t.Errorf("labels constraints = %+v", labels.Constraints)
+	}
+
+	// A field with no @field annotation still resolves from the Go type.
+	internal := field(t, user, "internal")
+	if internal.Description != "" || !internal.Required {
+		t.Errorf("internal = %+v; want no description and required", internal)
+	}
+}
+
+func TestResolve_EmbeddedFlattening(t *testing.T) {
+	pkg := resolvePackage(t, validPkg)
+
+	tests := []struct {
+		schema string
+		want   []string
+	}{
+		{"EmbeddedTest", []string{"id", "created_at", "updated_at", "name"}},
+		{"EmbeddedPtrTest", []string{"id", "created_at", "updated_at", "label"}},
+		{"NestedEmbedTest", []string{"id", "created_at", "updated_at", "deleted_at", "deleted_by", "status"}},
+	}
+
+	for _, tt := range tests {
+		got := fieldNames(schema(t, pkg, tt.schema).Fields)
+		if !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("%s fields = %v, want %v", tt.schema, got, tt.want)
+		}
+	}
+}
+
+func TestResolve_EmbeddedCycleTerminates(t *testing.T) {
+	pkg := resolvePackage(t, shapesPkg)
+
+	// Ring embeds Loop, which embeds *Ring again. The second visit stops.
+	got := fieldNames(schema(t, pkg, "Ring").Fields)
+	want := []string{"name", "label", "name"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Ring fields = %v, want %v", got, want)
+	}
+}
+
+func TestResolve_TypeShapes(t *testing.T) {
+	pkg := resolvePackage(t, shapesPkg)
+	s := schema(t, pkg, "Shapes")
+
+	tests := []struct {
+		field  string
+		want   TypeInfo
+		format string
+	}{
+		{field: "text", want: TypeInfo{OpenAPI: "string"}},
+		{field: "count", want: TypeInfo{OpenAPI: "integer"}, format: "int32"},
+		{field: "big", want: TypeInfo{OpenAPI: "integer"}, format: "int64"},
+		{field: "ratio", want: TypeInfo{OpenAPI: "number"}, format: "float"},
+		{field: "precise", want: TypeInfo{OpenAPI: "number"}, format: "double"},
+		// OpenAPI has no unsigned formats.
+		{field: "unsigned", want: TypeInfo{OpenAPI: "integer"}},
+		{field: "flag", want: TypeInfo{OpenAPI: "boolean"}},
+		{field: "created", want: TypeInfo{OpenAPI: "string"}, format: "date-time"},
+		{field: "link", want: TypeInfo{OpenAPI: "string"}, format: "uri"},
+		// []byte is base64 text, carried as a format on the array.
+		{field: "blob", want: TypeInfo{IsArray: true, Items: "string"}, format: "byte"},
+		{field: "names", want: TypeInfo{IsArray: true, Items: "string"}},
+		{field: "fixed", want: TypeInfo{IsArray: true, Items: "integer"}},
+		// Items keeps the element's scalar type alongside the reference,
+		// because parameter schemas emit that instead of the reference.
+		{field: "addresses", want: TypeInfo{IsArray: true, Items: "string", ItemsRef: "Address"}},
+		{field: "ptr_addrs", want: TypeInfo{IsArray: true, Items: "string", ItemsRef: "Address"}},
+		{field: "book", want: TypeInfo{IsMap: true, MapValueRef: "Address"}},
+		{field: "counts", want: TypeInfo{IsMap: true, MapValue: "integer"}},
+		{field: "times", want: TypeInfo{IsMap: true, MapValue: "string"}},
+		{field: "anything", want: TypeInfo{IsAny: true}},
+		{field: "home", want: TypeInfo{Ref: "Address"}},
+		{field: "optional", want: TypeInfo{Ref: "Address"}},
+		// A struct with no @schema has nothing to reference.
+		{field: "stranger", want: TypeInfo{OpenAPI: "string"}},
+	}
+
+	for _, tt := range tests {
+		f := field(t, s, tt.field)
+		if f.Type != tt.want {
+			t.Errorf("%s: type = %+v, want %+v", tt.field, f.Type, tt.want)
+		}
+		if f.Format != tt.format {
+			t.Errorf("%s: format = %q, want %q", tt.field, f.Format, tt.format)
+		}
+	}
+}
+
+func TestResolve_FieldNamesFromTags(t *testing.T) {
+	pkg := resolvePackage(t, shapesPkg)
+
+	got := fieldNames(schema(t, pkg, "Shapes").Fields)
+	for _, name := range []string{"from_xml", "NoTag"} {
+		if !slices.Contains(got, name) {
+			t.Errorf("fields %v should contain %q", got, name)
+		}
+	}
+	// json:"-" is skipped, and so are unexported fields.
+	for _, name := range []string{"Skipped", "hidden"} {
+		if slices.Contains(got, name) {
+			t.Errorf("fields %v should not contain %q", got, name)
+		}
+	}
+}
+
+func TestResolve_UnresolvedStructs(t *testing.T) {
+	pkg := resolvePackage(t, shapesPkg)
+	s := schema(t, pkg, "Shapes")
+
+	// Reported through the type itself and through a slice of it.
+	for _, name := range []string{"stranger", "strangers"} {
+		if got := field(t, s, name).Unresolved; got != "Untagged" {
+			t.Errorf("%s: unresolved = %q, want Untagged", name, got)
+		}
+	}
+	// A @schema struct, a special type and a primitive are all resolvable.
+	for _, name := range []string{"home", "created", "text", "book"} {
+		if got := field(t, s, name).Unresolved; got != "" {
+			t.Errorf("%s: unresolved = %q, want empty", name, got)
+		}
+	}
+}
+
+func TestResolve_AnonymousStructs(t *testing.T) {
+	pkg := resolvePackage(t, shapesPkg)
+	s := schema(t, pkg, "Nested")
+
+	inline := field(t, s, "inline")
+	if inline.Type != (TypeInfo{OpenAPI: "object"}) || len(inline.Inline) != 1 {
+		t.Fatalf("inline = %+v with %d fields", inline.Type, len(inline.Inline))
+	}
+	if inline.Description != "An inline object" {
+		t.Errorf("inline description = %q", inline.Description)
+	}
+
+	items := field(t, s, "items")
+	if items.Type != (TypeInfo{IsArray: true, Items: "object"}) || len(items.ItemsInline) != 1 {
+		t.Errorf("items = %+v with %d item fields", items.Type, len(items.ItemsInline))
+	}
+
+	values := field(t, s, "values")
+	if values.Type != (TypeInfo{IsMap: true, MapValue: "string"}) || len(values.MapValueInline) != 1 {
+		t.Errorf("values = %+v with %d value fields", values.Type, len(values.MapValueInline))
+	}
+
+	// An empty anonymous struct emits as a bare object.
+	empty := field(t, s, "empty")
+	if empty.Type != (TypeInfo{OpenAPI: "object"}) || len(empty.Inline) != 0 {
+		t.Errorf("empty = %+v with %d fields", empty.Type, len(empty.Inline))
+	}
+}
+
+// TestResolve_AnonymousStructsDropAnnotations pins today's behavior: a @field
+// annotation inside an anonymous struct is not applied. Phase 4 flips this and
+// regenerates examples/inline/inline.yaml.
+func TestResolve_AnonymousStructsDropAnnotations(t *testing.T) {
+	pkg := resolvePackage(t, shapesPkg)
+
+	nested := field(t, schema(t, pkg, "Nested"), "inline")
+	if len(nested.Inline) != 1 {
+		t.Fatalf("expected one inlined field, got %d", len(nested.Inline))
+	}
+	if description := nested.Inline[0].Description; description != "" {
+		t.Errorf("nested field description = %q, want it dropped", description)
+	}
+}
+
+func TestResolve_Generics(t *testing.T) {
+	pkg := resolvePackage(t, validPkg)
+
+	// Templates stay in the list, flagged, so the generator can skip them.
+	for _, name := range []string{"Response", "Pair"} {
+		if !schema(t, pkg, name).IsGeneric {
+			t.Errorf("%s should be marked generic", name)
+		}
+	}
+
+	// An alias instantiating a generic resolves to the substituted fields.
+	userResponse := schema(t, pkg, "UserResponse")
+	if userResponse.IsGeneric {
+		t.Error("UserResponse should not be marked generic")
+	}
+	if got := field(t, userResponse, "data").Type; got != (TypeInfo{Ref: "User"}) {
+		t.Errorf("UserResponse.data type = %+v, want a User reference", got)
+	}
+	if got := field(t, userResponse, "success").Type; got != (TypeInfo{OpenAPI: "boolean"}) {
+		t.Errorf("UserResponse.success type = %+v", got)
+	}
+
+	// Two type arguments substitute independently.
+	pair := schema(t, pkg, "StringUserPair")
+	if got := field(t, pair, "key").Type; got != (TypeInfo{OpenAPI: "string"}) {
+		t.Errorf("StringUserPair.key type = %+v", got)
+	}
+	if got := field(t, pair, "value").Type; got != (TypeInfo{Ref: "User"}) {
+		t.Errorf("StringUserPair.value type = %+v", got)
+	}
+
+	// A field typed with the template itself is not referenceable.
+	if got := field(t, schema(t, pkg, "Response"), "data").Type; got != (TypeInfo{OpenAPI: "string"}) {
+		t.Errorf("Response.data type = %+v, want the type-parameter fallback", got)
+	}
+}
+
+func TestResolve_ParameterOrder(t *testing.T) {
+	pkg := resolvePackage(t, validPkg)
+	e := endpoint(t, pkg, "GET", "/users/{id}")
+
+	var got []string
+	for _, param := range e.Parameters {
+		got = append(got, param.In+":"+param.Field.Name)
+	}
+	want := []string{
+		"path:id", "query:limit", "query:cursor",
+		"header:X-RateLimit-Limit", "cookie:session",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parameters = %v, want %v", got, want)
+	}
+}
+
+func TestResolve_ParameterRules(t *testing.T) {
+	pkg := resolvePackage(t, shapesPkg)
+	e := endpoint(t, pkg, "GET", "/shapes/{id}")
+
+	byName := make(map[string]*Param, len(e.Parameters))
+	var order []string
+	for _, param := range e.Parameters {
+		byName[param.Field.Name] = param
+		order = append(order, param.Field.Name)
+	}
+
+	// Embedded parameter fields flatten ahead of the embedding struct's own,
+	// and a reference to an unknown struct is dropped silently.
+	want := []string{"id", "offset", "q", "limit", "Ignored", "Untagged", "list"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("parameters = %v, want %v", order, want)
+	}
+
+	// A path parameter is always required; the rest opt in with ",required".
+	if !byName["id"].Field.Required {
+		t.Error("path parameter id should be required")
+	}
+	if !byName["q"].Field.Required {
+		t.Error("query parameter q should be required via the tag option")
+	}
+	if byName["limit"].Field.Required {
+		t.Error("query parameter limit should be optional")
+	}
+
+	// A pointer parameter is not nullable: a query string cannot carry null.
+	if byName["limit"].Field.Nullable {
+		t.Error("query parameter limit should not be nullable")
+	}
+}
+
+func TestResolve_InlineDeclarations(t *testing.T) {
+	pkg := resolvePackage(t, validPkg)
+	e := endpoint(t, pkg, "POST", "/orders")
+
+	var got []string
+	for _, param := range e.Parameters {
+		got = append(got, param.In+":"+param.Field.Name)
+	}
+	// Several inline @query structs in one handler flatten into one list, in
+	// declaration order.
+	want := []string{
+		"path:id", "query:status", "query:limit",
+		"header:X-Idempotency-Key", "cookie:session",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parameters = %v, want %v", got, want)
+	}
+
+	if e.Request == nil || e.Request.Content == nil {
+		t.Fatal("inline request not resolved")
+	}
+	if e.Request.ContentType != "application/xml" {
+		t.Errorf("request content type = %q", e.Request.ContentType)
+	}
+	if !e.Request.Required {
+		t.Error("request bodies are always required")
+	}
+	if names := fieldNames(e.Request.Content.Fields); !reflect.DeepEqual(names, []string{"customer_id"}) {
+		t.Errorf("request fields = %v", names)
+	}
+	if e.Request.Content.Bind == nil || e.Request.Content.Bind.Wrapper == nil {
+		t.Error("request @bind should resolve to the Envelope schema")
+	}
+}
+
+func TestResolve_InlineDeclarationsInClosure(t *testing.T) {
+	pkg := resolvePackage(t, validPkg)
+	e := endpoint(t, pkg, "POST", "/greet")
+
+	if e.Request == nil || e.Request.Content == nil {
+		t.Fatal("request declared in the factory not resolved")
+	}
+	if len(e.Responses) != 1 || e.Responses[0].Content == nil {
+		t.Fatalf("response declared in the returned closure not resolved: %+v", e.Responses)
+	}
+}
+
+func TestResolve_ResponseOrder(t *testing.T) {
+	pkg := resolvePackage(t, validPkg)
+
+	var got []string
+	for _, response := range endpoint(t, pkg, "POST", "/orders").Responses {
+		got = append(got, response.Status)
+	}
+	if want := []string{"200", "201", "4XX", "default"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("statuses = %v, want %v", got, want)
+	}
+}
+
+func TestResolve_ResponseMerge(t *testing.T) {
+	pkg := resolvePackage(t, shapesPkg)
+	e := endpoint(t, pkg, "GET", "/mixed")
+
+	var got []string
+	for _, response := range e.Responses {
+		got = append(got, response.Status)
+	}
+	// Declared statuses sorted first, then the inline ones sorted.
+	if want := []string{"200", "500", "404"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("statuses = %v, want %v", got, want)
+	}
+
+	// The declared 200 wins over the inline one of the same status.
+	if e.Responses[0].Description != "From the block" {
+		t.Errorf("200 description = %q, want the declared one", e.Responses[0].Description)
+	}
+	if e.Responses[0].Content == nil || e.Responses[0].Content.Ref == nil {
+		t.Error("200 should carry the declared body reference")
+	}
+
+	// @contentType empty leaves a response without content.
+	if e.Responses[1].ContentType != "" || e.Responses[1].Content != nil {
+		t.Errorf("500 = %+v, want no content", e.Responses[1])
+	}
+
+	// An inline response with no @description gets a generated one.
+	if e.Responses[2].Description != "Response for status 404" {
+		t.Errorf("404 description = %q", e.Responses[2].Description)
+	}
+}
+
+func TestResolve_ResponseHeaders(t *testing.T) {
+	pkg := resolvePackage(t, validPkg)
+
+	response := endpoint(t, pkg, "GET", "/users/{id}").Responses[0]
+	if names := fieldNames(response.Headers); !reflect.DeepEqual(names, []string{"X-RateLimit-Limit"}) {
+		t.Errorf("headers = %v", names)
+	}
+}
+
+func TestResolve_RepeatedStatusLastWins(t *testing.T) {
+	pkg := resolvePackage(t, validPkg)
+
+	responses := endpoint(t, pkg, "GET", "/repeat").Responses
+	if len(responses) != 1 {
+		t.Fatalf("got %d responses, want 1", len(responses))
+	}
+	if responses[0].Description != "second" {
+		t.Errorf("description = %q, want the last declaration", responses[0].Description)
+	}
+}
+
+func TestResolve_ContentTypeDefaulting(t *testing.T) {
+	valid := resolvePackage(t, validPkg)
+	create := endpoint(t, valid, "POST", "/users")
+
+	// An explicit @contentType wins.
+	if create.Request.ContentType != "application/xml" {
+		t.Errorf("request content type = %q, want the declared one", create.Request.ContentType)
+	}
+	// Otherwise the API default applies; that package declares json.
+	if create.Responses[0].ContentType != "application/json" {
+		t.Errorf("201 content type = %q, want the API default", create.Responses[0].ContentType)
+	}
+	// A bodyless response keeps whatever it declared, without defaulting.
+	if create.Responses[1].ContentType != "" {
+		t.Errorf("204 content type = %q, want empty", create.Responses[1].ContentType)
+	}
+
+	// With no API default, JSON is the fallback.
+	shapes := resolvePackage(t, shapesPkg)
+	if got := endpoint(t, shapes, "GET", "/shapes/{id}").Responses[0].ContentType; got != "application/json" {
+		t.Errorf("content type = %q, want the JSON fallback", got)
+	}
+}
+
+func TestResolve_BodyReferences(t *testing.T) {
+	pkg := resolvePackage(t, validPkg)
+
+	created := endpoint(t, pkg, "POST", "/users").Responses[0]
+	if created.Content.Ref == nil || !created.Content.Ref.IsArray || created.Content.Ref.Schema != "User" {
+		t.Errorf("201 body ref = %+v, want an array of User", created.Content.Ref)
+	}
+}
+
+func TestResolve_Bind(t *testing.T) {
+	pkg := resolvePackage(t, shapesPkg)
+	e := endpoint(t, pkg, "POST", "/shapes")
+
+	// A known wrapper resolves to the schema the generator inlines.
+	bind := e.Responses[0].Content.Bind
+	if bind == nil || bind.Wrapper == nil || bind.Wrapper.Name != "Address" || bind.Field != "Street" {
+		t.Errorf("response bind = %+v, want the Address wrapper", bind)
+	}
+
+	// An unknown wrapper keeps its name for the validator and falls back to
+	// emitting the plain body.
+	bind = e.Request.Content.Bind
+	if bind == nil || bind.Wrapper != nil || bind.Name != "Missing" {
+		t.Errorf("request bind = %+v, want an unresolved wrapper named Missing", bind)
+	}
+}
+
+func TestResolve_EndpointMetadata(t *testing.T) {
+	pkg := resolvePackage(t, validPkg)
+
+	e := endpoint(t, pkg, "GET", "/users/{id}")
+	if e.OperationID != "getUser" || e.Summary != "Get a user" || e.Auth != "bearerAuth" {
+		t.Errorf("endpoint metadata = %+v", e)
+	}
+	if !reflect.DeepEqual(e.Tags, []string{"users", "admin"}) {
+		t.Errorf("tags = %v", e.Tags)
+	}
+	if e.Deprecated {
+		t.Error("GET /users/{id} should not be deprecated")
+	}
+	if !endpoint(t, pkg, "POST", "/users").Deprecated {
+		t.Error("POST /users should be deprecated")
+	}
+}
+
+func TestResolve_APIPassThrough(t *testing.T) {
+	parsed, err := parser.Parse(validPkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := Resolve(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if pkg.API != parsed.API {
+		t.Error("API metadata should be passed through untouched")
+	}
+	if pkg.Name != "valid" {
+		t.Errorf("package name = %q", pkg.Name)
+	}
+}
+
+func TestResolve_Deterministic(t *testing.T) {
+	for _, dir := range []string{validPkg, shapesPkg} {
+		first := resolvePackage(t, dir)
+		second := resolvePackage(t, dir)
+
+		if !reflect.DeepEqual(first, second) {
+			t.Errorf("%s: two resolutions differ", dir)
+		}
+	}
+}
+
+func TestResolve_NonStructSchema(t *testing.T) {
+	parsed, err := parser.Parse("./testdata/badschema")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	_, err = Resolve(parsed)
 	if err == nil {
-		t.Error("NewResolver() should error for invalid path")
+		t.Fatal("a @schema on a non-struct alias should fail to resolve")
+	}
+
+	var positioned *parser.Error
+	if !errors.As(err, &positioned) {
+		t.Fatalf("error should carry a position: %v", err)
+	}
+	if positioned.Pos.Filename == "" {
+		t.Errorf("error position is empty: %v", err)
 	}
 }
 
-func TestResolver_Resolve(t *testing.T) {
-	// Parse the test package first
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
-	// Create resolver
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	// Resolve
-	resolved, err := resolver.Resolve(parsed)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
-
-	if resolved == nil {
-		t.Fatal("Resolve() returned nil")
-	}
-
-	// Verify API
-	if resolved.API == nil {
-		t.Error("API not resolved")
-	}
-
-	// Verify schemas
-	if len(resolved.Schemas) == 0 {
-		t.Error("No schemas resolved")
-	}
-
-	// Verify parameters
-	if len(resolved.Parameters) == 0 {
-		t.Error("No parameters resolved")
-	}
-
-	// Verify endpoints
-	if len(resolved.Endpoints) == 0 {
-		t.Error("No endpoints resolved")
-	}
-}
-
-func TestResolver_ResolveSchema(t *testing.T) {
-	// Parse the test package first
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
-	// Create resolver
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	// Get User schema
-	userSchema, ok := parsed.Schemas["User"]
-	if !ok {
-		t.Fatal("User schema not found in parsed package")
-	}
-
-	// Build schema names map
-	schemaNames := make(map[string]bool)
-	for name := range parsed.Schemas {
-		schemaNames[name] = true
-	}
-
-	// Resolve it
-	resolved, err := resolver.resolveSchema(userSchema, schemaNames)
-	if err != nil {
-		t.Fatalf("resolveSchema() error = %v", err)
-	}
-
-	if resolved == nil {
-		t.Fatal("resolveSchema() returned nil")
-	}
-
-	if resolved.GoTypeName != "User" {
-		t.Errorf("GoTypeName = %q, want %q", resolved.GoTypeName, "User")
-	}
-
-	// Verify fields were resolved
-	if len(resolved.Fields) == 0 {
-		t.Error("No fields resolved")
-	}
-
-	// Check specific fields
-	var idField, emailField *ResolvedField
-	for _, field := range resolved.Fields {
-		switch field.GoName {
-		case "ID":
-			idField = field
-		case "Email":
-			emailField = field
-		}
-	}
-
-	if idField == nil {
-		t.Fatal("ID field not found")
-	}
-
-	if idField.OpenAPIType != "string" {
-		t.Errorf("ID field OpenAPIType = %q, want %q", idField.OpenAPIType, "string")
-	}
-
-	if idField.Format != "uuid" {
-		t.Errorf("ID field Format = %q, want %q", idField.Format, "uuid")
-	}
-
-	if emailField == nil {
-		t.Fatal("Email field not found")
-	}
-
-	if emailField.OpenAPIType != "string" {
-		t.Errorf("Email field OpenAPIType = %q, want %q", emailField.OpenAPIType, "string")
-	}
-
-	if emailField.Format != "email" {
-		t.Errorf("Email field Format = %q, want %q", emailField.Format, "email")
-	}
-}
-
-func TestResolver_ResolveType(t *testing.T) {
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	// Get User struct type
-	obj := resolver.pkg.Types.Scope().Lookup("User")
-	if obj == nil {
-		t.Fatal("User type not found")
-	}
-
-	// Test resolving the struct type itself (should examine underlying fields)
-	typeInfo := resolver.resolveType(obj.Type())
-	if typeInfo == nil {
-		t.Fatal("resolveType() returned nil")
-	}
-
-	// The type system should resolve string fields
-	if typeInfo.OpenAPIType == "" {
-		t.Error("OpenAPIType is empty")
-	}
-}
-
-func TestResolver_ResolveAPI(t *testing.T) {
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	api := &parser.APIInfo{
-		Title:   "Test API",
-		Version: "1.0.0",
-		Contact: &parser.Contact{
-			Name:  "Test",
-			Email: "test@example.com",
-		},
-		Servers: []*parser.Server{
-			{URL: "https://api.example.com", Description: "Production"},
-		},
-	}
-
-	resolved := resolver.resolveAPI(api)
-
-	if resolved.Title != "Test API" {
-		t.Errorf("Title = %q, want %q", resolved.Title, "Test API")
-	}
-
-	if resolved.Version != "1.0.0" {
-		t.Errorf("Version = %q, want %q", resolved.Version, "1.0.0")
-	}
-
-	if resolved.Contact == nil {
-		t.Fatal("Contact is nil")
-	}
-
-	if resolved.Contact.Name != "Test" {
-		t.Errorf("Contact.Name = %q, want %q", resolved.Contact.Name, "Test")
-	}
-
-	if len(resolved.Servers) != 1 {
-		t.Fatalf("Expected 1 server, got %d", len(resolved.Servers))
-	}
-
-	if resolved.Servers[0].URL != "https://api.example.com" {
-		t.Errorf("Server URL = %q, want %q", resolved.Servers[0].URL, "https://api.example.com")
-	}
-}
-
-func TestResolver_ResolveParameter(t *testing.T) {
-	// Parse the test package first
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
-	// Create resolver
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	// Find a parameter (UserIDPath)
-	var param *parser.Parameter
-	for _, p := range parsed.Parameters {
-		if p.GoTypeName == "UserIDPath" {
-			param = p
-			break
-		}
-	}
-
-	if param == nil {
-		t.Skip("UserIDPath parameter not found in testdata")
-	}
-
-	// Resolve it
-	resolved, err := resolver.resolveParameter(param)
-	if err != nil {
-		t.Fatalf("resolveParameter() error = %v", err)
-	}
-
-	if resolved == nil {
-		t.Fatal("resolveParameter() returned nil")
-	}
-
-	if resolved.GoTypeName != "UserIDPath" {
-		t.Errorf("GoTypeName = %q, want %q", resolved.GoTypeName, "UserIDPath")
-	}
-
-	// Verify fields
-	if len(resolved.Fields) == 0 {
-		t.Error("No fields resolved")
-	}
-}
-
-func TestOmitsWhenEmpty(t *testing.T) {
-	structType := types.NewStruct(nil, nil)
-
-	tests := []struct {
-		name      string
-		tag       string
-		fieldType types.Type
-		want      bool
-	}{
-		{
-			name:      "no omit options keeps field",
-			tag:       `json:"name"`,
-			fieldType: types.Typ[types.String],
-			want:      false,
-		},
-		{
-			name:      "omitempty on string omits",
-			tag:       `json:"name,omitempty"`,
-			fieldType: types.Typ[types.String],
-			want:      true,
-		},
-		{
-			name:      "omitempty on struct never omits",
-			tag:       `json:"created_at,omitempty"`,
-			fieldType: structType,
-			want:      false,
-		},
-		{
-			name:      "omitzero on struct omits",
-			tag:       `json:"created_at,omitzero"`,
-			fieldType: structType,
-			want:      true,
-		},
-		{
-			name:      "omitempty on pointer to struct omits",
-			tag:       `json:"created_at,omitempty"`,
-			fieldType: types.NewPointer(structType),
-			want:      true,
-		},
-		{
-			name:      "omitempty on slice omits",
-			tag:       `json:"tags,omitempty"`,
-			fieldType: types.NewSlice(types.Typ[types.String]),
-			want:      true,
-		},
-		{
-			name:      "omitempty on non-zero-length array never omits",
-			tag:       `json:"coords,omitempty"`,
-			fieldType: types.NewArray(types.Typ[types.Float64], 2),
-			want:      false,
-		},
-		{
-			name:      "omitempty on zero-length array omits",
-			tag:       `json:"empty,omitempty"`,
-			fieldType: types.NewArray(types.Typ[types.Float64], 0),
-			want:      true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := omitsWhenEmpty(tt.tag, tt.fieldType)
-			if got != tt.want {
-				t.Errorf("omitsWhenEmpty(%q, %s) = %v, want %v", tt.tag, tt.fieldType, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestResolver_ResolveEndpoint(t *testing.T) {
-	// Parse the test package first
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
-	// Create resolver
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	// Build schema names map
-	schemaNames := make(map[string]bool)
-	for name := range parsed.Schemas {
-		schemaNames[name] = true
-	}
-
-	// Resolve schemas first
-	schemas := make(map[string]*ResolvedSchema)
-	for name, schema := range parsed.Schemas {
-		resolved, err := resolver.resolveSchema(schema, schemaNames)
-		if err != nil {
-			t.Fatalf("Failed to resolve schema %s: %v", name, err)
-		}
-		schemas[name] = resolved
-	}
-
-	// Resolve parameters
-	parameters := make(map[string]*ResolvedParameter)
-	for name, param := range parsed.Parameters {
-		resolved, err := resolver.resolveParameter(param)
-		if err != nil {
-			t.Fatalf("Failed to resolve parameter %s: %v", name, err)
-		}
-		parameters[name] = resolved
-	}
-
-	// Get first endpoint
-	if len(parsed.Endpoints) == 0 {
-		t.Skip("No endpoints in testdata")
-	}
-
-	endpoint := parsed.Endpoints[0]
-
-	// Resolve it
-	resolved, err := resolver.resolveEndpoint(endpoint, parameters, schemas, "")
-	if err != nil {
-		t.Fatalf("resolveEndpoint() error = %v", err)
-	}
-
-	if resolved == nil {
-		t.Fatal("resolveEndpoint() returned nil")
-	}
-
-	if resolved.Method != endpoint.Method {
-		t.Errorf("Method = %q, want %q", resolved.Method, endpoint.Method)
-	}
-
-	if resolved.Path != endpoint.Path {
-		t.Errorf("Path = %q, want %q", resolved.Path, endpoint.Path)
-	}
-
-	// Verify responses exist
-	if len(resolved.Responses) == 0 && len(endpoint.Responses) > 0 {
-		t.Error("Responses not resolved")
-	}
-}
-
-func TestTypeInfo_BasicTypes(t *testing.T) {
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	// We would need to construct Go types for testing
-	// For now, just verify resolver was created
-	if resolver.typeCache == nil {
-		t.Error("typeCache not initialized")
-	}
-}
-
-func TestResolver_ByteSliceResolvesToStringByte(t *testing.T) {
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	// Construct a []byte type using go/types
-	byteSlice := types.NewSlice(types.Typ[types.Byte])
-
-	typeInfo := resolver.resolveType(byteSlice)
-	if typeInfo == nil {
-		t.Fatal("resolveType([]byte) returned nil")
-	}
-
-	if typeInfo.OpenAPIType != "string" {
-		t.Errorf("[]byte OpenAPIType = %q, want %q", typeInfo.OpenAPIType, "string")
-	}
-	if typeInfo.Format != "byte" {
-		t.Errorf("[]byte Format = %q, want %q", typeInfo.Format, "byte")
-	}
-	if typeInfo.IsArray {
-		t.Error("[]byte should not be marked as IsArray")
-	}
-}
-
-func TestResolver_InlineDeclarations(t *testing.T) {
-	// Parse the inline example package
-	p := parser.NewParser("../../examples/inline")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
-	// Create resolver with comments (for inline resolution)
-	resolver, err := NewResolver("../../examples/inline", p.Comments())
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	// Resolve
-	resolved, err := resolver.Resolve(parsed)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
-
-	// Find GetUser endpoint
-	var getUserEndpoint *ResolvedEndpoint
-	for _, ep := range resolved.Endpoints {
-		if ep.FuncName == "GetUser" {
-			getUserEndpoint = ep
-			break
-		}
-	}
-
-	if getUserEndpoint == nil {
-		t.Fatal("GetUser endpoint not found")
-	}
-
-	// Check inline path params
-	if getUserEndpoint.InlinePathParams == nil {
-		t.Error("GetUser should have inline path params")
-	} else {
-		if len(getUserEndpoint.InlinePathParams.Fields) == 0 {
-			t.Error("GetUser inline path should have fields")
-		} else {
-			idField := getUserEndpoint.InlinePathParams.Fields[0]
-			if idField.Name != "id" {
-				t.Errorf("Path field name = %q, want %q", idField.Name, "id")
-			}
-			if idField.OpenAPIType != "string" {
-				t.Errorf("Path field type = %q, want %q", idField.OpenAPIType, "string")
-			}
-			if idField.Description != "User ID" {
-				t.Errorf("Path field description = %q, want %q", idField.Description, "User ID")
-			}
-		}
-	}
-
-	// Check inline responses
-	if getUserEndpoint.InlineResponses == nil {
-		t.Error("GetUser should have inline responses")
-	} else {
-		resp200 := getUserEndpoint.InlineResponses["200"]
-		if resp200 == nil {
-			t.Error("GetUser should have 200 response")
-		} else {
-			if len(resp200.Fields) != 3 {
-				t.Errorf("Response 200 has %d fields, want 3", len(resp200.Fields))
-			}
-			// Check field names
-			fieldNames := make(map[string]bool)
-			for _, f := range resp200.Fields {
-				fieldNames[f.Name] = true
-			}
-			if !fieldNames["id"] {
-				t.Error("Response 200 should have 'id' field")
-			}
-			if !fieldNames["email"] {
-				t.Error("Response 200 should have 'email' field")
-			}
-			if !fieldNames["name"] {
-				t.Error("Response 200 should have 'name' field")
-			}
-		}
-	}
-
-	// Find ListUsers endpoint
-	var listUsersEndpoint *ResolvedEndpoint
-	for _, ep := range resolved.Endpoints {
-		if ep.FuncName == "ListUsers" {
-			listUsersEndpoint = ep
-			break
-		}
-	}
-
-	if listUsersEndpoint == nil {
-		t.Fatal("ListUsers endpoint not found")
-	}
-
-	// Check inline query params
-	if listUsersEndpoint.InlineQueryParams == nil {
-		t.Error("ListUsers should have inline query params")
-	} else {
-		if len(listUsersEndpoint.InlineQueryParams.Fields) != 3 {
-			t.Errorf("ListUsers inline query has %d fields, want 3", len(listUsersEndpoint.InlineQueryParams.Fields))
-		}
-		// Find limit field and check annotations
-		for _, f := range listUsersEndpoint.InlineQueryParams.Fields {
-			if f.Name == "limit" {
-				if f.OpenAPIType != "integer" {
-					t.Errorf("limit field type = %q, want %q", f.OpenAPIType, "integer")
-				}
-				if f.Minimum == nil || *f.Minimum != 1 {
-					t.Error("limit field should have minimum=1")
-				}
-				if f.Maximum == nil || *f.Maximum != 100 {
-					t.Error("limit field should have maximum=100")
-				}
-			}
-		}
-	}
-}
-
-func TestParseInlineDeclaration(t *testing.T) {
-	tests := []struct {
-		name            string
-		annotationType  string
-		lines           []string
-		expectedCT      string
-		expectedBind    string
-		expectedDesc    string
-		expectedHeaders []string
-		expectNil       bool
-	}{
-		{
-			name:           "request with short name json",
-			annotationType: "request",
-			lines:          []string{"@request { @contentType json }"},
-			expectedCT:     "json",
-		},
-		{
-			name:           "request with full MIME type",
-			annotationType: "request",
-			lines:          []string{"@request { @contentType application/vnd.api+json }"},
-			expectedCT:     "application/vnd.api+json",
-		},
-		{
-			name:           "request with no content type",
-			annotationType: "request",
-			lines:          []string{"@request"},
-			expectedCT:     "",
-		},
-		{
-			name:           "nil comment",
-			annotationType: "request",
-			lines:          nil,
-			expectNil:      true,
-		},
-		{
-			name:           "response multiline annotation",
-			annotationType: "response",
-			lines:          []string{"@response 201 {", "  @contentType json", "}"},
-			expectedCT:     "json",
-		},
-		{
-			name:           "response with bind on same line",
-			annotationType: "response",
-			lines:          []string{"@response 200 { @bind DataResponse.Data }"},
-			expectedBind:   "DataResponse.Data",
-		},
-		{
-			name:           "response with content type and bind",
-			annotationType: "response",
-			lines:          []string{"@response 200 { @contentType json @bind DataResponse.Data }"},
-			expectedCT:     "json",
-			expectedBind:   "DataResponse.Data",
-		},
-		{
-			name:           "response multiline with bind",
-			annotationType: "response",
-			lines:          []string{"@response 200 {", "  @bind APIResponse.Payload", "}"},
-			expectedBind:   "APIResponse.Payload",
-		},
-		{
-			name:           "request with bind",
-			annotationType: "request",
-			lines:          []string{"@request { @bind RequestWrapper.Body }"},
-			expectedBind:   "RequestWrapper.Body",
-		},
-		{
-			name:           "response with description",
-			annotationType: "response",
-			lines:          []string{"@response 200 { @description User found }"},
-			expectedDesc:   "User found",
-		},
-		{
-			name:            "response with header",
-			annotationType:  "response",
-			lines:           []string{"@response 200 { @header RateLimitHeaders }"},
-			expectedHeaders: []string{"RateLimitHeaders"},
-		},
-		{
-			name:            "response with multiple headers",
-			annotationType:  "response",
-			lines:           []string{"@response 200 {", "  @header RateLimitHeaders", "  @header CacheHeaders", "}"},
-			expectedHeaders: []string{"RateLimitHeaders", "CacheHeaders"},
-		},
-		{
-			name:            "response with all annotations",
-			annotationType:  "response",
-			lines:           []string{"@response 200 { @contentType json @header RateLimitHeaders @description Users found @bind APIResponse.Data }"},
-			expectedCT:      "json",
-			expectedBind:    "APIResponse.Data",
-			expectedDesc:    "Users found",
-			expectedHeaders: []string{"RateLimitHeaders"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var comment *parser.CommentBlock
-			if tt.lines != nil {
-				comment = &parser.CommentBlock{Lines: tt.lines}
-			}
-
-			result, err := ParseInlineDeclaration(comment, tt.annotationType)
-			if err != nil {
-				t.Fatalf("ParseInlineDeclaration() error = %v", err)
-			}
-
-			if tt.expectNil {
-				if result != nil {
-					t.Errorf("ParseInlineDeclaration() = %v, want nil", result)
-				}
-				return
-			}
-
-			if result == nil {
-				t.Fatal("ParseInlineDeclaration() = nil, want non-nil")
-			}
-
-			// Check content type
-			ct := result.GetChildValue("@contentType")
-			if ct != tt.expectedCT {
-				t.Errorf("contentType = %q, want %q", ct, tt.expectedCT)
-			}
-
-			// Check bind
-			bind := result.GetChildValue("@bind")
-			if bind != tt.expectedBind {
-				t.Errorf("bind = %q, want %q", bind, tt.expectedBind)
-			}
-
-			// Check description
-			desc := result.GetChildValue("@description")
-			if desc != tt.expectedDesc {
-				t.Errorf("description = %q, want %q", desc, tt.expectedDesc)
-			}
-
-			// Check headers
-			headers := result.GetRepeatedChildren("@header")
-			if len(headers) != len(tt.expectedHeaders) {
-				t.Errorf("headers count = %d, want %d", len(headers), len(tt.expectedHeaders))
-			} else {
-				for i, h := range headers {
-					if h.Value != tt.expectedHeaders[i] {
-						t.Errorf("header[%d] = %q, want %q", i, h.Value, tt.expectedHeaders[i])
-					}
-				}
-			}
-		})
-	}
-}
-
-func TestContentTypePrecedence(t *testing.T) {
-	tests := []struct {
-		name             string
-		explicitType     string
-		defaultType      string
-		expectedRequest  string
-		expectedResponse string
-	}{
-		{
-			name:             "explicit overrides default",
-			explicitType:     "application/xml",
-			defaultType:      "application/json",
-			expectedRequest:  "application/xml",
-			expectedResponse: "application/xml",
-		},
-		{
-			name:             "default used when no explicit",
-			explicitType:     "",
-			defaultType:      "application/xml",
-			expectedRequest:  "application/xml",
-			expectedResponse: "application/xml",
-		},
-		{
-			name:             "fallback to json when no explicit or default",
-			explicitType:     "",
-			defaultType:      "",
-			expectedRequest:  "application/json",
-			expectedResponse: "application/json",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resolver, err := NewResolver("../parser/testdata", nil)
-			if err != nil {
-				t.Fatalf("NewResolver() error = %v", err)
-			}
-
-			endpoint := &parser.Endpoint{
-				Method: "POST",
-				Path:   "/test",
-				Request: &parser.RequestBody{
-					ContentType: tt.explicitType,
-					Body: &parser.Body{
-						Schema: "TestBody",
-					},
-				},
-				Responses: map[string]*parser.Response{
-					"200": {
-						StatusCode:  "200",
-						ContentType: tt.explicitType,
-						Body: &parser.Body{
-							Schema: "TestBody",
-						},
-					},
-				},
-			}
-
-			resolved, err := resolver.resolveEndpoint(endpoint, map[string]*ResolvedParameter{}, map[string]*ResolvedSchema{}, tt.defaultType)
-			if err != nil {
-				t.Fatalf("resolveEndpoint() error = %v", err)
-			}
-
-			if resolved.Request != nil && resolved.Request.ContentType != tt.expectedRequest {
-				t.Errorf("Request.ContentType = %q, want %q", resolved.Request.ContentType, tt.expectedRequest)
-			}
-
-			if resp, ok := resolved.Responses["200"]; ok {
-				if resp.ContentType != tt.expectedResponse {
-					t.Errorf("Response.ContentType = %q, want %q", resp.ContentType, tt.expectedResponse)
-				}
-			}
-		})
-	}
-}
-
-func TestResolver_PointerImpliesNotRequired(t *testing.T) {
-	// Parse the test package
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
-	// Create resolver
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	// Get FieldRequiredTest schema
-	schema, ok := parsed.Schemas["FieldRequiredTest"]
-	if !ok {
-		t.Fatal("FieldRequiredTest schema not found in parsed package")
-	}
-
-	// Build schema names map
-	schemaNames := make(map[string]bool)
-	for name := range parsed.Schemas {
-		schemaNames[name] = true
-	}
-
-	// Resolve it
-	resolved, err := resolver.resolveSchema(schema, schemaNames)
-	if err != nil {
-		t.Fatalf("resolveSchema() error = %v", err)
-	}
-
-	// Build field lookup
-	fields := make(map[string]*ResolvedField)
-	for _, f := range resolved.Fields {
-		fields[f.Name] = f
-	}
-
-	tests := []struct {
-		fieldName    string
-		wantRequired bool
-		wantNullable bool
-	}{
-		{"value", true, false},           // string: required, not nullable
-		{"value_ptr", true, true},        // *string: required, nullable
-		{"value_omit", false, false},     // string,omitempty: not required, not nullable
-		{"value_ptr_omit", false, false}, // *string,omitempty: omitted when nil, never null on the wire
-		{"value_zero", false, false},     // string,omitzero: not required, not nullable
-		{"value_ptr_zero", false, false}, // *string,omitzero: omitted when nil, never null on the wire
-		{"value_struct", true, false},    // User: required, not nullable
-		{"value_struct_ptr", true, true}, // *User: required, nullable
-
-		// Slices and maps follow the same tag-based rule. Note: a nil slice/map
-		// without omitempty marshals as null, but non-nullable is the deliberate
-		// default (most handlers guarantee non-nil); use @nullable true to opt in.
-		{"value_slice", true, false},           // []string: required, not nullable (documented gap)
-		{"value_slice_omit", false, false},     // []string,omitempty: optional, never null on the wire
-		{"value_slice_ptr", true, true},        // *[]string: required, nullable
-		{"value_slice_ptr_omit", false, false}, // *[]string,omitempty: optional, nil ptr omitted
-		{"value_map", true, false},             // map: required, not nullable (documented gap)
-		{"value_map_omit", false, false},       // map,omitempty: optional, never null on the wire
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.fieldName, func(t *testing.T) {
-			f, ok := fields[tt.fieldName]
-			if !ok {
-				t.Fatalf("field %q not found", tt.fieldName)
-			}
-			if f.Required != tt.wantRequired {
-				t.Errorf("field %q Required = %v, want %v", tt.fieldName, f.Required, tt.wantRequired)
-			}
-			if f.Nullable != tt.wantNullable {
-				t.Errorf("field %q Nullable = %v, want %v", tt.fieldName, f.Nullable, tt.wantNullable)
-			}
-		})
-	}
-}
-
-func TestResolver_EmbeddedStructFlattening(t *testing.T) {
-	// Parse the test package
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
-	// Create resolver
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	// Get EmbeddedTest schema
-	schema, ok := parsed.Schemas["EmbeddedTest"]
-	if !ok {
-		t.Fatal("EmbeddedTest schema not found in parsed package")
-	}
-
-	// Build schema names map
-	schemaNames := make(map[string]bool)
-	for name := range parsed.Schemas {
-		schemaNames[name] = true
-	}
-
-	// Resolve it
-	resolved, err := resolver.resolveSchema(schema, schemaNames)
-	if err != nil {
-		t.Fatalf("resolveSchema() error = %v", err)
-	}
-
-	// Build field lookup
-	fields := make(map[string]*ResolvedField)
-	for _, f := range resolved.Fields {
-		fields[f.Name] = f
-	}
-
-	// Should have 5 fields: id, created_at, updated_at (from BaseModel), name, email
-	expectedFields := []string{"id", "created_at", "updated_at", "name", "email"}
-	for _, name := range expectedFields {
-		if _, ok := fields[name]; !ok {
-			t.Errorf("expected field %q not found in resolved fields", name)
-		}
-	}
-
-	if len(resolved.Fields) != len(expectedFields) {
-		t.Errorf("expected %d fields, got %d", len(expectedFields), len(resolved.Fields))
-		for _, f := range resolved.Fields {
-			t.Logf("  field: %s (GoName: %s)", f.Name, f.GoName)
-		}
-	}
-
-	// Verify embedded fields have correct types
-	if f, ok := fields["id"]; ok {
-		if f.OpenAPIType != "string" {
-			t.Errorf("id field OpenAPIType = %q, want %q", f.OpenAPIType, "string")
-		}
-	}
-}
-
-func TestResolver_EmbeddedPtrFlattening(t *testing.T) {
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	schema, ok := parsed.Schemas["EmbeddedPtrTest"]
-	if !ok {
-		t.Fatal("EmbeddedPtrTest schema not found in parsed package")
-	}
-
-	schemaNames := make(map[string]bool)
-	for name := range parsed.Schemas {
-		schemaNames[name] = true
-	}
-
-	resolved, err := resolver.resolveSchema(schema, schemaNames)
-	if err != nil {
-		t.Fatalf("resolveSchema() error = %v", err)
-	}
-
-	fields := make(map[string]*ResolvedField)
-	for _, f := range resolved.Fields {
-		fields[f.Name] = f
-	}
-
-	// Should have 4 fields: id, created_at, updated_at (from *BaseModel), label
-	expectedFields := []string{"id", "created_at", "updated_at", "label"}
-	for _, name := range expectedFields {
-		if _, ok := fields[name]; !ok {
-			t.Errorf("expected field %q not found in resolved fields", name)
-		}
-	}
-
-	if len(resolved.Fields) != len(expectedFields) {
-		t.Errorf("expected %d fields, got %d", len(expectedFields), len(resolved.Fields))
-		for _, f := range resolved.Fields {
-			t.Logf("  field: %s (GoName: %s)", f.Name, f.GoName)
-		}
-	}
-}
-
-func TestResolver_NestedEmbedFlattening(t *testing.T) {
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	schema, ok := parsed.Schemas["NestedEmbedTest"]
-	if !ok {
-		t.Fatal("NestedEmbedTest schema not found in parsed package")
-	}
-
-	schemaNames := make(map[string]bool)
-	for name := range parsed.Schemas {
-		schemaNames[name] = true
-	}
-
-	resolved, err := resolver.resolveSchema(schema, schemaNames)
-	if err != nil {
-		t.Fatalf("resolveSchema() error = %v", err)
-	}
-
-	fields := make(map[string]*ResolvedField)
-	for _, f := range resolved.Fields {
-		fields[f.Name] = f
-	}
-
-	// Should have fields from BaseModel (id, created_at, updated_at),
-	// Auditable (deleted_at, deleted_by), and status
-	expectedFields := []string{"id", "created_at", "updated_at", "deleted_at", "deleted_by", "status"}
-	for _, name := range expectedFields {
-		if _, ok := fields[name]; !ok {
-			t.Errorf("expected field %q not found in resolved fields", name)
-		}
-	}
-
-	if len(resolved.Fields) != len(expectedFields) {
-		t.Errorf("expected %d fields, got %d", len(expectedFields), len(resolved.Fields))
-		for _, f := range resolved.Fields {
-			t.Logf("  field: %s (GoName: %s)", f.Name, f.GoName)
-		}
-	}
-
-	// Verify pointer+omitempty fields from Auditable are optional but not nullable
-	if f, ok := fields["deleted_at"]; ok {
-		if f.Nullable {
-			t.Error("deleted_at should not be nullable (omitempty omits nil instead of encoding null)")
-		}
-		if f.Required {
-			t.Error("deleted_at should not be required (omitempty)")
-		}
-	}
-}
-
-func TestResolver_EmbeddedParameterFlattening(t *testing.T) {
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	// Find EmbeddedQueryParams parameter
-	var param *parser.Parameter
-	for _, p := range parsed.Parameters {
-		if p.GoTypeName == "EmbeddedQueryParams" {
-			param = p
-			break
-		}
-	}
-
-	if param == nil {
-		t.Fatal("EmbeddedQueryParams parameter not found in parsed package")
-	}
-
-	resolved, err := resolver.resolveParameter(param)
-	if err != nil {
-		t.Fatalf("resolveParameter() error = %v", err)
-	}
-
-	fields := make(map[string]*ResolvedField)
-	for _, f := range resolved.Fields {
-		fields[f.Name] = f
-	}
-
-	// Should have 3 fields: limit, offset (from CommonQueryParams), search
-	expectedFields := []string{"limit", "offset", "search"}
-	for _, name := range expectedFields {
-		if _, ok := fields[name]; !ok {
-			t.Errorf("expected field %q not found in resolved fields", name)
-		}
-	}
-
-	if len(resolved.Fields) != len(expectedFields) {
-		t.Errorf("expected %d fields, got %d", len(expectedFields), len(resolved.Fields))
-		for _, f := range resolved.Fields {
-			t.Logf("  field: %s (GoName: %s)", f.Name, f.GoName)
-		}
-	}
-
-	// Verify embedded fields are resolved as query parameters (not required by default)
-	if f, ok := fields["limit"]; ok {
-		if f.Required {
-			t.Error("limit should not be required (omitempty)")
-		}
-		if f.OpenAPIType != "integer" {
-			t.Errorf("limit OpenAPIType = %q, want %q", f.OpenAPIType, "integer")
-		}
-	}
-}
-
-func TestResolveFieldNameFromTag(t *testing.T) {
-	tests := []struct {
-		name        string
-		tag         string
-		goFieldName string
-		want        string
-	}{
-		{
-			name:        "json tag only",
-			tag:         `json:"user_id"`,
-			goFieldName: "UserID",
-			want:        "user_id",
-		},
-		{
-			name:        "xml tag only (no json)",
-			tag:         `xml:"UserName"`,
-			goFieldName: "Name",
-			want:        "UserName",
-		},
-		{
-			name:        "both tags - json takes priority",
-			tag:         `json:"email" xml:"EmailAddress"`,
-			goFieldName: "Email",
-			want:        "email",
-		},
-		{
-			name:        "no tags - uses Go field name",
-			tag:         ``,
-			goFieldName: "Age",
-			want:        "Age",
-		},
-		{
-			name:        "json skip - returns empty (skip field)",
-			tag:         `json:"-"`,
-			goFieldName: "Hidden",
-			want:        "",
-		},
-		{
-			name:        "json skip with xml - still skips (respects -)",
-			tag:         `json:"-" xml:"ShouldNotUse"`,
-			goFieldName: "Hidden",
-			want:        "",
-		},
-		{
-			name:        "xml skip only (no json) - returns empty (skip field)",
-			tag:         `xml:"-"`,
-			goFieldName: "Hidden",
-			want:        "",
-		},
-		{
-			name:        "json empty - falls back to xml",
-			tag:         `json:"" xml:"from_xml"`,
-			goFieldName: "Field",
-			want:        "from_xml",
-		},
-		{
-			name:        "json omitempty only - falls back to xml",
-			tag:         `json:",omitempty" xml:"from_xml"`,
-			goFieldName: "Field",
-			want:        "from_xml",
-		},
-		{
-			name:        "json omitempty only (no xml) - uses Go field name",
-			tag:         `json:",omitempty"`,
-			goFieldName: "OptionalField",
-			want:        "OptionalField",
-		},
-		{
-			name:        "json with omitempty - uses json name",
-			tag:         `json:"field_name,omitempty"`,
-			goFieldName: "FieldName",
-			want:        "field_name",
-		},
-		{
-			name:        "xml with attr option - uses xml name",
-			tag:         `xml:"FieldName,attr"`,
-			goFieldName: "Field",
-			want:        "FieldName",
-		},
-		{
-			name:        "json name with xml takes priority",
-			tag:         `json:"json_name" xml:"XmlName"`,
-			goFieldName: "Field",
-			want:        "json_name",
-		},
-		{
-			name:        "both empty - uses Go field name",
-			tag:         `json:"" xml:""`,
-			goFieldName: "MyField",
-			want:        "MyField",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := resolveFieldNameFromTag(tt.tag, tt.goFieldName)
-			if got != tt.want {
-				t.Errorf("resolveFieldNameFromTag(%q, %q) = %q, want %q", tt.tag, tt.goFieldName, got, tt.want)
-			}
-		})
-	}
-}
-
-// applyFieldAnnotations has been removed — @field parsing now happens in the
-// parser via parseFieldComments and is validated by convertParsedField. Equivalent
-// invalid-numeric coverage lives in pkg/parser/parser_test.go:
-//   - TestParser_ConvertParsedField_InvalidFloat
-//   - TestParser_ConvertParsedField_InvalidInt
-
-func TestApplyAnnotationOverrides_RequiredNullable(t *testing.T) {
-	bptr := func(b bool) *bool { return &b }
-
-	tests := []struct {
-		name          string
-		startRequired bool
-		startNullable bool
-		annotation    *parser.Field
-		wantRequired  bool
-		wantNullable  bool
-	}{
-		{
-			name:          "no override leaves values alone",
-			startRequired: true,
-			startNullable: false,
-			annotation:    &parser.Field{},
-			wantRequired:  true,
-			wantNullable:  false,
-		},
-		{
-			name:          "@required false overrides required=true (non-pointer optional)",
-			startRequired: true,
-			startNullable: false,
-			annotation:    &parser.Field{Required: bptr(false)},
-			wantRequired:  false,
-			wantNullable:  false,
-		},
-		{
-			name:          "@required true overrides required=false (pointer required)",
-			startRequired: false,
-			startNullable: true,
-			annotation:    &parser.Field{Required: bptr(true)},
-			wantRequired:  true,
-			wantNullable:  true,
-		},
-		{
-			name:          "@nullable true on non-pointer",
-			startRequired: true,
-			startNullable: false,
-			annotation:    &parser.Field{Nullable: bptr(true)},
-			wantRequired:  true,
-			wantNullable:  true,
-		},
-		{
-			name:          "@nullable false on pointer",
-			startRequired: false,
-			startNullable: true,
-			annotation:    &parser.Field{Nullable: bptr(false)},
-			wantRequired:  false,
-			wantNullable:  false,
-		},
-		{
-			name:          "both overrides apply independently",
-			startRequired: true,
-			startNullable: false,
-			annotation:    &parser.Field{Required: bptr(false), Nullable: bptr(true)},
-			wantRequired:  false,
-			wantNullable:  true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resolved := &ResolvedField{
-				Required: tt.startRequired,
-				Nullable: tt.startNullable,
-			}
-			applyAnnotationOverrides(resolved, tt.annotation)
-			if resolved.Required != tt.wantRequired {
-				t.Errorf("Required = %v, want %v", resolved.Required, tt.wantRequired)
-			}
-			if resolved.Nullable != tt.wantNullable {
-				t.Errorf("Nullable = %v, want %v", resolved.Nullable, tt.wantNullable)
-			}
-		})
+func TestResolve_WithoutGoTypes(t *testing.T) {
+	if _, err := Resolve(&parser.Package{Name: "empty"}); err == nil {
+		t.Error("resolving without loaded Go types should fail")
 	}
 }

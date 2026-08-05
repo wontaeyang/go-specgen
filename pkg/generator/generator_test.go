@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wontaeyang/go-specgen/pkg/parser"
 	"github.com/wontaeyang/go-specgen/pkg/resolver"
 )
 
@@ -28,7 +29,7 @@ func renderYAML(t *testing.T, version string, pkg *resolver.Package) string {
 func minimalPackage(schemas ...*resolver.Schema) *resolver.Package {
 	return &resolver.Package{
 		Name:    "test",
-		API:     &resolver.ResolvedAPI{Title: "Test", Version: "1.0.0"},
+		API:     &parser.APIInfo{Title: "Test", Version: "1.0.0"},
 		Schemas: schemas,
 	}
 }

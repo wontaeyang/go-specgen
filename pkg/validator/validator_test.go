@@ -1,1467 +1,608 @@
 package validator
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/wontaeyang/go-specgen/pkg/parser"
 	"github.com/wontaeyang/go-specgen/pkg/resolver"
 )
 
-func TestNewValidator(t *testing.T) {
-	v := NewValidator()
-	if v == nil {
-		t.Fatal("NewValidator() returned nil")
-	}
+// The validator is tested against hand-built IR: every rule gets the smallest
+// package that breaks it. Assertions check the path and one stable keyword of
+// the message, never its full prose.
 
-	if v.errors == nil {
-		t.Error("Validator.errors is nil")
-	}
-}
-
-func TestValidator_Validate_ValidPackage(t *testing.T) {
-	pkg := &resolver.ResolvedPackage{
-		PackageName: "test",
-		API: &resolver.ResolvedAPI{
-			Title:   "Test API",
-			Version: "1.0.0",
-		},
-		Schemas: map[string]*resolver.ResolvedSchema{
-			"User": {
-				Name:       "User",
-				GoTypeName: "User",
-				Fields: []*resolver.ResolvedField{
-					{
-						Name:        "id",
-						GoName:      "ID",
-						OpenAPIType: "string",
-					},
-				},
-			},
-		},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
-			{
-				Method: "GET",
-				Path:   "/users",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {
-						StatusCode:  "200",
-						Description: "Success",
-					},
-				},
-			},
-		},
-	}
-
-	v := NewValidator()
-	err := v.Validate(pkg)
-	if err != nil {
-		t.Errorf("Validate() error = %v, want nil", err)
+func stringField(name string) *resolver.Field {
+	return &resolver.Field{
+		Name:     name,
+		GoName:   strings.ToUpper(name[:1]) + name[1:],
+		Required: true,
+		Type:     resolver.TypeInfo{OpenAPI: "string"},
 	}
 }
 
-func TestValidator_Validate_MissingAPI(t *testing.T) {
-	pkg := &resolver.ResolvedPackage{
-		PackageName: "test",
-		API:         nil,
-		Schemas:     map[string]*resolver.ResolvedSchema{},
-		Parameters:  map[string]*resolver.ResolvedParameter{},
-		Endpoints:   []*resolver.ResolvedEndpoint{},
-	}
+// validPackage is a package that breaks no rule. Tests mutate a copy of it.
+func validPackage() *resolver.Package {
+	user := &resolver.Schema{Name: "User", Fields: []*resolver.Field{stringField("id")}}
 
-	v := NewValidator()
-	err := v.Validate(pkg)
+	return &resolver.Package{
+		Name:    "test",
+		API:     &parser.APIInfo{Title: "Test", Version: "1.0.0"},
+		Schemas: []*resolver.Schema{user},
+		Endpoints: []*resolver.Endpoint{{
+			Method: "GET",
+			Path:   "/users/{id}",
+			Parameters: []*resolver.Param{
+				{In: parser.ParamPath, Field: stringField("id")},
+			},
+			Responses: []*resolver.Response{{
+				Status:      "200",
+				Description: "OK",
+				ContentType: "application/json",
+				Content:     &resolver.Content{Ref: &resolver.TypeRef{Schema: "User"}},
+			}},
+		}},
+	}
+}
+
+// validationErrors returns the reported errors, failing when there are none.
+func validationErrors(t *testing.T, err error) []*ValidationError {
+	t.Helper()
+
 	if err == nil {
-		t.Error("Validate() should error when API is missing")
+		t.Fatal("expected validation to fail")
 	}
 
-	if !strings.Contains(err.Error(), "@api") {
-		t.Errorf("Error should mention @api, got: %v", err)
+	var multi *MultiError
+	if !errors.As(err, &multi) {
+		t.Fatalf("expected a *MultiError, got %T", err)
+	}
+
+	reported := make([]*ValidationError, 0, len(multi.Errors))
+	for _, err := range multi.Errors {
+		var single *ValidationError
+		if !errors.As(err, &single) {
+			t.Fatalf("expected a *ValidationError, got %T", err)
+		}
+		reported = append(reported, single)
+	}
+	return reported
+}
+
+// assertReported asserts that some error was reported at path with a message
+// mentioning keyword.
+func assertReported(t *testing.T, err error, path, keyword string) {
+	t.Helper()
+
+	for _, reported := range validationErrors(t, err) {
+		if reported.Path == path && strings.Contains(reported.Message, keyword) {
+			return
+		}
+	}
+	t.Errorf("no error at %q mentioning %q; got %v", path, keyword, err)
+}
+
+func TestValidate_ValidPackage(t *testing.T) {
+	if err := Validate(validPackage()); err != nil {
+		t.Errorf("valid package should pass: %v", err)
 	}
 }
 
-func TestValidator_Validate_MissingAPIWithEndpoints(t *testing.T) {
-	pkg := &resolver.ResolvedPackage{
-		PackageName: "test",
-		API:         nil,
-		Schemas:     map[string]*resolver.ResolvedSchema{},
-		Parameters:  map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
-			{
-				Method: "GET",
-				Path:   "/users",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {
-						Description: "Success",
-					},
-				},
-			},
-		},
-	}
+func TestValidate_MissingAPI(t *testing.T) {
+	pkg := validPackage()
+	pkg.API = nil
 
-	v := NewValidator()
-	err := v.Validate(pkg)
-	if err == nil {
-		t.Fatal("Validate() should error when API is missing")
-	}
-
-	if !strings.Contains(err.Error(), "@api") {
-		t.Errorf("Error should mention @api, got: %v", err)
-	}
+	// The endpoints are still checked; only the metadata rules are skipped.
+	assertReported(t, Validate(pkg), "", "missing @api")
 }
 
-func TestValidator_ValidateAPI_MissingRequired(t *testing.T) {
+func TestValidate_APIRequiredFields(t *testing.T) {
+	pkg := validPackage()
+	pkg.API = &parser.APIInfo{}
+
+	err := Validate(pkg)
+	assertReported(t, err, "@api", "@title")
+	assertReported(t, err, "@api", "@version")
+}
+
+func TestValidate_SecuritySchemes(t *testing.T) {
 	tests := []struct {
 		name    string
-		api     *resolver.ResolvedAPI
-		wantErr string
+		scheme  *parser.SecurityScheme
+		keyword string
 	}{
-		{
-			name: "missing title",
-			api: &resolver.ResolvedAPI{
-				Version: "1.0.0",
-			},
-			wantErr: "@title",
-		},
-		{
-			name: "missing version",
-			api: &resolver.ResolvedAPI{
-				Title: "Test API",
-			},
-			wantErr: "@version",
-		},
+		{"missing type", &parser.SecurityScheme{Name: "s"}, "@type"},
+		{"http without scheme", &parser.SecurityScheme{Name: "s", Type: "http"}, "@scheme"},
+		{"apiKey without in", &parser.SecurityScheme{Name: "s", Type: "apiKey", ParameterName: "X-Key"}, "@in"},
+		{"apiKey without name", &parser.SecurityScheme{Name: "s", Type: "apiKey", In: "header"}, "@name"},
+		{"unknown type", &parser.SecurityScheme{Name: "s", Type: "magic"}, "unknown security scheme type"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API:        tt.api,
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints:  []*resolver.ResolvedEndpoint{},
-			}
+			pkg := validPackage()
+			pkg.API.SecuritySchemes = []*parser.SecurityScheme{tt.scheme}
 
-			v := NewValidator()
-			err := v.Validate(pkg)
-			if err == nil {
-				t.Error("Validate() should error")
-				return
-			}
-
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Errorf("Error should mention %s, got: %v", tt.wantErr, err)
-			}
+			assertReported(t, Validate(pkg), "@api.@securityScheme[s]", tt.keyword)
 		})
 	}
 }
 
-func TestValidator_ValidateSecurityScheme(t *testing.T) {
-	tests := []struct {
-		name    string
-		scheme  *resolver.SecurityScheme
-		wantErr bool
-		errMsg  string
-	}{
-		{
-			name: "valid http scheme",
-			scheme: &resolver.SecurityScheme{
-				Type:   "http",
-				Scheme: "bearer",
-			},
-			wantErr: false,
-		},
-		{
-			name: "http scheme missing @scheme",
-			scheme: &resolver.SecurityScheme{
-				Type: "http",
-			},
-			wantErr: true,
-			errMsg:  "@scheme",
-		},
-		{
-			name: "valid apiKey scheme",
-			scheme: &resolver.SecurityScheme{
-				Type:          "apiKey",
-				In:            "header",
-				ParameterName: "X-API-Key",
-			},
-			wantErr: false,
-		},
-		{
-			name: "apiKey missing @in",
-			scheme: &resolver.SecurityScheme{
-				Type:          "apiKey",
-				ParameterName: "X-API-Key",
-			},
-			wantErr: true,
-			errMsg:  "@in",
-		},
+func TestValidate_SecuritySchemesWithoutExtraFields(t *testing.T) {
+	pkg := validPackage()
+	pkg.API.SecuritySchemes = []*parser.SecurityScheme{
+		{Name: "oauth", Type: "oauth2"},
+		{Name: "oidc", Type: "openIdConnect"},
+		{Name: "bearer", Type: "http", Scheme: "bearer"},
+		{Name: "key", Type: "apiKey", In: "header", ParameterName: "X-Key"},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
-					Title:   "Test",
-					Version: "1.0.0",
-					SecuritySchemes: map[string]*resolver.SecurityScheme{
-						"test": tt.scheme,
-					},
-				},
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints:  []*resolver.ResolvedEndpoint{},
-			}
-
-			v := NewValidator()
-			err := v.Validate(pkg)
-
-			if tt.wantErr && err == nil {
-				t.Error("Validate() should error")
-			}
-
-			if !tt.wantErr && err != nil {
-				t.Errorf("Validate() error = %v, want nil", err)
-			}
-
-			if tt.wantErr && err != nil && !strings.Contains(err.Error(), tt.errMsg) {
-				t.Errorf("Error should mention %s, got: %v", tt.errMsg, err)
-			}
-		})
+	if err := Validate(pkg); err != nil {
+		t.Errorf("complete schemes should pass: %v", err)
 	}
 }
 
-func TestValidator_ValidateSchema(t *testing.T) {
-	tests := []struct {
-		name    string
-		schema  *resolver.ResolvedSchema
-		wantErr bool
-		errMsg  string
-	}{
-		{
-			name: "valid schema",
-			schema: &resolver.ResolvedSchema{
-				Name: "User",
-				Fields: []*resolver.ResolvedField{
-					{Name: "id", GoName: "ID", OpenAPIType: "string"},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "schema with no fields",
-			schema: &resolver.ResolvedSchema{
-				Name:   "Empty",
-				Fields: []*resolver.ResolvedField{},
-			},
-			wantErr: true,
-			errMsg:  "no fields",
-		},
-		{
-			name: "duplicate field names",
-			schema: &resolver.ResolvedSchema{
-				Name: "User",
-				Fields: []*resolver.ResolvedField{
-					{Name: "id", GoName: "ID", OpenAPIType: "string"},
-					{Name: "id", GoName: "Id", OpenAPIType: "string"},
-				},
-			},
-			wantErr: true,
-			errMsg:  "duplicate",
-		},
+func TestValidate_SecurityRequirementReferences(t *testing.T) {
+	pkg := validPackage()
+	pkg.API.SecuritySchemes = []*parser.SecurityScheme{
+		{Name: "bearerAuth", Type: "http", Scheme: "bearer"},
 	}
+	pkg.API.Security = [][]*parser.SecurityRequirement{{
+		{SchemeName: "bearerAuth"},
+		{SchemeName: "ghost"},
+	}}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
-					Title:   "Test",
-					Version: "1.0.0",
-				},
-				Schemas: map[string]*resolver.ResolvedSchema{
-					tt.schema.Name: tt.schema,
-				},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints:  []*resolver.ResolvedEndpoint{},
-			}
-
-			v := NewValidator()
-			err := v.Validate(pkg)
-
-			if tt.wantErr && err == nil {
-				t.Error("Validate() should error")
-			}
-
-			if !tt.wantErr && err != nil {
-				t.Errorf("Validate() error = %v, want nil", err)
-			}
-
-			if tt.wantErr && err != nil && !strings.Contains(err.Error(), tt.errMsg) {
-				t.Errorf("Error should mention %s, got: %v", tt.errMsg, err)
-			}
-		})
-	}
+	assertReported(t, Validate(pkg), "@api.@security[0].@with[1]", "unknown security scheme")
 }
 
-func TestValidator_ValidateField(t *testing.T) {
-	minVal := 0.0
-	maxVal := 100.0
-	minLen := 5
-	maxLen := 50
+func TestValidate_SchemaWithoutFields(t *testing.T) {
+	pkg := validPackage()
+	pkg.Schemas = append(pkg.Schemas, &resolver.Schema{Name: "Empty"})
+
+	assertReported(t, Validate(pkg), "@schema[Empty]", "no fields")
+}
+
+func TestValidate_DuplicateFieldNames(t *testing.T) {
+	pkg := validPackage()
+	pkg.Schemas[0].Fields = append(pkg.Schemas[0].Fields, stringField("id"))
+
+	assertReported(t, Validate(pkg), "@schema[User]", "duplicate field name")
+}
+
+func TestValidate_UnresolvedStructReference(t *testing.T) {
+	pkg := validPackage()
+	pkg.Schemas[0].Fields[0].Unresolved = "Address"
+
+	assertReported(t, Validate(pkg), "@schema[User].Id", "not a @schema")
+}
+
+func TestValidate_FieldConstraints(t *testing.T) {
+	one, two := 1, 2
+	oneF, twoF := 1.0, 2.0
 
 	tests := []struct {
 		name    string
-		field   *resolver.ResolvedField
-		wantErr bool
-		errMsg  string
+		field   *resolver.Field
+		keyword string
 	}{
 		{
-			name: "valid field",
-			field: &resolver.ResolvedField{
-				Name:        "age",
-				GoName:      "Age",
-				OpenAPIType: "integer",
-			},
-			wantErr: false,
+			name:    "enum on a boolean",
+			field:   &resolver.Field{Name: "f", GoName: "F", Type: resolver.TypeInfo{OpenAPI: "boolean"}, Constraints: resolver.Constraints{Enum: []string{"yes"}}},
+			keyword: "enum only supported",
 		},
 		{
-			name: "enum on integer",
-			field: &resolver.ResolvedField{
-				Name:        "age",
-				GoName:      "Age",
-				OpenAPIType: "integer",
-				Enum:        []string{"1", "2", "3"},
-			},
-			wantErr: false,
+			name:    "enum on an array of objects",
+			field:   &resolver.Field{Name: "f", GoName: "F", Type: resolver.TypeInfo{IsArray: true, Items: "object"}, Constraints: resolver.Constraints{Enum: []string{"a"}}},
+			keyword: "enum for arrays",
 		},
 		{
-			name: "enum on array of strings",
-			field: &resolver.ResolvedField{
-				Name:        "tags",
-				GoName:      "Tags",
-				OpenAPIType: "array",
-				IsArray:     true,
-				ItemsType:   "string",
-				Enum:        []string{"red", "green", "blue"},
-			},
-			wantErr: false,
+			name:    "minimum above maximum",
+			field:   &resolver.Field{Name: "f", GoName: "F", Type: resolver.TypeInfo{OpenAPI: "integer"}, Constraints: resolver.Constraints{Minimum: &twoF, Maximum: &oneF}},
+			keyword: "minimum cannot be greater",
 		},
 		{
-			name: "enum on array of integers",
-			field: &resolver.ResolvedField{
-				Name:        "levels",
-				GoName:      "Levels",
-				OpenAPIType: "array",
-				IsArray:     true,
-				ItemsType:   "integer",
-				Enum:        []string{"1", "2", "3"},
-			},
-			wantErr: false,
+			name:    "minLength above maxLength",
+			field:   &resolver.Field{Name: "f", GoName: "F", Type: resolver.TypeInfo{OpenAPI: "string"}, Constraints: resolver.Constraints{MinLength: &two, MaxLength: &one}},
+			keyword: "minLength cannot be greater",
 		},
 		{
-			name: "enum on boolean",
-			field: &resolver.ResolvedField{
-				Name:        "active",
-				GoName:      "Active",
-				OpenAPIType: "boolean",
-				Enum:        []string{"true", "false"},
-			},
-			wantErr: true,
-			errMsg:  "enum only supported for string, integer, or array types",
+			name:    "length on a non-string",
+			field:   &resolver.Field{Name: "f", GoName: "F", Type: resolver.TypeInfo{OpenAPI: "integer"}, Constraints: resolver.Constraints{MinLength: &one}},
+			keyword: "minLength/maxLength only valid",
 		},
 		{
-			name: "enum on array of objects",
-			field: &resolver.ResolvedField{
-				Name:        "items",
-				GoName:      "Items",
-				OpenAPIType: "array",
-				IsArray:     true,
-				ItemsType:   "object",
-				Enum:        []string{"a", "b"},
-			},
-			wantErr: true,
-			errMsg:  "enum for arrays only supported with string or integer items",
+			name:    "minItems above maxItems",
+			field:   &resolver.Field{Name: "f", GoName: "F", Type: resolver.TypeInfo{IsArray: true, Items: "string"}, Constraints: resolver.Constraints{MinItems: &two, MaxItems: &one}},
+			keyword: "minItems cannot be greater",
 		},
 		{
-			name: "min > max",
-			field: &resolver.ResolvedField{
-				Name:        "value",
-				GoName:      "Value",
-				OpenAPIType: "number",
-				Minimum:     &maxVal,
-				Maximum:     &minVal,
-			},
-			wantErr: true,
-			errMsg:  "minimum cannot be greater than maximum",
+			name:    "items on a non-array",
+			field:   &resolver.Field{Name: "f", GoName: "F", Type: resolver.TypeInfo{OpenAPI: "string"}, Constraints: resolver.Constraints{MaxItems: &one}},
+			keyword: "minItems/maxItems only valid",
 		},
 		{
-			name: "minLength > maxLength",
-			field: &resolver.ResolvedField{
-				Name:        "text",
-				GoName:      "Text",
-				OpenAPIType: "string",
-				MinLength:   &maxLen,
-				MaxLength:   &minLen,
-			},
-			wantErr: true,
-			errMsg:  "minLength cannot be greater than maxLength",
+			name:    "uniqueItems on a non-array",
+			field:   &resolver.Field{Name: "f", GoName: "F", Type: resolver.TypeInfo{OpenAPI: "string"}, Constraints: resolver.Constraints{UniqueItems: true}},
+			keyword: "uniqueItems only valid",
 		},
 		{
-			name: "length constraints on non-string",
-			field: &resolver.ResolvedField{
-				Name:        "count",
-				GoName:      "Count",
-				OpenAPIType: "integer",
-				MinLength:   &minLen,
-			},
-			wantErr: true,
-			errMsg:  "only valid for string",
+			name:    "pattern on a non-string",
+			field:   &resolver.Field{Name: "f", GoName: "F", Type: resolver.TypeInfo{OpenAPI: "integer"}, Constraints: resolver.Constraints{Pattern: "^a$"}},
+			keyword: "pattern only valid",
 		},
 		{
-			name: "pattern on non-string",
-			field: &resolver.ResolvedField{
-				Name:        "count",
-				GoName:      "Count",
-				OpenAPIType: "integer",
-				Pattern:     "^[0-9]+$",
-			},
-			wantErr: true,
-			errMsg:  "only valid for string",
+			name:    "pattern that does not compile",
+			field:   &resolver.Field{Name: "f", GoName: "F", Type: resolver.TypeInfo{OpenAPI: "string"}, Constraints: resolver.Constraints{Pattern: "[unterminated"}},
+			keyword: "invalid pattern regex",
 		},
 		{
-			name: "invalid pattern regex",
-			field: &resolver.ResolvedField{
-				Name:        "text",
-				GoName:      "Text",
-				OpenAPIType: "string",
-				Pattern:     "[invalid",
-			},
-			wantErr: true,
-			errMsg:  "invalid pattern",
+			name:    "readOnly and writeOnly together",
+			field:   &resolver.Field{Name: "f", GoName: "F", Type: resolver.TypeInfo{OpenAPI: "string"}, Constraints: resolver.Constraints{ReadOnly: true, WriteOnly: true}},
+			keyword: "readOnly and writeOnly",
 		},
 		{
-			name: "minItems > maxItems",
-			field: &resolver.ResolvedField{
-				Name:        "tags",
-				GoName:      "Tags",
-				OpenAPIType: "array",
-				IsArray:     true,
-				MinItems:    &maxLen,
-				MaxItems:    &minLen,
-			},
-			wantErr: true,
-			errMsg:  "minItems cannot be greater than maxItems",
-		},
-		{
-			name: "items constraints on non-array",
-			field: &resolver.ResolvedField{
-				Name:        "name",
-				GoName:      "Name",
-				OpenAPIType: "string",
-				MinItems:    &minLen,
-			},
-			wantErr: true,
-			errMsg:  "only valid for array",
-		},
-		{
-			name: "valid array with minItems and maxItems",
-			field: &resolver.ResolvedField{
-				Name:        "tags",
-				GoName:      "Tags",
-				OpenAPIType: "array",
-				IsArray:     true,
-				MinItems:    &minLen,
-				MaxItems:    &maxLen,
-			},
-			wantErr: false,
-		},
-		{
-			name: "uniqueItems on non-array",
-			field: &resolver.ResolvedField{
-				Name:        "name",
-				GoName:      "Name",
-				OpenAPIType: "string",
-				UniqueItems: true,
-			},
-			wantErr: true,
-			errMsg:  "only valid for array",
-		},
-		{
-			name: "valid array with uniqueItems",
-			field: &resolver.ResolvedField{
-				Name:        "tags",
-				GoName:      "Tags",
-				OpenAPIType: "array",
-				IsArray:     true,
-				UniqueItems: true,
-			},
-			wantErr: false,
-		},
-		{
-			name: "readOnly and writeOnly both true",
-			field: &resolver.ResolvedField{
-				Name:        "field",
-				GoName:      "Field",
-				OpenAPIType: "string",
-				ReadOnly:    true,
-				WriteOnly:   true,
-			},
-			wantErr: true,
-			errMsg:  "readOnly and writeOnly cannot both be true",
-		},
-		{
-			name: "readOnly only",
-			field: &resolver.ResolvedField{
-				Name:        "id",
-				GoName:      "ID",
-				OpenAPIType: "string",
-				ReadOnly:    true,
-			},
-			wantErr: false,
-		},
-		{
-			name: "writeOnly only",
-			field: &resolver.ResolvedField{
-				Name:        "password",
-				GoName:      "Password",
-				OpenAPIType: "string",
-				WriteOnly:   true,
-			},
-			wantErr: false,
+			name:    "constraints on a map",
+			field:   &resolver.Field{Name: "f", GoName: "F", Type: resolver.TypeInfo{IsMap: true, MapValue: "string"}, Constraints: resolver.Constraints{MinLength: &one}},
+			keyword: "minLength/maxLength only valid",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
-					Title:   "Test",
-					Version: "1.0.0",
-				},
-				Schemas: map[string]*resolver.ResolvedSchema{
-					"Test": {
-						Name:   "Test",
-						Fields: []*resolver.ResolvedField{tt.field},
-					},
-				},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints:  []*resolver.ResolvedEndpoint{},
-			}
+			pkg := validPackage()
+			pkg.Schemas[0].Fields = []*resolver.Field{tt.field}
 
-			v := NewValidator()
-			err := v.Validate(pkg)
-
-			if tt.wantErr && err == nil {
-				t.Error("Validate() should error")
-			}
-
-			if !tt.wantErr && err != nil {
-				t.Errorf("Validate() error = %v, want nil", err)
-			}
-
-			if tt.wantErr && err != nil && !strings.Contains(err.Error(), tt.errMsg) {
-				t.Errorf("Error should mention %s, got: %v", tt.errMsg, err)
-			}
+			assertReported(t, Validate(pkg), "@schema[User].F", tt.keyword)
 		})
 	}
 }
 
-func TestValidator_ValidateParameterField(t *testing.T) {
-	tests := []struct {
-		name      string
-		paramType string
-		field     *resolver.ResolvedField
-		wantErr   bool
-		errMsg    string
-	}{
-		{
-			name:      "path param cannot be nullable",
-			paramType: "path",
-			field: &resolver.ResolvedField{
-				Name:        "id",
-				GoName:      "ID",
-				OpenAPIType: "string",
-				Nullable:    true,
-			},
-			wantErr: true,
-			errMsg:  "cannot be nullable",
-		},
-		{
-			name:      "path param cannot be array",
-			paramType: "path",
-			field: &resolver.ResolvedField{
-				Name:        "id",
-				GoName:      "ID",
-				OpenAPIType: "array",
-				IsArray:     true,
-			},
-			wantErr: true,
-			errMsg:  "cannot be arrays",
-		},
-		{
-			name:      "header param cannot be array",
-			paramType: "header",
-			field: &resolver.ResolvedField{
-				Name:        "token",
-				GoName:      "Token",
-				OpenAPIType: "array",
-				IsArray:     true,
-			},
-			wantErr: true,
-			errMsg:  "cannot be arrays",
-		},
-		{
-			name:      "cookie param cannot be array",
-			paramType: "cookie",
-			field: &resolver.ResolvedField{
-				Name:        "session",
-				GoName:      "Session",
-				OpenAPIType: "array",
-				IsArray:     true,
-			},
-			wantErr: true,
-			errMsg:  "cannot be arrays",
-		},
-		{
-			name:      "query param can be array",
-			paramType: "query",
-			field: &resolver.ResolvedField{
-				Name:        "tags",
-				GoName:      "Tags",
-				OpenAPIType: "array",
-				IsArray:     true,
-			},
-			wantErr: false,
-		},
+func TestValidate_AllowedFieldConstraints(t *testing.T) {
+	one, two := 1, 2
+
+	fields := []*resolver.Field{
+		{Name: "a", GoName: "A", Type: resolver.TypeInfo{OpenAPI: "string"}, Constraints: resolver.Constraints{Enum: []string{"x"}, MinLength: &one, MaxLength: &two, Pattern: "^x$"}},
+		{Name: "b", GoName: "B", Type: resolver.TypeInfo{OpenAPI: "integer"}, Constraints: resolver.Constraints{Enum: []string{"1"}}},
+		{Name: "c", GoName: "C", Type: resolver.TypeInfo{IsArray: true, Items: "string"}, Constraints: resolver.Constraints{Enum: []string{"x"}, MinItems: &one, MaxItems: &two, UniqueItems: true}},
+		{Name: "d", GoName: "D", Type: resolver.TypeInfo{IsArray: true, Items: "integer"}, Constraints: resolver.Constraints{Enum: []string{"1"}}},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
-					Title:   "Test",
-					Version: "1.0.0",
-				},
-				Schemas: map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{
-					"TestParam": {
-						Name:   "TestParam",
-						Type:   tt.paramType,
-						Fields: []*resolver.ResolvedField{tt.field},
-					},
-				},
-				Endpoints: []*resolver.ResolvedEndpoint{},
-			}
+	pkg := validPackage()
+	pkg.Schemas[0].Fields = fields
 
-			v := NewValidator()
-			err := v.Validate(pkg)
-
-			if tt.wantErr && err == nil {
-				t.Error("Validate() should error")
-			}
-
-			if !tt.wantErr && err != nil {
-				t.Errorf("Validate() error = %v, want nil", err)
-			}
-
-			if tt.wantErr && err != nil && !strings.Contains(err.Error(), tt.errMsg) {
-				t.Errorf("Error should mention %s, got: %v", tt.errMsg, err)
-			}
-		})
+	if err := Validate(pkg); err != nil {
+		t.Errorf("constraints matching their types should pass: %v", err)
 	}
 }
 
-func TestValidator_ValidateEndpoint(t *testing.T) {
-	tests := []struct {
-		name     string
-		endpoint *resolver.ResolvedEndpoint
-		wantErr  bool
-		errMsg   string
-	}{
-		{
-			name: "valid endpoint",
-			endpoint: &resolver.ResolvedEndpoint{
-				Method: "GET",
-				Path:   "/users",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200"},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "invalid method",
-			endpoint: &resolver.ResolvedEndpoint{
-				Method: "INVALID",
-				Path:   "/users",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200"},
-				},
-			},
-			wantErr: true,
-			errMsg:  "invalid HTTP method",
-		},
-		{
-			name: "missing path",
-			endpoint: &resolver.ResolvedEndpoint{
-				Method: "GET",
-				Path:   "",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200"},
-				},
-			},
-			wantErr: true,
-			errMsg:  "missing path",
-		},
-		{
-			name: "path not starting with /",
-			endpoint: &resolver.ResolvedEndpoint{
-				Method: "GET",
-				Path:   "users",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200"},
-				},
-			},
-			wantErr: true,
-			errMsg:  "must start with /",
-		},
-		{
-			name: "no responses",
-			endpoint: &resolver.ResolvedEndpoint{
-				Method:    "GET",
-				Path:      "/users",
-				Responses: map[string]*resolver.ResolvedResponse{},
-			},
-			wantErr: true,
-			errMsg:  "at least one response",
-		},
-	}
+func TestValidate_ParameterRules(t *testing.T) {
+	array := resolver.TypeInfo{IsArray: true, Items: "string"}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
-					Title:   "Test",
-					Version: "1.0.0",
-				},
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints:  []*resolver.ResolvedEndpoint{tt.endpoint},
-			}
-
-			v := NewValidator()
-			err := v.Validate(pkg)
-
-			if tt.wantErr && err == nil {
-				t.Error("Validate() should error")
-			}
-
-			if !tt.wantErr && err != nil {
-				t.Errorf("Validate() error = %v, want nil", err)
-			}
-
-			if tt.wantErr && err != nil && !strings.Contains(err.Error(), tt.errMsg) {
-				t.Errorf("Error should mention %s, got: %v", tt.errMsg, err)
-			}
-		})
-	}
-}
-
-func TestExtractPathVariables(t *testing.T) {
-	tests := []struct {
-		name     string
-		path     string
-		expected []string
-	}{
-		{
-			name:     "no variables",
-			path:     "/users",
-			expected: []string{},
-		},
-		{
-			name:     "single variable",
-			path:     "/users/{id}",
-			expected: []string{"id"},
-		},
-		{
-			name:     "multiple variables",
-			path:     "/users/{userId}/posts/{postId}",
-			expected: []string{"userId", "postId"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractPathVariables(tt.path)
-			if len(got) != len(tt.expected) {
-				t.Errorf("extractPathVariables() returned %d vars, want %d", len(got), len(tt.expected))
-				return
-			}
-
-			for i := range got {
-				if got[i] != tt.expected[i] {
-					t.Errorf("extractPathVariables()[%d] = %s, want %s", i, got[i], tt.expected[i])
-				}
-			}
-		})
-	}
-}
-
-func TestValidator_ValidatePathParameters(t *testing.T) {
 	tests := []struct {
 		name    string
+		param   *resolver.Param
+		keyword string
+	}{
+		{
+			name:    "nullable path parameter",
+			param:   &resolver.Param{In: parser.ParamPath, Field: &resolver.Field{Name: "id", GoName: "ID", Nullable: true, Type: resolver.TypeInfo{OpenAPI: "string"}}},
+			keyword: "cannot be nullable",
+		},
+		{
+			name:    "array path parameter",
+			param:   &resolver.Param{In: parser.ParamPath, Field: &resolver.Field{Name: "id", GoName: "ID", Type: array}},
+			keyword: "path parameters cannot be arrays",
+		},
+		{
+			name:    "array header parameter",
+			param:   &resolver.Param{In: parser.ParamHeader, Field: &resolver.Field{Name: "X-Tag", GoName: "Tag", Type: array}},
+			keyword: "header parameters cannot be arrays",
+		},
+		{
+			name:    "array cookie parameter",
+			param:   &resolver.Param{In: parser.ParamCookie, Field: &resolver.Field{Name: "session", GoName: "Session", Type: array}},
+			keyword: "cookie parameters cannot be arrays",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pkg := validPackage()
+			endpoint := pkg.Endpoints[0]
+			endpoint.Path = "/things"
+			endpoint.Parameters = []*resolver.Param{tt.param}
+
+			path := "@endpoint[GET /things].@" + tt.param.In + "." + tt.param.Field.GoName
+			assertReported(t, Validate(pkg), path, tt.keyword)
+		})
+	}
+}
+
+func TestValidate_ArrayQueryParameterAllowed(t *testing.T) {
+	pkg := validPackage()
+	endpoint := pkg.Endpoints[0]
+	endpoint.Path = "/things"
+	endpoint.Parameters = []*resolver.Param{{
+		In:    parser.ParamQuery,
+		Field: &resolver.Field{Name: "tags", GoName: "Tags", Type: resolver.TypeInfo{IsArray: true, Items: "string"}},
+	}}
+
+	if err := Validate(pkg); err != nil {
+		t.Errorf("query parameters may be arrays: %v", err)
+	}
+}
+
+func TestValidate_InlineParameterFieldsAreChecked(t *testing.T) {
+	// Inline declarations resolve into the same parameter list as referenced
+	// structs, so their fields are checked the same way.
+	pkg := validPackage()
+	endpoint := pkg.Endpoints[0]
+	endpoint.Path = "/things"
+	endpoint.Parameters = []*resolver.Param{{
+		In:    parser.ParamQuery,
+		Field: &resolver.Field{Name: "limit", GoName: "Limit", Type: resolver.TypeInfo{OpenAPI: "integer"}, Constraints: resolver.Constraints{Pattern: "^1$"}},
+	}}
+
+	assertReported(t, Validate(pkg), "@endpoint[GET /things].@query.Limit", "pattern only valid")
+}
+
+func TestValidate_EndpointRules(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*resolver.Endpoint)
 		path    string
-		params  []*resolver.ResolvedParameter
-		wantErr bool
-		errMsg  string
+		keyword string
 	}{
 		{
-			name: "matching path variable and parameter",
-			path: "/users/{id}",
-			params: []*resolver.ResolvedParameter{
-				{
-					Fields: []*resolver.ResolvedField{
-						{Name: "id", GoName: "ID"},
-					},
-				},
-			},
-			wantErr: false,
+			name:    "unknown method",
+			mutate:  func(e *resolver.Endpoint) { e.Method = "FETCH" },
+			path:    "@endpoint[FETCH /users/{id}]",
+			keyword: "invalid HTTP method",
 		},
 		{
-			name:    "path variable without parameter",
-			path:    "/users/{id}",
-			params:  []*resolver.ResolvedParameter{},
-			wantErr: true,
-			errMsg:  "has no corresponding @path parameter",
+			name:    "missing path",
+			mutate:  func(e *resolver.Endpoint) { e.Path = ""; e.Parameters = nil },
+			path:    "@endpoint[GET ]",
+			keyword: "missing path",
 		},
 		{
-			name: "parameter not used in path",
-			path: "/users",
-			params: []*resolver.ResolvedParameter{
-				{
-					Fields: []*resolver.ResolvedField{
-						{Name: "id", GoName: "ID"},
-					},
-				},
+			name:    "path without a leading slash",
+			mutate:  func(e *resolver.Endpoint) { e.Path = "users/{id}" },
+			path:    "@endpoint[GET users/{id}]",
+			keyword: "must start with /",
+		},
+		{
+			name:    "invalid path variable name",
+			mutate:  func(e *resolver.Endpoint) { e.Path = "/users/{user id}"; e.Parameters = nil },
+			path:    "@endpoint[GET /users/{user id}]",
+			keyword: "invalid path variable name",
+		},
+		{
+			name:    "path variable without a parameter",
+			mutate:  func(e *resolver.Endpoint) { e.Parameters = nil },
+			path:    "@endpoint[GET /users/{id}]",
+			keyword: "has no corresponding @path parameter",
+		},
+		{
+			name:    "path parameter not in the path",
+			mutate:  func(e *resolver.Endpoint) { e.Path = "/users"; e.Parameters[0].Field.Name = "other" },
+			path:    "@endpoint[GET /users]",
+			keyword: "not used in path",
+		},
+		{
+			name:    "no responses",
+			mutate:  func(e *resolver.Endpoint) { e.Responses = nil },
+			path:    "@endpoint[GET /users/{id}]",
+			keyword: "at least one response",
+		},
+		{
+			name: "parameter name conflict across kinds",
+			mutate: func(e *resolver.Endpoint) {
+				e.Parameters = append(e.Parameters, &resolver.Param{
+					In:    parser.ParamQuery,
+					Field: &resolver.Field{Name: "id", GoName: "ID", Type: resolver.TypeInfo{OpenAPI: "string"}},
+				})
 			},
-			wantErr: true,
-			errMsg:  "not used in path",
+			path:    "@endpoint[GET /users/{id}]",
+			keyword: "parameter name conflict",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
-					Title:   "Test",
-					Version: "1.0.0",
-				},
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints: []*resolver.ResolvedEndpoint{
-					{
-						Method:     "GET",
-						Path:       tt.path,
-						PathParams: tt.params,
-						Responses: map[string]*resolver.ResolvedResponse{
-							"200": {StatusCode: "200"},
-						},
-					},
-				},
-			}
+			pkg := validPackage()
+			tt.mutate(pkg.Endpoints[0])
 
-			v := NewValidator()
-			err := v.Validate(pkg)
-
-			if tt.wantErr && err == nil {
-				t.Error("Validate() should error")
-			}
-
-			if !tt.wantErr && err != nil {
-				t.Errorf("Validate() error = %v, want nil", err)
-			}
-
-			if tt.wantErr && err != nil && !strings.Contains(err.Error(), tt.errMsg) {
-				t.Errorf("Error should mention %s, got: %v", tt.errMsg, err)
-			}
+			assertReported(t, Validate(pkg), tt.path, tt.keyword)
 		})
 	}
 }
 
-func TestValidator_ValidateRequestBody(t *testing.T) {
-	tests := []struct {
-		name    string
-		request *resolver.ResolvedRequestBody
-		schemas map[string]*resolver.ResolvedSchema
-		wantErr bool
-		errMsg  string
-	}{
-		{
-			name: "valid request",
-			request: &resolver.ResolvedRequestBody{
-				ContentType: "application/json",
-				Body:        &resolver.ResolvedBody{Schema: "User"},
-			},
-			schemas: map[string]*resolver.ResolvedSchema{
-				"User": {
-					Name: "User",
-					Fields: []*resolver.ResolvedField{
-						{Name: "id", GoName: "ID", OpenAPIType: "string"},
-					},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "missing content type",
-			request: &resolver.ResolvedRequestBody{
-				Body: &resolver.ResolvedBody{Schema: "User"},
-			},
-			schemas: map[string]*resolver.ResolvedSchema{
-				"User": {Name: "User"},
-			},
-			wantErr: true,
-			errMsg:  "@contentType",
-		},
-		{
-			name: "unknown schema",
-			request: &resolver.ResolvedRequestBody{
-				ContentType: "application/json",
-				Body:        &resolver.ResolvedBody{Schema: "Unknown"},
-			},
-			schemas: map[string]*resolver.ResolvedSchema{},
-			wantErr: true,
-			errMsg:  "unknown schema",
-		},
-	}
+func TestValidate_EndpointTags(t *testing.T) {
+	pkg := validPackage()
+	pkg.API.Tags = []*parser.Tag{{Name: "users"}}
+	pkg.Endpoints[0].Tags = []string{"users", "ghosts"}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
-					Title:   "Test",
-					Version: "1.0.0",
-				},
-				Schemas:    tt.schemas,
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints: []*resolver.ResolvedEndpoint{
-					{
-						Method:  "POST",
-						Path:    "/users",
-						Request: tt.request,
-						Responses: map[string]*resolver.ResolvedResponse{
-							"200": {StatusCode: "200"},
-						},
-					},
-				},
-			}
+	assertReported(t, Validate(pkg), "@endpoint[GET /users/{id}]", "undefined tag: ghosts")
+}
 
-			v := NewValidator()
-			err := v.Validate(pkg)
+func TestValidate_TagsUncheckedWithoutAPITags(t *testing.T) {
+	pkg := validPackage()
+	pkg.Endpoints[0].Tags = []string{"anything"}
 
-			if tt.wantErr && err == nil {
-				t.Error("Validate() should error")
-			}
-
-			if !tt.wantErr && err != nil {
-				t.Errorf("Validate() error = %v, want nil", err)
-			}
-
-			if tt.wantErr && err != nil && !strings.Contains(err.Error(), tt.errMsg) {
-				t.Errorf("Error should mention %s, got: %v", tt.errMsg, err)
-			}
-		})
+	if err := Validate(pkg); err != nil {
+		t.Errorf("tags are only checked when the API defines some: %v", err)
 	}
 }
 
-func TestValidator_ValidateResponseStatusCode(t *testing.T) {
-	tests := []struct {
-		name       string
-		statusCode string
-		wantErr    bool
-	}{
-		{"exact 200", "200", false},
-		{"exact 404", "404", false},
-		{"exact 500", "500", false},
-		{"range 2XX", "2XX", false},
-		{"range 4XX", "4XX", false},
-		{"range 5XX", "5XX", false},
-		{"default", "default", false},
-		{"invalid letters", "abc", true},
-		{"invalid 6XX", "6XX", true},
-		{"invalid 0XX", "0XX", true},
-		{"too short", "20", true},
-		{"too long", "2000", true},
-		{"lowercase xx", "2xx", true},
+func TestValidate_RequestBody(t *testing.T) {
+	t.Run("missing content type", func(t *testing.T) {
+		pkg := validPackage()
+		pkg.Endpoints[0].Request = &resolver.Request{
+			Content: &resolver.Content{Ref: &resolver.TypeRef{Schema: "User"}},
+		}
+
+		assertReported(t, Validate(pkg), "@endpoint[GET /users/{id}].@request", "@contentType")
+	})
+
+	t.Run("unknown schema", func(t *testing.T) {
+		pkg := validPackage()
+		pkg.Endpoints[0].Request = &resolver.Request{
+			ContentType: "application/json",
+			Content:     &resolver.Content{Ref: &resolver.TypeRef{Schema: "Ghost"}},
+		}
+
+		assertReported(t, Validate(pkg), "@endpoint[GET /users/{id}].@request", "unknown schema: Ghost")
+	})
+
+	t.Run("primitive body needs no schema", func(t *testing.T) {
+		pkg := validPackage()
+		pkg.Endpoints[0].Request = &resolver.Request{
+			ContentType: "application/json",
+			Content:     &resolver.Content{Ref: &resolver.TypeRef{IsMap: true, Primitive: "integer"}},
+		}
+
+		if err := Validate(pkg); err != nil {
+			t.Errorf("a primitive body should pass: %v", err)
+		}
+	})
+}
+
+func TestValidate_ResponseStatusCodes(t *testing.T) {
+	valid := []string{"200", "204", "404", "2XX", "5XX", "default"}
+	for _, status := range valid {
+		pkg := validPackage()
+		pkg.Endpoints[0].Responses[0].Status = status
+
+		if err := Validate(pkg); err != nil {
+			t.Errorf("status %q should pass: %v", status, err)
+		}
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
-					Title:   "Test",
-					Version: "1.0.0",
-				},
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints: []*resolver.ResolvedEndpoint{
-					{
-						Method: "GET",
-						Path:   "/test",
-						Responses: map[string]*resolver.ResolvedResponse{
-							tt.statusCode: {StatusCode: tt.statusCode},
-						},
-					},
-				},
-			}
+	invalid := []string{"", "20", "2000", "600", "XXX", "abc"}
+	for _, status := range invalid {
+		pkg := validPackage()
+		pkg.Endpoints[0].Responses[0].Status = status
 
-			v := NewValidator()
-			err := v.Validate(pkg)
-
-			if tt.wantErr && (err == nil || !strings.Contains(err.Error(), "invalid status code")) {
-				t.Errorf("expected 'invalid status code' error for %q, got: %v", tt.statusCode, err)
-			}
-			if !tt.wantErr && err != nil && strings.Contains(err.Error(), "invalid status code") {
-				t.Errorf("unexpected 'invalid status code' error for %q: %v", tt.statusCode, err)
-			}
-		})
+		path := "@endpoint[GET /users/{id}].@response[" + status + "]"
+		assertReported(t, Validate(pkg), path, "invalid status code")
 	}
 }
 
-func TestMultiError_Error(t *testing.T) {
-	tests := []struct {
-		name   string
-		errors []error
-		want   string
-	}{
-		{
-			name: "single error",
-			errors: []error{
-				&ValidationError{Message: "test error"},
-			},
-			want: "test error",
-		},
-		{
-			name: "multiple errors",
-			errors: []error{
-				&ValidationError{Message: "error 1"},
-				&ValidationError{Message: "error 2"},
-			},
-			want: "2 validation errors",
-		},
+func TestValidate_ResponseBody(t *testing.T) {
+	pkg := validPackage()
+	pkg.Endpoints[0].Responses[0].Content.Ref.Schema = "Ghost"
+
+	assertReported(t, Validate(pkg), "@endpoint[GET /users/{id}].@response[200]", "unknown schema: Ghost")
+}
+
+func TestValidate_InlineResponseFieldsAreChecked(t *testing.T) {
+	one := 1
+
+	pkg := validPackage()
+	pkg.Endpoints[0].Responses[0].Content = &resolver.Content{Fields: []*resolver.Field{
+		{Name: "count", GoName: "Count", Type: resolver.TypeInfo{OpenAPI: "integer"}, Constraints: resolver.Constraints{MinLength: &one}},
+	}}
+
+	assertReported(t, Validate(pkg), "@endpoint[GET /users/{id}].@response[200].Count", "minLength/maxLength only valid")
+}
+
+func TestValidate_BindTarget(t *testing.T) {
+	wrapper := &resolver.Schema{Name: "Envelope", Fields: []*resolver.Field{
+		{Name: "data", GoName: "Data", Type: resolver.TypeInfo{IsAny: true}},
+	}}
+
+	t.Run("resolved wrapper and field", func(t *testing.T) {
+		pkg := validPackage()
+		pkg.Schemas = append(pkg.Schemas, wrapper)
+		pkg.Endpoints[0].Responses[0].Content.Bind = &resolver.BindTarget{
+			Name: "Envelope", Field: "Data", Wrapper: wrapper,
+		}
+
+		if err := Validate(pkg); err != nil {
+			t.Errorf("a resolved bind should pass: %v", err)
+		}
+	})
+
+	t.Run("unknown wrapper", func(t *testing.T) {
+		pkg := validPackage()
+		pkg.Endpoints[0].Responses[0].Content.Bind = &resolver.BindTarget{Name: "Ghost", Field: "Data"}
+
+		assertReported(t, Validate(pkg), "@endpoint[GET /users/{id}].@response[200].@bind", "unknown wrapper schema: Ghost")
+	})
+
+	t.Run("unknown field", func(t *testing.T) {
+		pkg := validPackage()
+		pkg.Schemas = append(pkg.Schemas, wrapper)
+		pkg.Endpoints[0].Responses[0].Content.Bind = &resolver.BindTarget{
+			Name: "Envelope", Field: "Missing", Wrapper: wrapper,
+		}
+
+		assertReported(t, Validate(pkg), "@endpoint[GET /users/{id}].@response[200].@bind", "no field")
+	})
+}
+
+func TestMultiError(t *testing.T) {
+	single := &MultiError{Errors: []error{&ValidationError{Path: "@api", Message: "boom"}}}
+	if got := single.Error(); got != "@api: boom" {
+		t.Errorf("single error = %q", got)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			me := &MultiError{Errors: tt.errors}
-			got := me.Error()
-			if !strings.Contains(got, tt.want) {
-				t.Errorf("MultiError.Error() = %q, want to contain %q", got, tt.want)
-			}
-		})
+	several := &MultiError{Errors: []error{
+		&ValidationError{Path: "@api", Message: "boom"},
+		&ValidationError{Message: "bang"},
+	}}
+	message := several.Error()
+	for _, want := range []string{"2 validation errors", "1. @api: boom", "2. bang"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("message %q should contain %q", message, want)
+		}
 	}
 }
 
-func TestValidator_ValidateEndpointTags(t *testing.T) {
-	tests := []struct {
-		name         string
-		endpointTags []string
-		apiTags      []*resolver.Tag
-		wantError    bool
-		errorMessage string
-	}{
-		{
-			name:         "valid tags",
-			endpointTags: []string{"pets", "users"},
-			apiTags: []*resolver.Tag{
-				{Name: "pets", Description: "Pet operations"},
-				{Name: "users", Description: "User operations"},
-			},
-			wantError: false,
-		},
-		{
-			name:         "undefined tag",
-			endpointTags: []string{"pets", "unknown"},
-			apiTags: []*resolver.Tag{
-				{Name: "pets", Description: "Pet operations"},
-			},
-			wantError:    true,
-			errorMessage: "endpoint uses undefined tag: unknown",
-		},
-		{
-			name:         "no API tags defined",
-			endpointTags: []string{},
-			apiTags:      []*resolver.Tag{},
-			wantError:    false,
-		},
-		{
-			name:         "endpoint uses no tags",
-			endpointTags: []string{},
-			apiTags: []*resolver.Tag{
-				{Name: "pets", Description: "Pet operations"},
-			},
-			wantError: false,
-		},
-		{
-			name:         "all endpoint tags undefined",
-			endpointTags: []string{"unknown1", "unknown2"},
-			apiTags: []*resolver.Tag{
-				{Name: "pets", Description: "Pet operations"},
-			},
-			wantError:    true,
-			errorMessage: "endpoint uses undefined tag",
-		},
+func TestMultiError_Unwrap(t *testing.T) {
+	pkg := validPackage()
+	pkg.API = &parser.APIInfo{}
+
+	err := Validate(pkg)
+
+	var reported *ValidationError
+	if !errors.As(err, &reported) {
+		t.Fatalf("errors.As should reach a *ValidationError through Unwrap: %v", err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			v := NewValidator()
-			v.validateEndpointTags("@endpoint[GET /test]", tt.endpointTags, tt.apiTags)
-
-			if tt.wantError && len(v.errors) == 0 {
-				t.Errorf("expected error but got none")
-			}
-
-			if !tt.wantError && len(v.errors) > 0 {
-				t.Errorf("expected no error but got: %v", v.errors)
-			}
-
-			if tt.wantError && len(v.errors) > 0 {
-				found := false
-				for _, err := range v.errors {
-					if strings.Contains(err.Error(), tt.errorMessage) {
-						found = true
-						break
-					}
-				}
-				if !found {
-					t.Errorf("expected error containing %q but got: %v", tt.errorMessage, v.errors)
-				}
-			}
-		})
+	if reported.Path != "@api" {
+		t.Errorf("first unwrapped error = %+v", reported)
 	}
 }
 
-func TestValidator_ValidateEndpointWithTags(t *testing.T) {
-	tests := []struct {
-		name      string
-		endpoint  *resolver.ResolvedEndpoint
-		pkg       *resolver.ResolvedPackage
-		wantError bool
-		errorMsg  string
-	}{
-		{
-			name: "endpoint with valid tags",
-			endpoint: &resolver.ResolvedEndpoint{
-				Method: "GET",
-				Path:   "/pets",
-				Tags:   []string{"pets"},
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200", Description: "Success"},
-				},
-			},
-			pkg: &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
-					Title:   "Test API",
-					Version: "1.0.0",
-					Tags: []*resolver.Tag{
-						{Name: "pets", Description: "Pet operations"},
-					},
-				},
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-			},
-			wantError: false,
-		},
-		{
-			name: "endpoint with invalid tag",
-			endpoint: &resolver.ResolvedEndpoint{
-				Method: "GET",
-				Path:   "/users",
-				Tags:   []string{"users"},
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200", Description: "Success"},
-				},
-			},
-			pkg: &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
-					Title:   "Test API",
-					Version: "1.0.0",
-					Tags: []*resolver.Tag{
-						{Name: "pets", Description: "Pet operations"},
-					},
-				},
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-			},
-			wantError: true,
-			errorMsg:  "endpoint uses undefined tag: users",
-		},
-		{
-			name: "endpoint without tags when API has tags",
-			endpoint: &resolver.ResolvedEndpoint{
-				Method: "GET",
-				Path:   "/health",
-				Tags:   []string{},
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200", Description: "Success"},
-				},
-			},
-			pkg: &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
-					Title:   "Test API",
-					Version: "1.0.0",
-					Tags: []*resolver.Tag{
-						{Name: "pets", Description: "Pet operations"},
-					},
-				},
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-			},
-			wantError: false,
-		},
+func TestValidate_ErrorOrderIsStable(t *testing.T) {
+	build := func() *resolver.Package {
+		pkg := validPackage()
+		pkg.API.Title = ""
+		pkg.API.SecuritySchemes = []*parser.SecurityScheme{
+			{Name: "zeta"}, {Name: "alpha"},
+		}
+		pkg.Schemas = append(pkg.Schemas,
+			&resolver.Schema{Name: "Zed"},
+			&resolver.Schema{Name: "Ann"},
+		)
+		pkg.Endpoints[0].Method = "FETCH"
+		return pkg
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			v := NewValidator()
-			v.validateEndpoint(tt.endpoint, tt.pkg)
-
-			if tt.wantError && len(v.errors) == 0 {
-				t.Errorf("expected error but got none")
-			}
-
-			if !tt.wantError && len(v.errors) > 0 {
-				t.Errorf("expected no error but got: %v", v.errors)
-			}
-
-			if tt.wantError && tt.errorMsg != "" && len(v.errors) > 0 {
-				found := false
-				for _, err := range v.errors {
-					if strings.Contains(err.Error(), tt.errorMsg) {
-						found = true
-						break
-					}
-				}
-				if !found {
-					t.Errorf("expected error containing %q but got: %v", tt.errorMsg, v.errors)
-				}
-			}
-		})
-	}
-}
-
-func TestValidator_ValidateBindTarget(t *testing.T) {
-	wrapperSchema := &resolver.ResolvedSchema{
-		Name:       "DataResponse",
-		GoTypeName: "DataResponse",
-		Fields: []*resolver.ResolvedField{
-			{Name: "data", GoName: "Data", OpenAPIType: "object"},
-			{Name: "message", GoName: "Message", OpenAPIType: "string"},
-		},
+	first := Validate(build()).Error()
+	second := Validate(build()).Error()
+	if first != second {
+		t.Errorf("error order is not stable:\nfirst:\n%s\nsecond:\n%s", first, second)
 	}
 
-	tests := []struct {
-		name    string
-		bind    *resolver.ResolvedBindTarget
-		wantErr bool
-		errMsg  string
-	}{
-		{
-			name: "valid bind target",
-			bind: &resolver.ResolvedBindTarget{
-				Wrapper:       "DataResponse",
-				Field:         "Data",
-				WrapperSchema: wrapperSchema,
-			},
-			wantErr: false,
-		},
-		{
-			name: "unknown wrapper schema",
-			bind: &resolver.ResolvedBindTarget{
-				Wrapper:       "NonExistent",
-				Field:         "Data",
-				WrapperSchema: nil,
-			},
-			wantErr: true,
-			errMsg:  "references unknown wrapper schema: NonExistent",
-		},
-		{
-			name: "unknown field in wrapper",
-			bind: &resolver.ResolvedBindTarget{
-				Wrapper:       "DataResponse",
-				Field:         "Missing",
-				WrapperSchema: wrapperSchema,
-			},
-			wantErr: true,
-			errMsg:  `wrapper schema "DataResponse" has no field "Missing"`,
-		},
+	// Source order, not map order: the schemes and schemas report in the
+	// order the package carries them.
+	if !strings.Contains(first, "zeta") || strings.Index(first, "zeta") > strings.Index(first, "alpha") {
+		t.Errorf("security schemes should report in declaration order:\n%s", first)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			v := NewValidator()
-			schemas := map[string]*resolver.ResolvedSchema{
-				"DataResponse": wrapperSchema,
-			}
-			v.validateBindTarget("@endpoint[GET /users].@request", tt.bind, schemas)
-
-			if tt.wantErr && len(v.errors) == 0 {
-				t.Error("expected error but got none")
-			}
-
-			if !tt.wantErr && len(v.errors) > 0 {
-				t.Errorf("expected no error but got: %v", v.errors)
-			}
-
-			if tt.wantErr && len(v.errors) > 0 {
-				if !strings.Contains(v.errors[0].Error(), tt.errMsg) {
-					t.Errorf("expected error containing %q, got: %v", tt.errMsg, v.errors[0])
-				}
-			}
-		})
-	}
-}
-
-func TestValidator_ValidateBindTarget_RequestBody(t *testing.T) {
-	wrapperSchema := &resolver.ResolvedSchema{
-		Name:       "DataResponse",
-		GoTypeName: "DataResponse",
-		Fields: []*resolver.ResolvedField{
-			{Name: "data", GoName: "Data", OpenAPIType: "object"},
-		},
-	}
-
-	pkg := &resolver.ResolvedPackage{
-		API: &resolver.ResolvedAPI{
-			Title:   "Test",
-			Version: "1.0.0",
-		},
-		Schemas: map[string]*resolver.ResolvedSchema{
-			"User":         {Name: "User", Fields: []*resolver.ResolvedField{{Name: "id", GoName: "ID", OpenAPIType: "string"}}},
-			"DataResponse": wrapperSchema,
-		},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
-			{
-				Method: "POST",
-				Path:   "/users",
-				Request: &resolver.ResolvedRequestBody{
-					ContentType: "application/json",
-					Body: &resolver.ResolvedBody{
-						Schema:      "User",
-						ElementType: "User",
-						Bind: &resolver.ResolvedBindTarget{
-							Wrapper:       "NonExistent",
-							Field:         "Data",
-							WrapperSchema: nil,
-						},
-					},
-				},
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200"},
-				},
-			},
-		},
-	}
-
-	v := NewValidator()
-	err := v.Validate(pkg)
-	if err == nil {
-		t.Fatal("expected validation error for unknown bind wrapper")
-	}
-	if !strings.Contains(err.Error(), "references unknown wrapper schema: NonExistent") {
-		t.Errorf("expected error about unknown wrapper schema, got: %v", err)
-	}
-}
-
-func TestValidator_ValidateBindTarget_Response(t *testing.T) {
-	wrapperSchema := &resolver.ResolvedSchema{
-		Name:       "DataResponse",
-		GoTypeName: "DataResponse",
-		Fields: []*resolver.ResolvedField{
-			{Name: "data", GoName: "Data", OpenAPIType: "object"},
-		},
-	}
-
-	pkg := &resolver.ResolvedPackage{
-		API: &resolver.ResolvedAPI{
-			Title:   "Test",
-			Version: "1.0.0",
-		},
-		Schemas: map[string]*resolver.ResolvedSchema{
-			"User":         {Name: "User", Fields: []*resolver.ResolvedField{{Name: "id", GoName: "ID", OpenAPIType: "string"}}},
-			"DataResponse": wrapperSchema,
-		},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
-			{
-				Method: "GET",
-				Path:   "/users",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {
-						StatusCode:  "200",
-						ContentType: "application/json",
-						Body: &resolver.ResolvedBody{
-							Schema:      "User",
-							ElementType: "User",
-							Bind: &resolver.ResolvedBindTarget{
-								Wrapper:       "DataResponse",
-								Field:         "NonExistent",
-								WrapperSchema: wrapperSchema,
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	v := NewValidator()
-	err := v.Validate(pkg)
-	if err == nil {
-		t.Fatal("expected validation error for unknown bind field")
-	}
-	if !strings.Contains(err.Error(), `wrapper schema "DataResponse" has no field "NonExistent"`) {
-		t.Errorf("expected error about unknown field, got: %v", err)
-	}
-}
-
-func TestValidator_ValidateBindTarget_InlineResponse(t *testing.T) {
-	pkg := &resolver.ResolvedPackage{
-		API: &resolver.ResolvedAPI{
-			Title:   "Test",
-			Version: "1.0.0",
-		},
-		Schemas:    map[string]*resolver.ResolvedSchema{},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
-			{
-				Method: "GET",
-				Path:   "/users",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200"},
-				},
-				InlineResponses: map[string]*resolver.ResolvedInlineBody{
-					"201": {
-						ContentType: "application/json",
-						Bind: &resolver.ResolvedBindTarget{
-							Wrapper:       "UnknownWrapper",
-							Field:         "Data",
-							WrapperSchema: nil,
-						},
-					},
-				},
-			},
-		},
-	}
-
-	v := NewValidator()
-	err := v.Validate(pkg)
-	if err == nil {
-		t.Fatal("expected validation error for unknown inline bind wrapper")
-	}
-	if !strings.Contains(err.Error(), "references unknown wrapper schema: UnknownWrapper") {
-		t.Errorf("expected error about unknown wrapper schema, got: %v", err)
+	if strings.Index(first, "@schema[Zed]") > strings.Index(first, "@schema[Ann]") {
+		t.Errorf("schemas should report in package order:\n%s", first)
 	}
 }

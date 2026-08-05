@@ -1,8 +1,8 @@
 package resolver
 
-// This file defines the emission-ready IR the generator consumes. It replaces
-// the ResolvedPackage family in types.go; during the rewrite transition both
-// exist, with ConvertLegacy (compat.go) bridging old to new.
+import "github.com/wontaeyang/go-specgen/pkg/parser"
+
+// This file defines the emission-ready IR the generator consumes.
 //
 // The IR is deliberately pre-ordered: Endpoint.Parameters and
 // Endpoint.Responses are built in final emission order so the generator
@@ -11,7 +11,10 @@ package resolver
 // Package is the fully resolved, emission-ordered package.
 type Package struct {
 	Name string
-	API  *ResolvedAPI
+
+	// API is the document metadata, passed through from the parser: it needs
+	// no type resolution.
+	API *parser.APIInfo
 
 	// Schemas holds named @schema types sorted by name, including generic
 	// templates (flagged IsGeneric) which the generator skips at emission.
@@ -43,6 +46,11 @@ type Field struct {
 	Format      string
 	Type        TypeInfo
 	Constraints
+
+	// Unresolved names a struct the field references that carries no @schema
+	// annotation, so there is nothing to reference. The generator ignores it;
+	// the validator turns it into an error.
+	Unresolved string
 
 	// Anonymous struct support: when non-empty these take precedence over
 	// Type, in this order (matching legacy emission).
@@ -167,6 +175,10 @@ type TypeRef struct {
 // wrapper field whose Go name is Field. A nil Wrapper falls back to plain
 // body emission (legacy behavior when the wrapper schema is unknown).
 type BindTarget struct {
+	// Name is the wrapper as written in the @bind annotation. It is kept for
+	// the validator's error message when Wrapper is nil.
+	Name string
+
 	Field   string
 	Wrapper *Schema
 }

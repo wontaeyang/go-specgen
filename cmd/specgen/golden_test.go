@@ -7,9 +7,6 @@ import (
 	"testing"
 
 	"github.com/wontaeyang/go-specgen/pkg/generator"
-	"github.com/wontaeyang/go-specgen/pkg/parser"
-	"github.com/wontaeyang/go-specgen/pkg/resolver"
-	"github.com/wontaeyang/go-specgen/pkg/validator"
 )
 
 var update = flag.Bool("update", false, "update golden files")
@@ -39,40 +36,9 @@ func TestGoldenFiles(t *testing.T) {
 		t.Run(ex.name, func(t *testing.T) {
 			dir := filepath.Join("..", "..", "examples", ex.name)
 
-			// Step 1: Parse
-			p := parser.NewParser(dir)
-			parsed, err := p.Parse()
+			got, err := buildSpec(dir, "3.1", generator.FormatYAML)
 			if err != nil {
-				t.Fatalf("parse: %v", err)
-			}
-
-			// Step 2: Resolve
-			r, err := resolver.NewResolver(dir, p.Comments())
-			if err != nil {
-				t.Fatalf("resolver: %v", err)
-			}
-
-			resolved, err := r.Resolve(parsed)
-			if err != nil {
-				t.Fatalf("resolve: %v", err)
-			}
-
-			// Step 3: Validate
-			v := validator.NewValidator()
-			if err := v.Validate(resolved); err != nil {
-				t.Fatalf("validate: %v", err)
-			}
-
-			// Step 4: Generate
-			gen, err := generator.NewGenerator("3.1")
-			if err != nil {
-				t.Fatalf("generator: %v", err)
-			}
-			spec := gen.Generate(resolver.ConvertLegacy(resolved))
-
-			got, err := gen.Render(spec, generator.FormatYAML)
-			if err != nil {
-				t.Fatalf("render: %v", err)
+				t.Fatalf("buildSpec: %v", err)
 			}
 
 			goldenFile := filepath.Join(dir, ex.yaml)

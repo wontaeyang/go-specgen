@@ -5,15 +5,19 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/wontaeyang/go-specgen/pkg/parser"
 	"github.com/wontaeyang/go-specgen/pkg/resolver"
 )
 
-// Validator validates business rules for the resolved package
-type Validator struct {
-	errors []error
-}
+// The validator checks the rules the generator assumes but cannot enforce:
+// that annotations reference things that exist, that constraints suit the
+// types they are attached to, and that paths and parameters agree.
+//
+// Every rule is checked; nothing stops at the first failure. The resolved IR
+// is ordered, so the errors come out in a stable order too.
 
-// ValidationError represents a validation error
+// ValidationError is one broken rule, with the annotation path it was found
+// at, e.g. "@schema[User].Email".
 type ValidationError struct {
 	Message string
 	Path    string
@@ -26,48 +30,7 @@ func (e *ValidationError) Error() string {
 	return e.Message
 }
 
-// NewValidator creates a new validator
-func NewValidator() *Validator {
-	return &Validator{
-		errors: make([]error, 0),
-	}
-}
-
-// Validate validates the resolved package
-func (v *Validator) Validate(pkg *resolver.ResolvedPackage) error {
-	v.errors = make([]error, 0)
-
-	// Validate API
-	if pkg.API == nil {
-		v.addError("", "missing @api annotation")
-	} else {
-		v.validateAPI(pkg.API)
-	}
-
-	// Validate schemas
-	for name, schema := range pkg.Schemas {
-		v.validateSchema(name, schema)
-	}
-
-	// Validate parameters
-	for name, param := range pkg.Parameters {
-		v.validateParameter(name, param)
-	}
-
-	// Validate endpoints
-	for _, endpoint := range pkg.Endpoints {
-		v.validateEndpoint(endpoint, pkg)
-	}
-
-	// Return errors if any
-	if len(v.errors) > 0 {
-		return &MultiError{Errors: v.errors}
-	}
-
-	return nil
-}
-
-// MultiError contains multiple validation errors
+// MultiError collects every validation error of one run.
 type MultiError struct {
 	Errors []error
 }
@@ -76,511 +39,426 @@ func (e *MultiError) Error() string {
 	if len(e.Errors) == 1 {
 		return e.Errors[0].Error()
 	}
+
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%d validation errors:\n", len(e.Errors)))
+	fmt.Fprintf(&sb, "%d validation errors:\n", len(e.Errors))
 	for i, err := range e.Errors {
-		sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, err.Error()))
+		fmt.Fprintf(&sb, "  %d. %s\n", i+1, err.Error())
 	}
 	return sb.String()
 }
 
-// addError adds a validation error
-func (v *Validator) addError(path, message string) {
+// Unwrap exposes the collected errors to errors.Is and errors.As.
+func (e *MultiError) Unwrap() []error { return e.Errors }
+
+// validMethods are the HTTP methods an @endpoint may declare.
+var validMethods = map[string]bool{
+	"GET": true, "POST": true, "PUT": true, "PATCH": true,
+	"DELETE": true, "HEAD": true, "OPTIONS": true,
+}
+
+// pathVariablePattern matches the {name} placeholders of a path.
+var pathVariablePattern = regexp.MustCompile(`\{([^}]+)\}`)
+
+// pathVariableName is the shape of a usable path variable name.
+var pathVariableName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+// validator accumulates the errors of one run.
+type validator struct {
+	// schemas is the resolved schemas by name, for reference checks.
+	schemas map[string]*resolver.Schema
+
+	errors []error
+}
+
+// Validate checks a resolved package and returns every rule it breaks as a
+// *MultiError, or nil when it breaks none.
+func Validate(pkg *resolver.Package) error {
+	v := &validator{schemas: make(map[string]*resolver.Schema, len(pkg.Schemas))}
+	for _, schema := range pkg.Schemas {
+		v.schemas[schema.Name] = schema
+	}
+
+	if pkg.API == nil {
+		v.add("", "missing @api annotation")
+	} else {
+		v.validateAPI(pkg.API)
+	}
+
+	for _, schema := range pkg.Schemas {
+		v.validateSchema(schema)
+	}
+
+	for _, endpoint := range pkg.Endpoints {
+		v.validateEndpoint(endpoint, pkg.API)
+	}
+
+	if len(v.errors) > 0 {
+		return &MultiError{Errors: v.errors}
+	}
+	return nil
+}
+
+func (v *validator) add(path, format string, args ...any) {
 	v.errors = append(v.errors, &ValidationError{
 		Path:    path,
-		Message: message,
+		Message: fmt.Sprintf(format, args...),
 	})
 }
 
-// validateAPI validates API info
-func (v *Validator) validateAPI(api *resolver.ResolvedAPI) {
+// validateAPI checks the document metadata.
+func (v *validator) validateAPI(api *parser.APIInfo) {
 	if api.Title == "" {
-		v.addError("@api", "missing required @title")
+		v.add("@api", "missing required @title")
 	}
-
 	if api.Version == "" {
-		v.addError("@api", "missing required @version")
+		v.add("@api", "missing required @version")
 	}
 
-	// Validate security schemes
-	for name, scheme := range api.SecuritySchemes {
-		v.validateSecurityScheme(name, scheme)
+	schemes := make(map[string]bool, len(api.SecuritySchemes))
+	for _, scheme := range api.SecuritySchemes {
+		schemes[scheme.Name] = true
+		v.validateSecurityScheme(scheme)
 	}
 
-	// Validate security requirements reference existing schemes
-	for i, reqs := range api.Security {
-		for j, req := range reqs {
-			if _, ok := api.SecuritySchemes[req.SchemeName]; !ok {
-				v.addError(
-					fmt.Sprintf("@api.@security[%d].@with[%d]", i, j),
-					fmt.Sprintf("references unknown security scheme: %s", req.SchemeName),
-				)
+	for i, group := range api.Security {
+		for j, requirement := range group {
+			if !schemes[requirement.SchemeName] {
+				v.add(fmt.Sprintf("@api.@security[%d].@with[%d]", i, j),
+					"references unknown security scheme: %s", requirement.SchemeName)
 			}
 		}
 	}
 }
 
-// validateSecurityScheme validates a security scheme
-func (v *Validator) validateSecurityScheme(name string, scheme *resolver.SecurityScheme) {
-	path := fmt.Sprintf("@api.@securityScheme[%s]", name)
-
-	if scheme.Type == "" {
-		v.addError(path, "missing required @type")
-		return
-	}
+// validateSecurityScheme checks that a scheme carries the fields its type
+// needs.
+func (v *validator) validateSecurityScheme(scheme *parser.SecurityScheme) {
+	path := fmt.Sprintf("@api.@securityScheme[%s]", scheme.Name)
 
 	switch scheme.Type {
+	case "":
+		v.add(path, "missing required @type")
 	case "http":
 		if scheme.Scheme == "" {
-			v.addError(path, "http security scheme missing @scheme")
+			v.add(path, "http security scheme missing @scheme")
 		}
 	case "apiKey":
 		if scheme.In == "" {
-			v.addError(path, "apiKey security scheme missing @in")
+			v.add(path, "apiKey security scheme missing @in")
 		}
 		if scheme.ParameterName == "" {
-			v.addError(path, "apiKey security scheme missing @name")
+			v.add(path, "apiKey security scheme missing @name")
 		}
 	case "oauth2", "openIdConnect":
-		// These would require additional fields we haven't implemented yet
+		// Their extra fields are not modelled yet.
 	default:
-		v.addError(path, fmt.Sprintf("unknown security scheme type: %s", scheme.Type))
+		v.add(path, "unknown security scheme type: %s", scheme.Type)
 	}
 }
 
-// validateSchema validates a schema
-func (v *Validator) validateSchema(name string, schema *resolver.ResolvedSchema) {
-	path := fmt.Sprintf("@schema[%s]", name)
+// validateSchema checks a named schema and its fields.
+func (v *validator) validateSchema(schema *resolver.Schema) {
+	path := fmt.Sprintf("@schema[%s]", schema.Name)
 
 	if len(schema.Fields) == 0 {
-		v.addError(path, "schema has no fields")
+		v.add(path, "schema has no fields")
 	}
 
-	// Validate each field
 	for _, field := range schema.Fields {
 		v.validateField(path, field)
 	}
+	v.validateUniqueNames(path, schema.Fields)
+}
 
-	// Check for duplicate field names
-	fieldNames := make(map[string]bool)
-	for _, field := range schema.Fields {
-		if fieldNames[field.Name] {
-			v.addError(path, fmt.Sprintf("duplicate field name: %s", field.Name))
+// validateUniqueNames checks that no two fields serialize under the same wire
+// name, which would silently drop one of them.
+func (v *validator) validateUniqueNames(path string, fields []*resolver.Field) {
+	seen := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		if seen[field.Name] {
+			v.add(path, "duplicate field name: %s", field.Name)
 		}
-		fieldNames[field.Name] = true
+		seen[field.Name] = true
 	}
 }
 
-// validateParameter validates a parameter struct
-func (v *Validator) validateParameter(name string, param *resolver.ResolvedParameter) {
-	path := fmt.Sprintf("@%s[%s]", param.Type, name)
-
-	if len(param.Fields) == 0 {
-		v.addError(path, "parameter has no fields")
-	}
-
-	// Validate each field
-	for _, field := range param.Fields {
-		v.validateParameterField(path, param.Type, field)
-	}
-
-	// Check for duplicate field names
-	fieldNames := make(map[string]bool)
-	for _, field := range param.Fields {
-		if fieldNames[field.Name] {
-			v.addError(path, fmt.Sprintf("duplicate field name: %s", field.Name))
-		}
-		fieldNames[field.Name] = true
-	}
-}
-
-// validateField validates a schema field
-func (v *Validator) validateField(path string, field *resolver.ResolvedField) {
+// validateField checks the constraints of one field against the type it is
+// attached to.
+func (v *validator) validateField(path string, field *resolver.Field) {
 	fieldPath := fmt.Sprintf("%s.%s", path, field.GoName)
+	fieldType := emittedType(field)
 
-	// Check for unresolved struct types (named structs not marked with @schema)
-	if field.IsUnresolvedStruct {
-		v.addError(fieldPath, fmt.Sprintf(
-			"field references struct '%s' which is not a @schema. Add @schema annotation to %s or use an anonymous struct",
-			field.UnresolvedTypeName, field.UnresolvedTypeName,
-		))
+	if field.Unresolved != "" {
+		v.add(fieldPath, "field references struct '%s' which is not a @schema. "+
+			"Add @schema annotation to %s or use an anonymous struct",
+			field.Unresolved, field.Unresolved)
 	}
 
-	// Validate enum values match type
 	if len(field.Enum) > 0 {
-		switch field.OpenAPIType {
+		switch fieldType {
 		case "string", "integer":
-			// OK - enum supported for string and integer types
 		case "array":
-			if field.ItemsType != "string" && field.ItemsType != "integer" {
-				v.addError(fieldPath, "enum for arrays only supported with string or integer items")
+			if field.Type.Items != "string" && field.Type.Items != "integer" {
+				v.add(fieldPath, "enum for arrays only supported with string or integer items")
 			}
 		default:
-			v.addError(fieldPath, "enum only supported for string, integer, or array types")
+			v.add(fieldPath, "enum only supported for string, integer, or array types")
 		}
 	}
 
-	// Validate min/max constraints
-	if field.Minimum != nil && field.Maximum != nil {
-		if *field.Minimum > *field.Maximum {
-			v.addError(fieldPath, "minimum cannot be greater than maximum")
-		}
+	if field.Minimum != nil && field.Maximum != nil && *field.Minimum > *field.Maximum {
+		v.add(fieldPath, "minimum cannot be greater than maximum")
+	}
+	if field.MinLength != nil && field.MaxLength != nil && *field.MinLength > *field.MaxLength {
+		v.add(fieldPath, "minLength cannot be greater than maxLength")
+	}
+	if (field.MinLength != nil || field.MaxLength != nil) && fieldType != "string" {
+		v.add(fieldPath, "minLength/maxLength only valid for string types")
 	}
 
-	// Validate minLength/maxLength constraints
-	if field.MinLength != nil && field.MaxLength != nil {
-		if *field.MinLength > *field.MaxLength {
-			v.addError(fieldPath, "minLength cannot be greater than maxLength")
-		}
+	if field.MinItems != nil && field.MaxItems != nil && *field.MinItems > *field.MaxItems {
+		v.add(fieldPath, "minItems cannot be greater than maxItems")
+	}
+	if (field.MinItems != nil || field.MaxItems != nil) && fieldType != "array" {
+		v.add(fieldPath, "minItems/maxItems only valid for array types")
+	}
+	if field.UniqueItems && fieldType != "array" {
+		v.add(fieldPath, "uniqueItems only valid for array types")
 	}
 
-	// Validate length constraints are for strings
-	if (field.MinLength != nil || field.MaxLength != nil) && field.OpenAPIType != "string" {
-		v.addError(fieldPath, "minLength/maxLength only valid for string types")
-	}
-
-	// Validate minItems/maxItems constraints
-	if field.MinItems != nil && field.MaxItems != nil {
-		if *field.MinItems > *field.MaxItems {
-			v.addError(fieldPath, "minItems cannot be greater than maxItems")
-		}
-	}
-
-	// Validate items constraints are for arrays
-	if (field.MinItems != nil || field.MaxItems != nil) && field.OpenAPIType != "array" {
-		v.addError(fieldPath, "minItems/maxItems only valid for array types")
-	}
-
-	// Validate uniqueItems is for arrays
-	if field.UniqueItems && field.OpenAPIType != "array" {
-		v.addError(fieldPath, "uniqueItems only valid for array types")
-	}
-
-	// Validate pattern is for strings
-	if field.Pattern != "" && field.OpenAPIType != "string" {
-		v.addError(fieldPath, "pattern only valid for string types")
-	}
-
-	// Validate pattern is valid regex
 	if field.Pattern != "" {
+		if fieldType != "string" {
+			v.add(fieldPath, "pattern only valid for string types")
+		}
 		if _, err := regexp.Compile(field.Pattern); err != nil {
-			v.addError(fieldPath, fmt.Sprintf("invalid pattern regex: %v", err))
+			v.add(fieldPath, "invalid pattern regex: %v", err)
 		}
 	}
 
-	// Validate readOnly and writeOnly are mutually exclusive
 	if field.ReadOnly && field.WriteOnly {
-		v.addError(fieldPath, "readOnly and writeOnly cannot both be true")
+		v.add(fieldPath, "readOnly and writeOnly cannot both be true")
 	}
 }
 
-// validateParameterField validates a parameter field with type-specific rules
-func (v *Validator) validateParameterField(path, paramType string, field *resolver.ResolvedField) {
-	fieldPath := fmt.Sprintf("%s.%s", path, field.GoName)
-
-	// Path parameters cannot be pointers/nullable
-	if paramType == "path" && field.Nullable {
-		v.addError(fieldPath, "path parameters cannot be nullable (no pointer types)")
+// emittedType is the type keyword a field emits, which the constraint rules
+// are written against. An any-typed field emits no type at all.
+func emittedType(field *resolver.Field) string {
+	switch {
+	case field.Type.IsArray || len(field.ItemsInline) > 0:
+		return "array"
+	case field.Type.IsMap || len(field.Inline) > 0 || len(field.MapValueInline) > 0:
+		return "object"
+	case field.Type.Ref != "":
+		return "object"
+	case field.Type.IsAny:
+		return ""
 	}
-
-	// Path parameters cannot be arrays
-	if paramType == "path" && field.IsArray {
-		v.addError(fieldPath, "path parameters cannot be arrays")
-	}
-
-	// Header parameters cannot be arrays
-	if paramType == "header" && field.IsArray {
-		v.addError(fieldPath, "header parameters cannot be arrays")
-	}
-
-	// Cookie parameters cannot be arrays
-	if paramType == "cookie" && field.IsArray {
-		v.addError(fieldPath, "cookie parameters cannot be arrays")
-	}
-
-	// Query parameters can be arrays (this is allowed)
-
-	// Run standard field validation
-	v.validateField(path, field)
+	return field.Type.OpenAPI
 }
 
-// validateEndpoint validates an endpoint
-func (v *Validator) validateEndpoint(endpoint *resolver.ResolvedEndpoint, pkg *resolver.ResolvedPackage) {
+// validateEndpoint checks one operation: its method and path, the parameters
+// against the path variables, and its request and responses.
+func (v *validator) validateEndpoint(endpoint *resolver.Endpoint, api *parser.APIInfo) {
 	path := fmt.Sprintf("@endpoint[%s %s]", endpoint.Method, endpoint.Path)
 
-	// Validate method
-	validMethods := map[string]bool{
-		"GET": true, "POST": true, "PUT": true, "PATCH": true,
-		"DELETE": true, "HEAD": true, "OPTIONS": true,
-	}
 	if !validMethods[endpoint.Method] {
-		v.addError(path, fmt.Sprintf("invalid HTTP method: %s", endpoint.Method))
+		v.add(path, "invalid HTTP method: %s", endpoint.Method)
 	}
 
-	// Validate path
 	if endpoint.Path == "" {
-		v.addError(path, "missing path")
+		v.add(path, "missing path")
 	} else {
 		v.validatePath(path, endpoint.Path)
 	}
 
-	// Extract path variables from path
-	pathVars := extractPathVariables(endpoint.Path)
+	v.validateParameters(path, endpoint)
 
-	// Validate path parameters match path variables (including inline params)
-	v.validatePathParametersWithInline(path, pathVars, endpoint.PathParams, endpoint.InlinePathParams)
-
-	// Validate request body
 	if endpoint.Request != nil {
-		v.validateRequestBody(path, endpoint.Request, pkg.Schemas)
+		v.validateRequest(path, endpoint.Request)
 	}
 
-	// Validate inline request bind target
-	if endpoint.InlineRequest != nil && endpoint.InlineRequest.Bind != nil {
-		v.validateBindTarget(path+".@request", endpoint.InlineRequest.Bind, pkg.Schemas)
+	if len(endpoint.Responses) == 0 {
+		v.add(path, "endpoint must have at least one response")
+	}
+	for _, response := range endpoint.Responses {
+		v.validateResponse(path, response)
 	}
 
-	// Validate responses (including inline responses)
-	hasResponses := len(endpoint.Responses) > 0 || len(endpoint.InlineResponses) > 0
-	if !hasResponses {
-		v.addError(path, "endpoint must have at least one response")
-	}
-
-	for statusCode, response := range endpoint.Responses {
-		v.validateResponse(path, statusCode, response, pkg.Schemas)
-	}
-
-	// Validate inline response bind targets
-	for statusCode, inlineResp := range endpoint.InlineResponses {
-		if inlineResp.Bind != nil {
-			v.validateBindTarget(fmt.Sprintf("%s.@response[%s]", path, statusCode), inlineResp.Bind, pkg.Schemas)
-		}
-	}
-
-	// Validate no parameter name conflicts
-	v.validateParameterConflicts(path, endpoint)
-
-	// Validate tags reference defined API-level tags
-	// pkg.API can be nil when @api is missing; Validate records that error but
-	// still validates endpoints
-	if pkg.API != nil && len(pkg.API.Tags) > 0 && len(endpoint.Tags) > 0 {
-		v.validateEndpointTags(path, endpoint.Tags, pkg.API.Tags)
+	// api is nil when @api is missing; Validate records that separately and
+	// still checks the endpoints.
+	if api != nil && len(api.Tags) > 0 && len(endpoint.Tags) > 0 {
+		v.validateTags(path, endpoint.Tags, api.Tags)
 	}
 }
 
-// validatePath validates the path format
-func (v *Validator) validatePath(endpointPath, path string) {
+// validatePath checks the shape of the path and its variables.
+func (v *validator) validatePath(endpointPath, path string) {
 	if !strings.HasPrefix(path, "/") {
-		v.addError(endpointPath, "path must start with /")
+		v.add(endpointPath, "path must start with /")
 	}
 
-	// Validate path variables are in {var} format
-	re := regexp.MustCompile(`\{([^}]+)\}`)
-	matches := re.FindAllStringSubmatch(path, -1)
-	for _, match := range matches {
-		varName := match[1]
-		if varName == "" {
-			v.addError(endpointPath, "empty path variable")
+	for _, name := range pathVariables(path) {
+		if name == "" {
+			v.add(endpointPath, "empty path variable")
 		}
-		// Check for valid variable name (alphanumeric and underscore)
-		if !regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`).MatchString(varName) {
-			v.addError(endpointPath, fmt.Sprintf("invalid path variable name: %s", varName))
+		if !pathVariableName.MatchString(name) {
+			v.add(endpointPath, "invalid path variable name: %s", name)
 		}
 	}
 }
 
-// extractPathVariables extracts variable names from path
-func extractPathVariables(path string) []string {
-	re := regexp.MustCompile(`\{([^}]+)\}`)
-	matches := re.FindAllStringSubmatch(path, -1)
-	vars := make([]string, len(matches))
+// pathVariables returns the {name} placeholders of a path, in order.
+func pathVariables(path string) []string {
+	matches := pathVariablePattern.FindAllStringSubmatch(path, -1)
+	names := make([]string, len(matches))
 	for i, match := range matches {
-		vars[i] = match[1]
+		names[i] = match[1]
 	}
-	return vars
+	return names
 }
 
-// validatePathParametersWithInline validates path parameters including inline declarations
-func (v *Validator) validatePathParametersWithInline(path string, pathVars []string, params []*resolver.ResolvedParameter, inlineParams *resolver.ResolvedInlineParams) {
-	// Create map of path variables
-	pathVarMap := make(map[string]bool)
-	for _, varName := range pathVars {
-		pathVarMap[varName] = true
-	}
-
-	// Collect all parameter field names from both regular and inline params
-	paramFieldMap := make(map[string]bool)
-	for _, param := range params {
-		for _, field := range param.Fields {
-			paramFieldMap[field.Name] = true
-		}
-	}
-	// Also collect from inline params
-	if inlineParams != nil {
-		for _, field := range inlineParams.Fields {
-			paramFieldMap[field.Name] = true
+// validateParameters checks the operation parameters: that the path variables
+// and the path parameters cover each other exactly, that no two parameters
+// share a name, and that each field suits the kind it is emitted as.
+func (v *validator) validateParameters(path string, endpoint *resolver.Endpoint) {
+	declared := make(map[string]bool)
+	for _, param := range endpoint.Parameters {
+		if param.In == parser.ParamPath {
+			declared[param.Field.Name] = true
 		}
 	}
 
-	// Check that all path variables have corresponding parameters
-	for _, varName := range pathVars {
-		if !paramFieldMap[varName] {
-			v.addError(path, fmt.Sprintf("path variable {%s} has no corresponding @path parameter", varName))
+	variables := make(map[string]bool)
+	for _, name := range pathVariables(endpoint.Path) {
+		variables[name] = true
+		if !declared[name] {
+			v.add(path, "path variable {%s} has no corresponding @path parameter", name)
+		}
+	}
+	for _, param := range endpoint.Parameters {
+		if param.In == parser.ParamPath && !variables[param.Field.Name] {
+			v.add(path, "@path parameter %s not used in path", param.Field.Name)
 		}
 	}
 
-	// Check that all path parameters are used in the path
-	for paramName := range paramFieldMap {
-		if !pathVarMap[paramName] {
-			v.addError(path, fmt.Sprintf("@path parameter %s not used in path", paramName))
+	// A name may appear once per operation, whatever kind it is sent as.
+	kinds := make(map[string]string, len(endpoint.Parameters))
+	for _, param := range endpoint.Parameters {
+		if previous, taken := kinds[param.Field.Name]; taken {
+			v.add(path, "parameter name conflict: %s appears in both %s and %s parameters",
+				param.Field.Name, previous, param.In)
 		}
+		kinds[param.Field.Name] = param.In
+
+		v.validateParameterField(path, param)
 	}
 }
 
-// validateRequestBody validates a request body
-func (v *Validator) validateRequestBody(path string, request *resolver.ResolvedRequestBody, schemas map[string]*resolver.ResolvedSchema) {
+// validateParameterField checks one parameter against the rules of its kind.
+// Parameters are sent as text in a URL or a header, which limits their shape.
+func (v *validator) validateParameterField(path string, param *resolver.Param) {
+	kindPath := fmt.Sprintf("%s.@%s", path, param.In)
+	fieldPath := fmt.Sprintf("%s.%s", kindPath, param.Field.GoName)
+	isArray := emittedType(param.Field) == "array"
+
+	switch param.In {
+	case parser.ParamPath:
+		if param.Field.Nullable {
+			v.add(fieldPath, "path parameters cannot be nullable (no pointer types)")
+		}
+		if isArray {
+			v.add(fieldPath, "path parameters cannot be arrays")
+		}
+	case parser.ParamHeader:
+		if isArray {
+			v.add(fieldPath, "header parameters cannot be arrays")
+		}
+	case parser.ParamCookie:
+		if isArray {
+			v.add(fieldPath, "cookie parameters cannot be arrays")
+		}
+	}
+	// Query parameters may be arrays: repeated values are how a list is sent.
+
+	v.validateField(kindPath, param.Field)
+}
+
+// validateRequest checks the request body.
+func (v *validator) validateRequest(path string, request *resolver.Request) {
+	requestPath := path + ".@request"
+
 	if request.ContentType == "" {
-		v.addError(path+".@request", "missing @contentType")
+		v.add(requestPath, "missing @contentType")
 	}
-
-	if request.Body == nil || request.Body.Schema == "" {
-		v.addError(path+".@request", "missing @body")
+	if request.Content == nil {
 		return
 	}
+	v.validateContent(requestPath, request.Content)
+}
 
-	// Validate schema exists (use ElementType which extracts the base type from []T or map[string]T)
-	schemaToCheck := request.Body.ElementType
-	if schemaToCheck == "" {
-		schemaToCheck = request.Body.Schema
+// validateResponse checks one response.
+func (v *validator) validateResponse(path string, response *resolver.Response) {
+	responsePath := fmt.Sprintf("%s.@response[%s]", path, response.Status)
+
+	if !parser.ValidStatusCode(response.Status) {
+		v.add(responsePath, "invalid status code: %s", response.Status)
 	}
-	if !isPrimitiveType(schemaToCheck) {
-		if _, ok := schemas[schemaToCheck]; !ok {
-			v.addError(path+".@request", fmt.Sprintf("references unknown schema: %s", schemaToCheck))
+
+	// A response without content is legitimate: 204 and friends.
+	if response.Content == nil {
+		return
+	}
+	v.validateContent(responsePath, response.Content)
+}
+
+// validateContent checks that a body references things that exist.
+func (v *validator) validateContent(path string, content *resolver.Content) {
+	// A referenced schema must exist; a primitive body needs no lookup, and an
+	// inline body carries its own fields.
+	if content.Ref != nil && content.Ref.Schema != "" {
+		if _, ok := v.schemas[content.Ref.Schema]; !ok {
+			v.add(path, "references unknown schema: %s", content.Ref.Schema)
 		}
 	}
 
-	// Validate bind target
-	if request.Body.Bind != nil {
-		v.validateBindTarget(path+".@request", request.Body.Bind, schemas)
+	for _, field := range content.Fields {
+		v.validateField(path, field)
+	}
+
+	if content.Bind != nil {
+		v.validateBind(path, content.Bind)
 	}
 }
 
-// validateResponse validates a response
-func (v *Validator) validateResponse(path, statusCode string, response *resolver.ResolvedResponse, schemas map[string]*resolver.ResolvedSchema) {
-	responsePath := fmt.Sprintf("%s.@response[%s]", path, statusCode)
-
-	// Validate status code: 3-digit (200), range (2XX), or "default"
-	if statusCode != "default" && !regexp.MustCompile(`^[1-5](\d{2}|XX)$`).MatchString(statusCode) {
-		v.addError(responsePath, fmt.Sprintf("invalid status code: %s", statusCode))
-	}
-
-	// Schema is optional for responses (e.g., 204 No Content)
-	if response.Body != nil && response.Body.Schema != "" {
-		// Validate schema exists (use ElementType which extracts the base type from []T or map[string]T)
-		schemaToCheck := response.Body.ElementType
-		if schemaToCheck == "" {
-			schemaToCheck = response.Body.Schema
-		}
-		if !isPrimitiveType(schemaToCheck) {
-			if _, ok := schemas[schemaToCheck]; !ok {
-				v.addError(responsePath, fmt.Sprintf("references unknown schema: %s", schemaToCheck))
-			}
-		}
-
-		// Validate bind target
-		if response.Body.Bind != nil {
-			v.validateBindTarget(responsePath, response.Body.Bind, schemas)
-		}
-	}
-}
-
-// isPrimitiveType checks if a type name is a Go primitive (no schema lookup needed)
-func isPrimitiveType(typeName string) bool {
-	primitives := map[string]bool{
-		"string": true, "int": true, "int8": true, "int16": true, "int32": true, "int64": true,
-		"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
-		"float32": true, "float64": true, "bool": true, "byte": true,
-	}
-	return primitives[typeName]
-}
-
-// validateParameterConflicts checks for parameter name conflicts across different parameter types
-func (v *Validator) validateParameterConflicts(path string, endpoint *resolver.ResolvedEndpoint) {
-	allParams := make(map[string]string) // name -> type
-
-	// Collect all parameter names with their types
-	for _, param := range endpoint.PathParams {
-		for _, field := range param.Fields {
-			if prevType, exists := allParams[field.Name]; exists {
-				v.addError(path, fmt.Sprintf("parameter name conflict: %s appears in both %s and path parameters", field.Name, prevType))
-			}
-			allParams[field.Name] = "path"
-		}
-	}
-
-	for _, param := range endpoint.QueryParams {
-		for _, field := range param.Fields {
-			if prevType, exists := allParams[field.Name]; exists {
-				v.addError(path, fmt.Sprintf("parameter name conflict: %s appears in both %s and query parameters", field.Name, prevType))
-			}
-			allParams[field.Name] = "query"
-		}
-	}
-
-	for _, param := range endpoint.HeaderParams {
-		for _, field := range param.Fields {
-			if prevType, exists := allParams[field.Name]; exists {
-				v.addError(path, fmt.Sprintf("parameter name conflict: %s appears in both %s and header parameters", field.Name, prevType))
-			}
-			allParams[field.Name] = "header"
-		}
-	}
-
-	for _, param := range endpoint.CookieParams {
-		for _, field := range param.Fields {
-			if prevType, exists := allParams[field.Name]; exists {
-				v.addError(path, fmt.Sprintf("parameter name conflict: %s appears in both %s and cookie parameters", field.Name, prevType))
-			}
-			allParams[field.Name] = "cookie"
-		}
-	}
-}
-
-// validateBindTarget validates that a @bind target references a valid wrapper schema and field
-func (v *Validator) validateBindTarget(path string, bind *resolver.ResolvedBindTarget, schemas map[string]*resolver.ResolvedSchema) {
+// validateBind checks that a @bind names a wrapper schema that exists and a
+// field of it to put the body in.
+func (v *validator) validateBind(path string, bind *resolver.BindTarget) {
 	bindPath := path + ".@bind"
 
-	// Check wrapper schema exists
-	if bind.WrapperSchema == nil {
-		v.addError(bindPath, fmt.Sprintf("references unknown wrapper schema: %s", bind.Wrapper))
+	if bind.Wrapper == nil {
+		v.add(bindPath, "references unknown wrapper schema: %s", bind.Name)
 		return
 	}
 
-	// Check field exists in wrapper schema
-	found := false
-	for _, field := range bind.WrapperSchema.Fields {
+	for _, field := range bind.Wrapper.Fields {
 		if field.GoName == bind.Field {
-			found = true
-			break
+			return
 		}
 	}
-	if !found {
-		v.addError(bindPath, fmt.Sprintf("wrapper schema %q has no field %q", bind.Wrapper, bind.Field))
-	}
+	v.add(bindPath, "wrapper schema %q has no field %q", bind.Name, bind.Field)
 }
 
-// validateEndpointTags validates that endpoint tags reference defined API-level tags
-func (v *Validator) validateEndpointTags(path string, endpointTags []string, apiTags []*resolver.Tag) {
-	// Build map of defined tag names
-	definedTags := make(map[string]bool)
+// validateTags checks that the tags of an operation are defined at API level.
+func (v *validator) validateTags(path string, endpointTags []string, apiTags []*parser.Tag) {
+	defined := make(map[string]bool, len(apiTags))
 	for _, tag := range apiTags {
-		definedTags[tag.Name] = true
+		defined[tag.Name] = true
 	}
 
-	// Check each endpoint tag
-	for _, tagName := range endpointTags {
-		if !definedTags[tagName] {
-			v.addError(path, fmt.Sprintf("endpoint uses undefined tag: %s (define it at API level with @tag)", tagName))
+	for _, name := range endpointTags {
+		if !defined[name] {
+			v.add(path, "endpoint uses undefined tag: %s (define it at API level with @tag)", name)
 		}
 	}
 }

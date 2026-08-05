@@ -8,6 +8,7 @@ import (
 	"github.com/pb33f/libopenapi/datamodel/high/base"
 	v3 "github.com/pb33f/libopenapi/datamodel/high/v3"
 	"github.com/pb33f/libopenapi/orderedmap"
+	"github.com/wontaeyang/go-specgen/pkg/parser"
 	"github.com/wontaeyang/go-specgen/pkg/resolver"
 )
 
@@ -39,7 +40,7 @@ func (g *Generator) Generate(pkg *resolver.Package) *v3.Document {
 }
 
 // generateInfo generates the info section.
-func (g *Generator) generateInfo(api *resolver.ResolvedAPI) *base.Info {
+func (g *Generator) generateInfo(api *parser.APIInfo) *base.Info {
 	info := &base.Info{
 		Title:   api.Title,
 		Version: api.Version,
@@ -72,7 +73,7 @@ func (g *Generator) generateInfo(api *resolver.ResolvedAPI) *base.Info {
 }
 
 // generateServers generates the servers section.
-func (g *Generator) generateServers(servers []*resolver.Server) []*v3.Server {
+func (g *Generator) generateServers(servers []*parser.Server) []*v3.Server {
 	result := make([]*v3.Server, len(servers))
 	for i, server := range servers {
 		result[i] = &v3.Server{
@@ -84,7 +85,7 @@ func (g *Generator) generateServers(servers []*resolver.Server) []*v3.Server {
 }
 
 // generateTags generates the document-level tags.
-func (g *Generator) generateTags(tags []*resolver.Tag) []*base.Tag {
+func (g *Generator) generateTags(tags []*parser.Tag) []*base.Tag {
 	result := make([]*base.Tag, len(tags))
 	for i, tag := range tags {
 		result[i] = &base.Tag{
@@ -160,12 +161,18 @@ func (g *Generator) generateSchema(schema *resolver.Schema) *base.SchemaProxy {
 	return base.CreateSchemaProxy(s)
 }
 
-// generateSecuritySchemes generates security schemes sorted by name.
-func (g *Generator) generateSecuritySchemes(schemes map[string]*resolver.SecurityScheme) *orderedmap.Map[string, *v3.SecurityScheme] {
+// generateSecuritySchemes generates security schemes sorted by name. The
+// parser keeps them in declaration order; components are keyed by name, so the
+// sort happens here.
+func (g *Generator) generateSecuritySchemes(schemes []*parser.SecurityScheme) *orderedmap.Map[string, *v3.SecurityScheme] {
 	result := orderedmap.New[string, *v3.SecurityScheme]()
 
-	for _, name := range slices.Sorted(maps.Keys(schemes)) {
-		scheme := schemes[name]
+	sorted := slices.Clone(schemes)
+	slices.SortFunc(sorted, func(a, b *parser.SecurityScheme) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+
+	for _, scheme := range sorted {
 		ss := &v3.SecurityScheme{
 			Type:        scheme.Type,
 			Description: scheme.Description,
@@ -182,14 +189,14 @@ func (g *Generator) generateSecuritySchemes(schemes map[string]*resolver.Securit
 		if scheme.ParameterName != "" {
 			ss.Name = scheme.ParameterName
 		}
-		result.Set(name, ss)
+		result.Set(scheme.Name, ss)
 	}
 
 	return result
 }
 
 // generateSecurity generates global security requirements.
-func (g *Generator) generateSecurity(security [][]*resolver.SecurityRequirement) []*base.SecurityRequirement {
+func (g *Generator) generateSecurity(security [][]*parser.SecurityRequirement) []*base.SecurityRequirement {
 	result := make([]*base.SecurityRequirement, len(security))
 
 	for i, reqs := range security {

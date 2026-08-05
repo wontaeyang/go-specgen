@@ -1,322 +1,316 @@
 package parser
 
-// ParsedPackage represents a complete parsed Go package with all annotations
-type ParsedPackage struct {
-	// PackageName is the Go package name
-	PackageName string
+import (
+	"go/token"
+	"go/types"
 
-	// API contains the @api annotation data
-	API *APIInfo
+	"golang.org/x/tools/go/packages"
+)
 
-	// Schemas contains all @schema annotated structs
-	Schemas map[string]*Schema
+// Package is everything the parser found in one Go package. It is the input to
+// the resolver: annotation data plus the loaded Go package the resolver needs
+// to walk actual Go types.
+//
+// Schemas, Parameters and Endpoints are in source order. Emission order is the
+// resolver's business.
+type Package struct {
+	// Name is the Go package name.
+	Name string
 
-	// Parameters contains all parameter structs (@path, @query, @header, @cookie)
-	Parameters map[string]*Parameter
+	// GoPkg is the loaded package. It is loaded once, here, and handed over
+	// so downstream stages never load it again.
+	GoPkg *packages.Package
 
-	// Endpoints contains all @endpoint annotated functions
-	Endpoints []*Endpoint
+	API        *APIInfo
+	Schemas    []*Schema
+	Parameters []*ParameterStruct
+	Endpoints  []*Endpoint
 }
 
-// APIInfo represents the @api annotation
+// APIInfo is the @api annotation: the document-level metadata.
 type APIInfo struct {
-	// Title is the API title (required)
-	Title string
-
-	// Version is the API version (required)
+	// Title and Version are required.
+	Title   string
 	Version string
 
-	// Description is the API description
-	Description string
-
-	// TermsOfService is the URL to the terms of service
+	Description    string
 	TermsOfService string
+	Contact        *Contact
+	License        *License
+	Servers        []*Server
 
-	// Contact contains contact information
-	Contact *Contact
+	// SecuritySchemes are in declaration order. The generator sorts them at
+	// emission time; the parser does not.
+	SecuritySchemes []*SecurityScheme
 
-	// License contains license information
-	License *License
+	// Security holds the default security requirements. Each @security block
+	// is one AND-group of requirements; the outer slice is the OR-list.
+	Security [][]*SecurityRequirement
 
-	// Servers is the list of server configurations
-	Servers []*Server
-
-	// SecuritySchemes defines available security schemes
-	SecuritySchemes map[string]*SecurityScheme
-
-	// Security defines default security requirements
-	Security [][]*SecurityRequirement // Array of arrays for OR/AND logic
-
-	// Tags defines API-level tag definitions
 	Tags []*Tag
 
-	// DefaultContentType is the default content type for requests/responses
+	// DefaultContentType is already MIME-expanded (see ExpandContentType).
 	DefaultContentType string
 }
 
-// Contact represents contact information
+// Contact is the @contact block.
 type Contact struct {
 	Name  string
 	Email string
 	URL   string
 }
 
-// License represents license information
+// License is the @license block.
 type License struct {
 	Name string
 	URL  string
 }
 
-// Server represents a server configuration
+// Server is one @server block.
 type Server struct {
 	URL         string
 	Description string
 }
 
-// SecurityScheme represents a security scheme definition
+// SecurityScheme is one @securityScheme block.
 type SecurityScheme struct {
-	Name          string // Name of the scheme
+	Name          string // scheme name, from the @securityScheme metadata
 	Type          string // http, apiKey, oauth2, openIdConnect
-	Scheme        string // For http type: bearer, basic
-	BearerFormat  string // For bearer scheme: JWT, etc.
-	In            string // For apiKey: header, query, cookie
-	ParameterName string // For apiKey: parameter name
+	Scheme        string // for http: bearer, basic
+	BearerFormat  string // for bearer: JWT, etc.
+	In            string // for apiKey: header, query, cookie
+	ParameterName string // for apiKey: the parameter name
 	Description   string
 }
 
-// SecurityRequirement represents a security requirement
+// SecurityRequirement is one @with entry inside a @security block.
 type SecurityRequirement struct {
 	SchemeName string
-	Scopes     []string // For OAuth2
+	Scopes     []string
 }
 
-// Schema represents a @schema annotated struct
+// Tag is one @tag block.
+type Tag struct {
+	Name        string
+	Description string
+}
+
+// Schema is a @schema annotated struct, or a type alias that instantiates a
+// generic @schema struct.
 type Schema struct {
-	// Name is the struct name
-	Name string
-
-	// GoTypeName is the full Go type name (for resolution)
-	GoTypeName string
-
-	// Description is the schema description
+	Name        string
 	Description string
 
-	// Deprecated indicates if the schema is deprecated
+	// Pos is the position of the type declaration.
+	Pos token.Position
+
 	Deprecated bool
 
-	// Fields are the struct fields
+	// Fields holds the parsed @field annotations in declaration order.
+	// Fields without a @field annotation are absent: the resolver walks the
+	// Go struct for the complete field list and matches these by GoName.
 	Fields []*Field
 
-	// IsGeneric indicates this is a generic struct (has type parameters)
-	// Generic structs are templates and not emitted to components
+	// IsGeneric marks a generic struct (has type parameters). Generic structs
+	// are templates and are not emitted to components.
 	IsGeneric bool
 
-	// IsTypeAlias indicates this is a type alias (e.g., type X = Y[Z])
-	// Type aliases that instantiate generics are emitted to components
+	// IsTypeAlias marks a type alias (type X = Y[Z]). Aliases that
+	// instantiate a generic @schema are emitted to components.
 	IsTypeAlias bool
 
-	// AliasOf is the type this aliases (for type aliases)
+	// AliasOf is the aliased type as written, e.g. "Response[User]".
 	AliasOf string
+
+	// TypeArgs are the type arguments of AliasOf, e.g. ["User"] for
+	// "Response[User]" and ["K", "V"] for "Pair[K, V]".
+	TypeArgs []string
 }
 
-// Field represents a struct field with @field annotation
-type Field struct {
-	// Name is the field name (from json/query/path/header/cookie tag)
+// Parameter kinds, matching the OpenAPI "in" values.
+const (
+	ParamPath   = "path"
+	ParamQuery  = "query"
+	ParamHeader = "header"
+	ParamCookie = "cookie"
+)
+
+// ParameterStruct is a struct marked @path, @query, @header or @cookie.
+type ParameterStruct struct {
 	Name string
 
-	// GoName is the Go field name
-	GoName string
+	// Kind is one of the Param* constants.
+	Kind string
 
-	// GoType is the Go type name
-	GoType string
+	// Pos is the position of the type declaration.
+	Pos token.Position
 
-	// Required is an explicit override for whether the field is required.
-	// nil means no override (resolver determines from Go type/tags).
-	Required *bool
-
-	// Nullable is an explicit override for whether the field is nullable.
-	// nil means no override (resolver determines from Go pointer-ness).
-	Nullable *bool
-
-	// Description is the field description
-	Description string
-
-	// Format is the field format (email, uuid, date-time, etc.)
-	Format string
-
-	// Example is an example value
-	Example string
-
-	// Enum is a list of allowed values
-	Enum []string
-
-	// Default is the default value
-	Default string
-
-	// Minimum is the minimum value (for numbers)
-	Minimum *float64
-
-	// Maximum is the maximum value (for numbers)
-	Maximum *float64
-
-	// ExclusiveMinimum is the exclusive minimum value (for numbers)
-	ExclusiveMinimum *float64
-
-	// ExclusiveMaximum is the exclusive maximum value (for numbers)
-	ExclusiveMaximum *float64
-
-	// MinLength is the minimum length (for strings)
-	MinLength *int
-
-	// MaxLength is the maximum length (for strings)
-	MaxLength *int
-
-	// MinItems is the minimum number of items (for arrays)
-	MinItems *int
-
-	// MaxItems is the maximum number of items (for arrays)
-	MaxItems *int
-
-	// UniqueItems indicates array items must be unique
-	UniqueItems bool
-
-	// Pattern is a regex pattern (for strings)
-	Pattern string
-
-	// Deprecated indicates if the field is deprecated
-	Deprecated bool
-
-	// ReadOnly indicates the field is read-only (e.g., id, createdAt)
-	ReadOnly bool
-
-	// WriteOnly indicates the field is write-only (e.g., password)
-	WriteOnly bool
-}
-
-// Parameter represents a parameter struct (@path, @query, @header, @cookie)
-type Parameter struct {
-	// Name is the struct name
-	Name string
-
-	// Type is the parameter type (path, query, header, cookie)
-	Type ParameterType
-
-	// GoTypeName is the full Go type name
-	GoTypeName string
-
-	// Fields are the parameter fields
+	// Fields holds the parsed @field annotations, same contract as
+	// Schema.Fields.
 	Fields []*Field
 }
 
-// ParameterType represents the type of parameter
-type ParameterType string
+// Field is one parsed @field annotation, bound to a Go struct field by GoName.
+type Field struct {
+	GoName string
 
-const (
-	PathParameter   ParameterType = "path"
-	QueryParameter  ParameterType = "query"
-	HeaderParameter ParameterType = "header"
-	CookieParameter ParameterType = "cookie"
-)
+	// Pos is the position of the field declaration.
+	Pos token.Position
 
-// Endpoint represents an @endpoint annotated function
+	Description string
+	Format      string
+
+	// Required and Nullable are tri-state overrides: nil means "no override",
+	// and the resolver derives the value from the Go type and struct tags.
+	Required *bool
+	Nullable *bool
+
+	Constraints
+}
+
+// Constraints are the pass-through @field values: they flow from annotation to
+// output untransformed.
+type Constraints struct {
+	Enum             []string
+	Default          string
+	Example          string
+	Pattern          string
+	MinLength        *int
+	MaxLength        *int
+	MinItems         *int
+	MaxItems         *int
+	UniqueItems      bool
+	Minimum          *float64
+	Maximum          *float64
+	ExclusiveMinimum *float64
+	ExclusiveMaximum *float64
+	Deprecated       bool
+	ReadOnly         bool
+	WriteOnly        bool
+}
+
+// Endpoint is an @endpoint annotated function.
 type Endpoint struct {
-	// FuncName is the Go function name (for inline declaration lookup)
 	FuncName string
 
-	// Method is the HTTP method (GET, POST, PUT, DELETE, etc.)
-	Method string
+	// Pos is the position of the function declaration.
+	Pos token.Position
 
-	// Path is the URL path (e.g., /users/{id})
-	Path string
-
-	// OperationID is the operation ID
+	Method      string
+	Path        string
 	OperationID string
-
-	// Summary is a short summary
-	Summary string
-
-	// Description is a detailed description
+	Summary     string
 	Description string
 
-	// Tags are endpoint tags
-	Tags []string
-
-	// Deprecated indicates if the endpoint is deprecated
-	Deprecated bool
-
-	// Auth is the security scheme to use (overrides API default)
+	// Auth names a security scheme, overriding the API default.
 	Auth string
 
-	// PathParams are the path parameter struct references
-	PathParams []string
+	Tags       []string
+	Deprecated bool
 
-	// QueryParams are the query parameter struct references
-	QueryParams []string
-
-	// HeaderParams are the header parameter struct references
+	// PathParams and friends name parameter structs, in annotation order.
+	PathParams   []string
+	QueryParams  []string
 	HeaderParams []string
-
-	// CookieParams are the cookie parameter struct references
 	CookieParams []string
 
-	// Request is the request body definition
 	Request *RequestBody
 
-	// Responses are the response definitions
-	Responses map[string]*Response // Key is status code
+	// Responses are in declaration order. A repeated status code is
+	// last-wins: the second @response replaces the first in place.
+	Responses []*Response
+
+	// Inline holds the declarations found in the function body, nil when
+	// there are none.
+	Inline *EndpointInline
 }
 
-// RequestBody represents a request body
+// RequestBody is the @request block of an endpoint.
 type RequestBody struct {
-	// ContentType is the content type (json, xml, form, etc.)
+	// ContentType is already MIME-expanded.
 	ContentType string
 
-	// Body is the body definition with optional bindings
+	// Body is nil when the block has no @body.
 	Body *Body
 }
 
-// Response represents a response definition
+// Response is one @response block of an endpoint.
 type Response struct {
-	// StatusCode is the HTTP status code (200, 404, etc.)
-	StatusCode string
-
-	// ContentType is the content type
-	ContentType string
-
-	// Body is the body definition with optional bindings
-	Body *Body
-
-	// Description is the response description
+	// Status is the literal status text: "200", "4XX" or "default".
+	Status      string
 	Description string
 
-	// HeaderParams are the response header struct references
-	HeaderParams []string
+	// ContentType is already MIME-expanded.
+	ContentType string
+
+	// Body is nil for bodyless responses (204 and friends).
+	Body *Body
+
+	// Headers name @header parameter structs, in annotation order.
+	Headers []string
 }
 
-// Body represents a @body annotation with optional binding
+// Body is a @body annotation with its optional @bind.
 type Body struct {
-	// Schema is the schema name being referenced (e.g., "User", "[]User", "map[string]User")
+	// Schema is the referenced type as written: "User", "[]User",
+	// "map[string]User".
 	Schema string
 
-	// Bind specifies the wrapper and field for envelope responses
-	// e.g., @bind DataResponse.Data
+	// Bind wraps the body inside an envelope schema.
 	Bind *BindTarget
 }
 
-// BindTarget represents @bind Wrapper.Field syntax
+// BindTarget is a @bind Wrapper.Field value.
 type BindTarget struct {
-	// Wrapper is the wrapper schema name (e.g., "DataResponse")
 	Wrapper string
-
-	// Field is the field to bind the body to (e.g., "Data")
-	Field string
+	Field   string
 }
 
-// Tag represents an API tag definition
-type Tag struct {
-	// Name is the tag name
-	Name string
+// EndpointInline holds the declarations annotated inside a handler body.
+type EndpointInline struct {
+	Path   []*InlineStruct
+	Query  []*InlineStruct
+	Header []*InlineStruct
+	Cookie []*InlineStruct
 
-	// Description is the tag description
+	// Request is at most one per handler; a duplicate is a parse error.
+	Request *InlineStruct
+
+	// Responses are in declaration order; a duplicate status code within one
+	// handler is a parse error.
+	Responses []*InlineResponse
+}
+
+// InlineStruct is one annotated var or type declaration inside a handler body.
+type InlineStruct struct {
+	VarName string
+
+	// Pos is the position of the declared identifier.
+	Pos token.Position
+
+	// Struct is the Go type of the declaration, resolved at parse time.
+	Struct *types.Struct
+
+	// Fields holds the parsed @field annotations of the struct's own fields,
+	// in declaration order. Same contract as Schema.Fields.
+	Fields []*Field
+
+	// ContentType is already MIME-expanded. Empty for parameter structs,
+	// which have no annotation body.
+	ContentType string
+
 	Description string
+	Bind        *BindTarget
+
+	// Headers name @header parameter structs. Responses only.
+	Headers []string
+}
+
+// InlineResponse is an inline struct that is a response body.
+type InlineResponse struct {
+	// Status is the literal status text, defaulting to "200" when the
+	// annotation carries none.
+	Status string
+
+	InlineStruct
 }

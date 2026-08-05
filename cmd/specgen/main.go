@@ -7,9 +7,6 @@ import (
 	"path/filepath"
 
 	"github.com/wontaeyang/go-specgen/pkg/generator"
-	"github.com/wontaeyang/go-specgen/pkg/parser"
-	"github.com/wontaeyang/go-specgen/pkg/resolver"
-	"github.com/wontaeyang/go-specgen/pkg/validator"
 )
 
 const (
@@ -67,52 +64,15 @@ func main() {
 }
 
 func generate(packagePath, outputPath string, format generator.OutputFormat, openapiVersion string) error {
-	// Step 1: Parse the package
-	fmt.Println("Parsing package...")
-	p := parser.NewParser(packagePath)
-	parsed, err := p.Parse()
+	fmt.Printf("Generating OpenAPI %s spec from %s...\n", openapiVersion, packagePath)
+
+	data, err := buildSpec(packagePath, openapiVersion, format)
 	if err != nil {
-		return fmt.Errorf("failed to parse package: %w", err)
+		return err
 	}
 
-	// Step 2: Resolve types
-	fmt.Println("Resolving types...")
-	r, err := resolver.NewResolver(packagePath, p.Comments())
-	if err != nil {
-		return fmt.Errorf("failed to create resolver: %w", err)
-	}
-
-	resolved, err := r.Resolve(parsed)
-	if err != nil {
-		return fmt.Errorf("failed to resolve types: %w", err)
-	}
-
-	// Step 3: Validate
-	fmt.Println("Validating...")
-	v := validator.NewValidator()
-	if err := v.Validate(resolved); err != nil {
-		return fmt.Errorf("validation failed: %w", err)
-	}
-
-	// Step 4: Generate OpenAPI spec
-	fmt.Println("Generating OpenAPI spec...")
-	gen, err := generator.NewGenerator(openapiVersion)
-	if err != nil {
-		return fmt.Errorf("failed to create generator: %w", err)
-	}
-	spec := gen.Generate(resolver.ConvertLegacy(resolved))
-
-	// Step 5: Render to output format
-	fmt.Println("Rendering output...")
-	data, err := gen.Render(spec, format)
-	if err != nil {
-		return fmt.Errorf("failed to render spec: %w", err)
-	}
-
-	// Step 6: Write to file
 	fmt.Printf("Writing to %s...\n", outputPath)
 
-	// Create output directory if it doesn't exist
 	outputDir := filepath.Dir(outputPath)
 	if outputDir != "." && outputDir != "" {
 		if err := os.MkdirAll(outputDir, 0755); err != nil {
@@ -128,24 +88,17 @@ func generate(packagePath, outputPath string, format generator.OutputFormat, ope
 }
 
 func printHelp() {
+	// PrintDefaults writes to stderr by default; asked-for help belongs on
+	// stdout with the rest of the text.
+	flag.CommandLine.SetOutput(os.Stdout)
+
 	fmt.Println("specgen - Generate OpenAPI specifications from Go code")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  specgen [options]")
 	fmt.Println()
 	fmt.Println("Options:")
-	fmt.Println("  -package string")
-	fmt.Println("        Path to the Go package to parse (default \".\")")
-	fmt.Println("  -output string")
-	fmt.Println("        Output file path (default \"openapi.yaml\")")
-	fmt.Println("  -format string")
-	fmt.Println("        Output format: json or yaml (default \"yaml\")")
-	fmt.Println("  -openapi string")
-	fmt.Println("        OpenAPI version: 3.0, 3.1, or 3.2 (default \"3.0\")")
-	fmt.Println("  -version")
-	fmt.Println("        Show version")
-	fmt.Println("  -help")
-	fmt.Println("        Show this help message")
+	flag.PrintDefaults()
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  # Generate OpenAPI spec from current directory")

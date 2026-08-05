@@ -1,1412 +1,623 @@
 package resolver
 
 import (
+	"errors"
 	"fmt"
+	"go/token"
 	"go/types"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/wontaeyang/go-specgen/pkg/parser"
-	"golang.org/x/tools/go/packages"
 )
 
-// specialTypeMapping defines how a special Go type maps to OpenAPI
-type specialTypeMapping struct {
-	openAPIType string
-	format      string
+// The resolver joins the parsed annotations to the Go types they describe and
+// produces the emission-ready IR: schemas sorted by name, and endpoints whose
+// parameters and responses are already in the order the generator emits them.
+//
+// Errors accumulate per top-level item — per schema, per parameter struct — so
+// one bad declaration does not hide the rest of the package.
+
+// paramKinds are the parameter kinds in emission order.
+var paramKinds = []string{parser.ParamPath, parser.ParamQuery, parser.ParamHeader, parser.ParamCookie}
+
+// resolver holds the lookups resolution needs: the Go package scope and the
+// tables that turn annotation names into resolved declarations.
+type resolver struct {
+	scope *types.Scope
+
+	// schemas is every @schema by name, including generic templates. It backs
+	// reference detection: a field typed with one of these emits a $ref.
+	schemas map[string]*parser.Schema
+
+	// resolved is the schemas already resolved, by name, for @bind lookups.
+	resolved map[string]*Schema
+
+	// groups is the fields of each resolved parameter struct, by name.
+	groups map[string][]*Field
+
+	// defaultContentType is the API-level default, applied when an annotation
+	// declares none.
+	defaultContentType string
 }
 
-// specialTypes maps package path + type name to OpenAPI type info
-// These are Go standard library struct types that should be treated as primitives
-var specialTypes = map[string]map[string]*specialTypeMapping{
-	"time": {
-		"Time": {openAPIType: "string", format: "date-time"},
-	},
-	"net/url": {
-		"URL": {openAPIType: "string", format: "uri"},
-	},
-	"net/netip": {
-		"Addr":     {openAPIType: "string", format: ""},
-		"AddrPort": {openAPIType: "string", format: ""},
-		"Prefix":   {openAPIType: "string", format: ""},
-	},
-	"math/big": {
-		"Int":   {openAPIType: "string", format: ""},
-		"Float": {openAPIType: "string", format: ""},
-		"Rat":   {openAPIType: "string", format: ""},
-	},
-	"regexp": {
-		"Regexp": {openAPIType: "string", format: ""},
-	},
-}
-
-// resolveSpecialType checks if a type is a special standard library type
-// and returns its OpenAPI mapping, or nil if not special
-func resolveSpecialType(pkgPath, typeName string) *specialTypeMapping {
-	if pkgTypes, ok := specialTypes[pkgPath]; ok {
-		if mapping, ok := pkgTypes[typeName]; ok {
-			return mapping
-		}
+// Resolve resolves a parsed package into the emission-ready IR.
+func Resolve(pkg *parser.Package) (*Package, error) {
+	if pkg.GoPkg == nil || pkg.GoPkg.Types == nil {
+		return nil, errors.New("package was parsed without Go type information")
 	}
-	return nil
-}
 
-// isSpecialType checks if a package path and type name represent a special type
-func isSpecialType(pkgPath, typeName string) bool {
-	return resolveSpecialType(pkgPath, typeName) != nil
-}
+	r := &resolver{
+		scope:    pkg.GoPkg.Types.Scope(),
+		schemas:  make(map[string]*parser.Schema, len(pkg.Schemas)),
+		resolved: make(map[string]*Schema, len(pkg.Schemas)),
+		groups:   make(map[string][]*Field, len(pkg.Parameters)),
+	}
+	for _, schema := range pkg.Schemas {
+		r.schemas[schema.Name] = schema
+	}
+	if pkg.API != nil {
+		r.defaultContentType = pkg.API.DefaultContentType
+	}
 
-// Resolver resolves Go types to OpenAPI types
-type Resolver struct {
-	packagePath string
-	pkg         *packages.Package
-	typeCache   map[string]*legacyTypeInfo
-	comments    *parser.PackageComments // For inline type resolution
-}
+	out := &Package{Name: pkg.Name, API: pkg.API}
+	var errs []error
 
-// legacyTypeInfo contains resolved type information
-type legacyTypeInfo struct {
-	OpenAPIType string
-	Format      string
-	IsArray     bool
-	ItemsType   string
-	IsNullable  bool
-	IsAnyValue  bool // true for any/interface{} types
-}
-
-// NewResolver creates a new resolver for the given package
-// If comments is provided, it uses the package from comments for type resolution,
-// which enables inline struct resolution. Otherwise, it loads the package itself.
-func NewResolver(packagePath string, comments *parser.PackageComments) (*Resolver, error) {
-	var pkg *packages.Package
-
-	// Use the package from comments if available (enables inline type resolution)
-	if comments != nil && comments.Pkg != nil {
-		pkg = comments.Pkg
-	} else {
-		// Load the package ourselves
-		cfg := &packages.Config{
-			Mode: packages.NeedName |
-				packages.NeedFiles |
-				packages.NeedSyntax |
-				packages.NeedTypes |
-				packages.NeedTypesInfo,
-		}
-
-		pkgs, err := packages.Load(cfg, packagePath)
+	// Schemas are emitted sorted by name, so they are resolved in that order
+	// too and their errors come out in a stable order.
+	schemas := slices.Clone(pkg.Schemas)
+	slices.SortFunc(schemas, func(a, b *parser.Schema) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	for _, schema := range schemas {
+		resolved, err := r.resolveSchema(schema)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load package: %w", err)
+			errs = append(errs, err)
+			continue
 		}
-
-		if len(pkgs) == 0 {
-			return nil, fmt.Errorf("no packages found")
-		}
-
-		pkg = pkgs[0]
-		if len(pkg.Errors) > 0 {
-			return nil, fmt.Errorf("package has errors: %v", pkg.Errors)
-		}
+		out.Schemas = append(out.Schemas, resolved)
+		r.resolved[resolved.Name] = resolved
 	}
 
-	return &Resolver{
-		packagePath: packagePath,
-		pkg:         pkg,
-		typeCache:   make(map[string]*legacyTypeInfo),
-		comments:    comments,
+	for _, param := range pkg.Parameters {
+		fields, err := r.resolveParameterStruct(param)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		r.groups[param.Name] = fields
+	}
+
+	for _, endpoint := range pkg.Endpoints {
+		out.Endpoints = append(out.Endpoints, r.resolveEndpoint(endpoint))
+	}
+
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	return out, nil
+}
+
+// resolveSchema resolves the Go struct behind a @schema and its fields.
+func (r *resolver) resolveSchema(schema *parser.Schema) (*Schema, error) {
+	st, err := r.structType(schema.Name, schema.Pos)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Schema{
+		Name:        schema.Name,
+		Description: schema.Description,
+		Deprecated:  schema.Deprecated,
+		IsGeneric:   schema.IsGeneric,
+		Fields:      r.resolveStructFields(st, schema.Fields, "", nil),
 	}, nil
 }
 
-// Resolve resolves all types in the parsed package
-func (r *Resolver) Resolve(parsed *parser.ParsedPackage) (*ResolvedPackage, error) {
-	resolved := &ResolvedPackage{
-		PackageName: parsed.PackageName,
-		Schemas:     make(map[string]*ResolvedSchema),
-		Parameters:  make(map[string]*ResolvedParameter),
-		Endpoints:   make([]*ResolvedEndpoint, 0),
-	}
-
-	// Resolve API info (no type resolution needed, just copy)
-	if parsed.API != nil {
-		resolved.API = r.resolveAPI(parsed.API)
-	}
-
-	// Build schema names map for detecting unresolved struct references
-	schemaNames := make(map[string]bool)
-	for name := range parsed.Schemas {
-		schemaNames[name] = true
-	}
-
-	// Resolve schemas
-	for name, schema := range parsed.Schemas {
-		resolvedSchema, err := r.resolveSchema(schema, schemaNames)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve schema %s: %w", name, err)
-		}
-		resolved.Schemas[name] = resolvedSchema
-	}
-
-	// Resolve parameters
-	for name, param := range parsed.Parameters {
-		resolvedParam, err := r.resolveParameter(param)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve parameter %s: %w", name, err)
-		}
-		resolved.Parameters[name] = resolvedParam
-	}
-
-	// Resolve endpoints
-	defaultContentType := ""
-	if resolved.API != nil {
-		defaultContentType = resolved.API.DefaultContentType
-	}
-	for _, endpoint := range parsed.Endpoints {
-		resolvedEndpoint, err := r.resolveEndpoint(endpoint, resolved.Parameters, resolved.Schemas, defaultContentType)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve endpoint %s %s: %w", endpoint.Method, endpoint.Path, err)
-		}
-		resolved.Endpoints = append(resolved.Endpoints, resolvedEndpoint)
-	}
-
-	return resolved, nil
-}
-
-// resolveAPI copies API info (no type resolution needed)
-func (r *Resolver) resolveAPI(api *parser.APIInfo) *ResolvedAPI {
-	resolved := &ResolvedAPI{
-		Title:           api.Title,
-		Version:         api.Version,
-		Description:     api.Description,
-		TermsOfService:  api.TermsOfService,
-		Servers:         make([]*Server, len(api.Servers)),
-		SecuritySchemes: make(map[string]*SecurityScheme),
-		Security:        make([][]*SecurityRequirement, len(api.Security)),
-	}
-
-	// Copy contact
-	if api.Contact != nil {
-		resolved.Contact = &Contact{
-			Name:  api.Contact.Name,
-			Email: api.Contact.Email,
-			URL:   api.Contact.URL,
-		}
-	}
-
-	// Copy license
-	if api.License != nil {
-		resolved.License = &License{
-			Name: api.License.Name,
-			URL:  api.License.URL,
-		}
-	}
-
-	// Copy servers
-	for i, server := range api.Servers {
-		resolved.Servers[i] = &Server{
-			URL:         server.URL,
-			Description: server.Description,
-		}
-	}
-
-	// Copy security schemes
-	for name, scheme := range api.SecuritySchemes {
-		resolved.SecuritySchemes[name] = &SecurityScheme{
-			Name:          scheme.Name,
-			Type:          scheme.Type,
-			Scheme:        scheme.Scheme,
-			BearerFormat:  scheme.BearerFormat,
-			In:            scheme.In,
-			ParameterName: scheme.ParameterName,
-			Description:   scheme.Description,
-		}
-	}
-
-	// Copy security requirements
-	for i, reqs := range api.Security {
-		resolved.Security[i] = make([]*SecurityRequirement, len(reqs))
-		for j, req := range reqs {
-			resolved.Security[i][j] = &SecurityRequirement{
-				SchemeName: req.SchemeName,
-				Scopes:     req.Scopes,
-			}
-		}
-	}
-
-	// Copy tags
-	resolved.Tags = make([]*Tag, len(api.Tags))
-	for i, tag := range api.Tags {
-		resolved.Tags[i] = &Tag{
-			Name:        tag.Name,
-			Description: tag.Description,
-		}
-	}
-
-	// Copy default content type
-	resolved.DefaultContentType = api.DefaultContentType
-
-	return resolved
-}
-
-// resolveSchema resolves a schema by looking up the Go struct and resolving its fields
-// schemaNames contains all known @schema type names for detecting unresolved struct references
-func (r *Resolver) resolveSchema(schema *parser.Schema, schemaNames map[string]bool) (*ResolvedSchema, error) {
-	resolved := &ResolvedSchema{
-		Name:        schema.Name,
-		GoTypeName:  schema.GoTypeName,
-		Description: schema.Description,
-		Deprecated:  schema.Deprecated,
-		Fields:      make([]*ResolvedField, 0),
-		IsGeneric:   schema.IsGeneric,
-		IsTypeAlias: schema.IsTypeAlias,
-		AliasOf:     schema.AliasOf,
-	}
-
-	// Extract type argument for type aliases (e.g., "DataResponse[User]" -> "User")
-	if schema.IsTypeAlias && schema.AliasOf != "" {
-		resolved.TypeArg = extractTypeArg(schema.AliasOf)
-	}
-
-	// Find the Go struct
-	obj := r.pkg.Types.Scope().Lookup(schema.GoTypeName)
-	if obj == nil {
-		return nil, fmt.Errorf("struct %s not found in package", schema.GoTypeName)
-	}
-
-	structType, ok := obj.Type().Underlying().(*types.Struct)
-	if !ok {
-		return nil, fmt.Errorf("%s is not a struct", schema.GoTypeName)
-	}
-
-	// Resolve each field (including embedded struct flattening)
-	fields, err := r.resolveSchemaFields(structType, schema.Fields, schemaNames, nil)
+// resolveParameterStruct resolves a struct marked @path, @query, @header or
+// @cookie. The kind it declares decides how its fields resolve, wherever they
+// are later referenced from.
+func (r *resolver) resolveParameterStruct(param *parser.ParameterStruct) ([]*Field, error) {
+	st, err := r.structType(param.Name, param.Pos)
 	if err != nil {
 		return nil, err
 	}
-	resolved.Fields = fields
-
-	return resolved, nil
+	return r.resolveStructFields(st, param.Fields, param.Kind, nil), nil
 }
 
-// resolveSchemaFields resolves fields from a struct type, flattening embedded structs.
-// visited tracks type names to prevent infinite recursion from circular embedding.
-func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*parser.Field, schemaNames map[string]bool, visited map[string]bool) ([]*ResolvedField, error) {
-	if visited == nil {
-		visited = make(map[string]bool)
-	}
-
-	var fields []*ResolvedField
-
-	for i := 0; i < structType.NumFields(); i++ {
-		field := structType.Field(i)
-		tag := structType.Tag(i)
-
-		// Handle embedded (anonymous) fields by flattening
-		if field.Anonymous() {
-			embeddedFields, err := r.flattenEmbeddedField(field, annotations, schemaNames, visited)
-			if err != nil {
-				return nil, err
-			}
-			fields = append(fields, embeddedFields...)
-			continue
-		}
-
-		// Find annotation for this field
-		var fieldAnnotation *parser.Field
-		for _, f := range annotations {
-			if f.GoName == field.Name() {
-				fieldAnnotation = f
-				break
-			}
-		}
-
-		// Resolve field type
-		resolvedField, err := r.resolveField(field, tag, fieldAnnotation, schemaNames)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve field %s: %w", field.Name(), err)
-		}
-		// Skip fields that should be omitted (e.g., json:"-")
-		if resolvedField == nil {
-			continue
-		}
-
-		fields = append(fields, resolvedField)
-	}
-
-	return fields, nil
-}
-
-// unwrapEmbeddedStruct unwraps a type (through pointers and named types) to get
-// the underlying struct, with cycle detection via the visited map.
-// Returns nil if the type is not a struct or if a cycle is detected.
-// The returned cleanup function must be deferred to remove the type from visited.
-func unwrapEmbeddedStruct(t types.Type, visited map[string]bool) (st *types.Struct, cleanup func()) {
-	cleanup = func() {} // no-op default
-
-	// Unwrap pointer
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
-	}
-
-	if named, ok := t.(*types.Named); ok {
-		typeName := named.Obj().Name()
-
-		// Cycle detection
-		if visited[typeName] {
-			return nil, cleanup
-		}
-		visited[typeName] = true
-		cleanup = func() { delete(visited, typeName) }
-
-		underlying, ok := named.Underlying().(*types.Struct)
-		if !ok {
-			return nil, cleanup
-		}
-		return underlying, cleanup
-	}
-
-	if s, ok := t.(*types.Struct); ok {
-		return s, cleanup
-	}
-
-	return nil, cleanup
-}
-
-// flattenEmbeddedField resolves an embedded struct field and returns its flattened fields.
-func (r *Resolver) flattenEmbeddedField(field *types.Var, annotations []*parser.Field, schemaNames map[string]bool, visited map[string]bool) ([]*ResolvedField, error) {
-	embeddedStruct, cleanup := unwrapEmbeddedStruct(field.Type(), visited)
-	defer cleanup()
-	if embeddedStruct == nil {
-		return nil, nil
-	}
-
-	return r.resolveSchemaFields(embeddedStruct, annotations, schemaNames, visited)
-}
-
-// extractTypeArg extracts the type argument from a generic instantiation
-// e.g., "DataResponse[User]" -> "User", "DataResponse[[]User]" -> "[]User"
-func extractTypeArg(aliasOf string) string {
-	start := strings.Index(aliasOf, "[")
-	end := strings.LastIndex(aliasOf, "]")
-	if start > 0 && end > start {
-		return aliasOf[start+1 : end]
-	}
-	return ""
-}
-
-// resolveParameter resolves a parameter struct
-func (r *Resolver) resolveParameter(param *parser.Parameter) (*ResolvedParameter, error) {
-	resolved := &ResolvedParameter{
-		Name:       param.Name,
-		Type:       string(param.Type),
-		GoTypeName: param.GoTypeName,
-		Fields:     make([]*ResolvedField, 0),
-	}
-
-	// Find the Go struct
-	obj := r.pkg.Types.Scope().Lookup(param.GoTypeName)
+// structType looks up a declared type and returns the struct behind it. Type
+// aliases resolve through to the struct they name, which is how a generic
+// instantiation (type UserResponse = Response[User]) reaches its substituted
+// fields.
+func (r *resolver) structType(name string, pos token.Position) (*types.Struct, error) {
+	obj := r.scope.Lookup(name)
 	if obj == nil {
-		return nil, fmt.Errorf("struct %s not found in package", param.GoTypeName)
+		return nil, &parser.Error{Pos: pos, Msg: fmt.Sprintf("struct %s not found in package", name)}
 	}
 
-	structType, ok := obj.Type().Underlying().(*types.Struct)
+	st, ok := obj.Type().Underlying().(*types.Struct)
 	if !ok {
-		return nil, fmt.Errorf("%s is not a struct", param.GoTypeName)
+		return nil, &parser.Error{Pos: pos, Msg: fmt.Sprintf("%s is not a struct", name)}
 	}
-
-	// Resolve each field (including embedded struct flattening)
-	fields, err := r.resolveParameterFields(structType, param.Fields, string(param.Type), nil)
-	if err != nil {
-		return nil, err
-	}
-	resolved.Fields = fields
-
-	return resolved, nil
+	return st, nil
 }
 
-// resolveParameterFields resolves fields from a parameter struct, flattening embedded structs.
-func (r *Resolver) resolveParameterFields(structType *types.Struct, annotations []*parser.Field, paramType string, visited map[string]bool) ([]*ResolvedField, error) {
-	if visited == nil {
-		visited = make(map[string]bool)
+// resolveStructFields resolves every serializable field of a struct, flattening
+// embedded structs and applying the @field annotations, which bind by Go name.
+//
+// kind selects the serialization: "" resolves the fields as a JSON body,
+// otherwise they are parameters of that kind ("path", "query", "header",
+// "cookie"), which changes the tag consulted for the wire name, the rule that
+// decides required, and nullability.
+//
+// visited carries the embedded types already being walked, so a cycle of
+// mutually embedding structs terminates. It starts nil.
+func (r *resolver) resolveStructFields(st *types.Struct, annos []*parser.Field, kind string, visited map[string]bool) []*Field {
+	// Binding is scope-blind: an annotation matches any field with that Go
+	// name, including one flattened in from an embedded struct.
+	byGoName := make(map[string]*parser.Field, len(annos))
+	for _, anno := range annos {
+		if _, taken := byGoName[anno.GoName]; !taken {
+			byGoName[anno.GoName] = anno
+		}
 	}
 
-	var fields []*ResolvedField
+	var fields []*Field
+	for i := range st.NumFields() {
+		field := st.Field(i)
+		tag := reflect.StructTag(st.Tag(i))
 
-	for i := 0; i < structType.NumFields(); i++ {
-		field := structType.Field(i)
-		tag := structType.Tag(i)
-
-		// Handle embedded (anonymous) fields by flattening
+		// Embedded fields contribute their own fields, at this level.
 		if field.Anonymous() {
-			embeddedFields, err := r.flattenEmbeddedParamField(field, annotations, paramType, visited)
-			if err != nil {
-				return nil, err
-			}
-			fields = append(fields, embeddedFields...)
+			fields = append(fields, r.flattenEmbedded(field, annos, kind, visited)...)
 			continue
 		}
 
-		// Find annotation for this field
-		var fieldAnnotation *parser.Field
-		for _, f := range annotations {
-			if f.GoName == field.Name() {
-				fieldAnnotation = f
-				break
-			}
-		}
-
-		// Resolve field type
-		resolvedField, err := r.resolveFieldWithParamType(field, tag, fieldAnnotation, paramType)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve field %s: %w", field.Name(), err)
-		}
-		// Skip fields that should be omitted
-		if resolvedField == nil {
-			continue
-		}
-
-		fields = append(fields, resolvedField)
-	}
-
-	return fields, nil
-}
-
-// flattenEmbeddedParamField resolves an embedded struct field for parameters.
-func (r *Resolver) flattenEmbeddedParamField(field *types.Var, annotations []*parser.Field, paramType string, visited map[string]bool) ([]*ResolvedField, error) {
-	embeddedStruct, cleanup := unwrapEmbeddedStruct(field.Type(), visited)
-	defer cleanup()
-	if embeddedStruct == nil {
-		return nil, nil
-	}
-
-	return r.resolveParameterFields(embeddedStruct, annotations, paramType, visited)
-}
-
-// resolveField resolves a single struct field
-// schemaNames contains the names of all known @schema types for detecting unresolved struct references
-// Returns nil, nil if the field should be skipped (e.g., json:"-" or unexported fields)
-func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser.Field, schemaNames map[string]bool) (*ResolvedField, error) {
-	// Skip unexported (private) fields - they cannot be serialized
-	if !field.Exported() {
-		return nil, nil
-	}
-
-	// Resolve field name using tag fallback chain (json -> xml -> Go field name)
-	// Returns "" if field should be skipped
-	fieldName := resolveFieldNameFromTag(tag, field.Name())
-	if fieldName == "" {
-		// Field should be skipped (e.g., json:"-")
-		return nil, nil
-	}
-
-	resolved := &ResolvedField{
-		Name:   fieldName,
-		GoName: field.Name(),
-		GoType: field.Type().String(),
-	}
-
-	// Check if field is required from JSON tag
-	omitted := omitsWhenEmpty(tag, field.Type())
-	resolved.Required = !omitted
-
-	// Check for anonymous struct types and resolve their fields inline
-	if inlineFields := r.resolveAnonymousStruct(field.Type(), schemaNames); inlineFields != nil {
-		resolved.InlineFields = inlineFields
-		resolved.OpenAPIType = "object"
-	} else if itemFields := r.resolveSliceOfAnonymousStruct(field.Type(), schemaNames); itemFields != nil {
-		// Slice of anonymous struct
-		resolved.IsArray = true
-		resolved.OpenAPIType = "array"
-		resolved.ItemsType = "object"
-		resolved.ItemsInlineFields = itemFields
-	} else if mapValueFields := r.resolveMapOfAnonymousStruct(field.Type(), schemaNames); mapValueFields != nil {
-		// Map with anonymous struct values
-		resolved.IsMap = true
-		resolved.OpenAPIType = "object"
-		resolved.MapValueInlineFields = mapValueFields
-	} else {
-		// Check for unresolved struct types (named structs not in @schema)
-		r.checkUnresolvedStruct(field.Type(), resolved, schemaNames)
-
-		// Resolve Go type to OpenAPI type
-		typeInfo := r.resolveType(field.Type())
-		resolved.OpenAPIType = typeInfo.OpenAPIType
-		resolved.Format = typeInfo.Format
-		resolved.IsArray = typeInfo.IsArray
-		resolved.ItemsType = typeInfo.ItemsType
-		// omitempty/omitzero omit a nil pointer instead of encoding null,
-		// so the field can never appear as null on the wire
-		resolved.Nullable = typeInfo.IsNullable && !omitted
-		resolved.IsAnyValue = typeInfo.IsAnyValue
-	}
-
-	applyAnnotationOverrides(resolved, annotation)
-
-	return resolved, nil
-}
-
-// resolveAnonymousStruct checks if a type is an anonymous struct and resolves its fields inline
-// Returns nil if the type is not an anonymous struct
-func (r *Resolver) resolveAnonymousStruct(t types.Type, schemaNames map[string]bool) []*ResolvedField {
-	// Unwrap pointer
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
-	}
-
-	// Check if this is an anonymous struct (a *types.Struct without being wrapped in *types.Named)
-	structType, ok := t.(*types.Struct)
-	if !ok {
-		return nil
-	}
-
-	// This is an anonymous struct - resolve its fields
-	fields := make([]*ResolvedField, 0, structType.NumFields())
-
-	for i := 0; i < structType.NumFields(); i++ {
-		field := structType.Field(i)
-		tag := structType.Tag(i)
-
-		// Handle embedded (anonymous) fields by flattening
-		if field.Anonymous() {
-			embeddedFields, err := r.flattenEmbeddedField(field, nil, schemaNames, nil)
-			if err != nil {
-				continue
-			}
-			fields = append(fields, embeddedFields...)
-			continue
-		}
-
-		// Skip unexported (private) fields - they cannot be serialized
+		// Unexported fields are never serialized.
 		if !field.Exported() {
 			continue
 		}
 
-		// Resolve field name using tag fallback chain (json -> xml -> Go field name)
-		// Returns "" if field should be skipped
-		fieldName := resolveFieldNameFromTag(tag, field.Name())
-		if fieldName == "" {
-			// Field should be skipped (e.g., json:"-")
-			continue
+		if resolved := r.resolveField(field, tag, byGoName[field.Name()], kind); resolved != nil {
+			fields = append(fields, resolved)
 		}
-
-		resolvedField := &ResolvedField{
-			Name:   fieldName,
-			GoName: field.Name(),
-			GoType: field.Type().String(),
-		}
-
-		// Check if field is required from JSON tag
-		omitted := omitsWhenEmpty(tag, field.Type())
-		resolvedField.Required = !omitted
-
-		// Check for nested anonymous structs (recursive)
-		if nestedFields := r.resolveAnonymousStruct(field.Type(), schemaNames); nestedFields != nil {
-			resolvedField.InlineFields = nestedFields
-			resolvedField.OpenAPIType = "object"
-		} else if itemFields := r.resolveSliceOfAnonymousStruct(field.Type(), schemaNames); itemFields != nil {
-			// Nested slice of anonymous struct
-			resolvedField.IsArray = true
-			resolvedField.OpenAPIType = "array"
-			resolvedField.ItemsType = "object"
-			resolvedField.ItemsInlineFields = itemFields
-		} else if mapValueFields := r.resolveMapOfAnonymousStruct(field.Type(), schemaNames); mapValueFields != nil {
-			// Nested map with anonymous struct values
-			resolvedField.IsMap = true
-			resolvedField.OpenAPIType = "object"
-			resolvedField.MapValueInlineFields = mapValueFields
-		} else {
-			// Check for unresolved struct types
-			r.checkUnresolvedStruct(field.Type(), resolvedField, schemaNames)
-
-			// Resolve Go type to OpenAPI type
-			typeInfo := r.resolveType(field.Type())
-			resolvedField.OpenAPIType = typeInfo.OpenAPIType
-			resolvedField.Format = typeInfo.Format
-			resolvedField.IsArray = typeInfo.IsArray
-			resolvedField.ItemsType = typeInfo.ItemsType
-			// omitempty/omitzero omit a nil pointer instead of encoding null,
-			// so the field can never appear as null on the wire
-			resolvedField.Nullable = typeInfo.IsNullable && !omitted
-			resolvedField.IsAnyValue = typeInfo.IsAnyValue
-		}
-
-		fields = append(fields, resolvedField)
 	}
 
 	return fields
 }
 
-// resolveSliceOfAnonymousStruct checks if a type is a slice/array of anonymous struct
-// and resolves the element's fields inline. Returns nil if not a slice of anonymous struct.
-func (r *Resolver) resolveSliceOfAnonymousStruct(t types.Type, schemaNames map[string]bool) []*ResolvedField {
-	// Unwrap pointer
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
+// flattenEmbedded resolves an embedded field into the fields it contributes to
+// the embedding struct.
+func (r *resolver) flattenEmbedded(field *types.Var, annos []*parser.Field, kind string, visited map[string]bool) []*Field {
+	if visited == nil {
+		visited = make(map[string]bool)
 	}
 
-	// Check if this is a slice
-	slice, ok := t.(*types.Slice)
-	if !ok {
+	st, done := unwrapEmbedded(field.Type(), visited)
+	defer done()
+	if st == nil {
 		return nil
 	}
-
-	// Check if the element type is an anonymous struct
-	return r.resolveAnonymousStruct(slice.Elem(), schemaNames)
+	return r.resolveStructFields(st, annos, kind, visited)
 }
 
-// resolveMapOfAnonymousStruct checks if a type is a map with anonymous struct values
-// and resolves the value's fields inline. Returns nil if not a map of anonymous struct.
-func (r *Resolver) resolveMapOfAnonymousStruct(t types.Type, schemaNames map[string]bool) []*ResolvedField {
-	// Unwrap pointer
+// unwrapEmbedded unwraps an embedded field's type, through a pointer and a
+// named type, to the struct it embeds. It returns nil when the type is not a
+// struct or when it is already being walked, which is how a cycle of mutually
+// embedding structs terminates. The returned function must be called once the
+// struct has been walked.
+func unwrapEmbedded(t types.Type, visited map[string]bool) (*types.Struct, func()) {
+	done := func() {}
+
 	if ptr, ok := t.(*types.Pointer); ok {
 		t = ptr.Elem()
 	}
 
-	// Check if this is a map
-	mapType, ok := t.(*types.Map)
-	if !ok {
-		return nil
-	}
-
-	// Check if the value type is an anonymous struct
-	return r.resolveAnonymousStruct(mapType.Elem(), schemaNames)
-}
-
-// checkUnresolvedStruct checks if a type is a named struct that is not a known @schema
-// and marks the resolved field accordingly
-func (r *Resolver) checkUnresolvedStruct(t types.Type, resolved *ResolvedField, schemaNames map[string]bool) {
-	// Unwrap pointer
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
-	}
-
-	// Check for slice/array - check element type
-	if slice, ok := t.(*types.Slice); ok {
-		r.checkUnresolvedStruct(slice.Elem(), resolved, schemaNames)
-		return
-	}
-
-	// Check for map - check value type
-	if mapType, ok := t.(*types.Map); ok {
-		r.checkUnresolvedStruct(mapType.Elem(), resolved, schemaNames)
-		return
-	}
-
-	// Check for named types (could be struct or alias to slice/map)
 	if named, ok := t.(*types.Named); ok {
-		obj := named.Obj()
-		underlying := named.Underlying()
-
-		// Skip special standard library types (time.Time, url.URL, etc.)
-		// These are handled specially by the resolver
-		if obj.Pkg() != nil && isSpecialType(obj.Pkg().Path(), obj.Name()) {
-			return
+		name := named.Obj().Name()
+		if visited[name] {
+			return nil, done
 		}
+		visited[name] = true
+		done = func() { delete(visited, name) }
 
-		// Check if underlying is a struct
-		if _, isStruct := underlying.(*types.Struct); isStruct {
-			typeName := obj.Name()
-			// If not in known schemas, mark as unresolved
-			if !schemaNames[typeName] {
-				resolved.IsUnresolvedStruct = true
-				resolved.UnresolvedTypeName = typeName
-			}
-			return
+		st, ok := named.Underlying().(*types.Struct)
+		if !ok {
+			return nil, done
 		}
-
-		// If underlying is slice/map, recurse into element type
-		// This handles custom types like `type Addresses []Address`
-		r.checkUnresolvedStruct(underlying, resolved, schemaNames)
+		return st, done
 	}
+
+	if st, ok := t.(*types.Struct); ok {
+		return st, done
+	}
+	return nil, done
 }
 
-// omitsWhenEmpty reports whether the JSON tag actually drops the field for
-// empty/zero values of the given type. omitzero omits any zero value,
-// including zero structs. omitempty follows encoding/json's isEmptyValue,
-// which never considers structs empty (and arrays only at length zero), so
-// such fields always appear on the wire despite the tag.
-func omitsWhenEmpty(tag string, fieldType types.Type) bool {
-	if strings.Contains(tag, "omitzero") {
-		return true
-	}
-	return strings.Contains(tag, "omitempty") && canBeEmpty(fieldType)
-}
-
-// canBeEmpty mirrors encoding/json's isEmptyValue: reports whether some value
-// of the type is ever considered empty by omitempty.
-func canBeEmpty(fieldType types.Type) bool {
-	switch u := fieldType.Underlying().(type) {
-	case *types.Pointer, *types.Interface, *types.Map, *types.Slice:
-		return true
-	case *types.Basic:
-		return u.Info()&(types.IsBoolean|types.IsNumeric|types.IsString) != 0
-	case *types.Array:
-		return u.Len() == 0
-	default:
-		return false
-	}
-}
-
-// resolveFieldWithParamType resolves a field for a parameter with the appropriate struct tag
-// Returns nil, nil if the field should be skipped (e.g., json:"-" for schema fields or unexported fields)
-func (r *Resolver) resolveFieldWithParamType(field *types.Var, tag string, annotation *parser.Field, paramType string) (*ResolvedField, error) {
-	// Skip unexported (private) fields - they cannot be serialized
-	if !field.Exported() {
-		return nil, nil
-	}
-
-	// Extract name from the appropriate struct tag based on parameter type
-	var tagName string
-	switch paramType {
-	case "path":
-		tagName = extractTagName(tag, "path")
-	case "query":
-		tagName = extractTagName(tag, "query")
-	case "header":
-		tagName = extractTagName(tag, "header")
-	case "cookie":
-		tagName = extractTagName(tag, "cookie")
-	default:
-		// For schemas, use tag fallback chain (json -> xml -> Go field name)
-		tagName = resolveFieldNameFromTag(tag, field.Name())
-		if tagName == "" {
-			// Field should be skipped (e.g., json:"-")
-			return nil, nil
-		}
-	}
-
-	// For parameter types, handle "-" and empty as fallback to Go field name
-	if tagName == "-" || tagName == "" {
-		tagName = field.Name()
-	}
-
-	resolved := &ResolvedField{
-		Name:   tagName,
-		GoName: field.Name(),
-		GoType: field.Type().String(),
-	}
-
-	// Check if field is required based on parameter type.
-	// Path parameters are always required. Query, header, and cookie parameters
-	// are optional by default and only required if the tag contains ",required".
-	// Schema/JSON fields use the omitempty/omitzero logic.
-	switch paramType {
-	case "path":
-		resolved.Required = true
-	case "query", "header", "cookie":
-		resolved.Required = strings.Contains(tag, ",required")
-	default:
-		resolved.Required = !omitsWhenEmpty(tag, field.Type())
-	}
-
-	// Resolve Go type to OpenAPI type
-	typeInfo := r.resolveType(field.Type())
-	resolved.OpenAPIType = typeInfo.OpenAPIType
-	resolved.Format = typeInfo.Format
-	resolved.IsArray = typeInfo.IsArray
-	resolved.ItemsType = typeInfo.ItemsType
-	resolved.IsAnyValue = typeInfo.IsAnyValue
-
-	// Parameters serialize as plain strings, which cannot represent null,
-	// so pointer-ness never implies nullable — a pointer only lets the
-	// handler distinguish absent from zero. @nullable true can still opt in.
-	switch paramType {
-	case "path", "query", "header", "cookie":
-		resolved.Nullable = false
-	default:
-		resolved.Nullable = typeInfo.IsNullable
-	}
-
-	applyAnnotationOverrides(resolved, annotation)
-
-	return resolved, nil
-}
-
-// applyAnnotationOverrides applies @field annotation values onto a resolved field
-func applyAnnotationOverrides(resolved *ResolvedField, annotation *parser.Field) {
-	if annotation == nil {
-		return
-	}
-	if annotation.Description != "" {
-		resolved.Description = annotation.Description
-	}
-	if annotation.Format != "" {
-		resolved.Format = annotation.Format
-	}
-	if annotation.Example != "" {
-		resolved.Example = annotation.Example
-	}
-	if annotation.Default != "" {
-		resolved.Default = annotation.Default
-	}
-	if annotation.Pattern != "" {
-		resolved.Pattern = annotation.Pattern
-	}
-	if len(annotation.Enum) > 0 {
-		resolved.Enum = annotation.Enum
-	}
-	if annotation.MinLength != nil {
-		resolved.MinLength = annotation.MinLength
-	}
-	if annotation.MaxLength != nil {
-		resolved.MaxLength = annotation.MaxLength
-	}
-	if annotation.MinItems != nil {
-		resolved.MinItems = annotation.MinItems
-	}
-	if annotation.MaxItems != nil {
-		resolved.MaxItems = annotation.MaxItems
-	}
-	if annotation.UniqueItems {
-		resolved.UniqueItems = true
-	}
-	if annotation.Minimum != nil {
-		resolved.Minimum = annotation.Minimum
-	}
-	if annotation.Maximum != nil {
-		resolved.Maximum = annotation.Maximum
-	}
-	if annotation.ExclusiveMinimum != nil {
-		resolved.ExclusiveMinimum = annotation.ExclusiveMinimum
-	}
-	if annotation.ExclusiveMaximum != nil {
-		resolved.ExclusiveMaximum = annotation.ExclusiveMaximum
-	}
-	if annotation.Required != nil {
-		resolved.Required = *annotation.Required
-	}
-	if annotation.Nullable != nil {
-		resolved.Nullable = *annotation.Nullable
-	}
-	if annotation.Deprecated {
-		resolved.Deprecated = true
-	}
-	if annotation.ReadOnly {
-		resolved.ReadOnly = true
-	}
-	if annotation.WriteOnly {
-		resolved.WriteOnly = true
-	}
-}
-
-// resolveType resolves a Go type to OpenAPI type information
-func (r *Resolver) resolveType(t types.Type) *legacyTypeInfo {
-	// Check cache first
-	typeStr := t.String()
-	if cached, ok := r.typeCache[typeStr]; ok {
-		return cached
-	}
-
-	info := &legacyTypeInfo{}
-
-	// Handle pointer types
-	if ptr, ok := t.(*types.Pointer); ok {
-		info.IsNullable = true
-		t = ptr.Elem()
-	}
-
-	// Handle slices/arrays
-	if slice, ok := t.(*types.Slice); ok {
-		// Special case: []byte → string, format: byte (base64-encoded)
-		if basic, ok := slice.Elem().(*types.Basic); ok && basic.Kind() == types.Byte {
-			info.OpenAPIType = "string"
-			info.Format = "byte"
-			r.typeCache[typeStr] = info
-			return info
-		}
-
-		info.IsArray = true
-		elemInfo := r.resolveType(slice.Elem())
-		info.ItemsType = elemInfo.OpenAPIType
-		info.OpenAPIType = "array"
-		r.typeCache[typeStr] = info
-		return info
-	}
-
-	// Handle type aliases (e.g., "any" is an alias for interface{})
-	if alias, ok := t.(*types.Alias); ok {
-		// Recurse on the aliased type
-		aliasInfo := r.resolveType(alias.Rhs())
-		if info.IsNullable {
-			// Preserve nullable from pointer detection
-			result := *aliasInfo
-			result.IsNullable = true
-			r.typeCache[typeStr] = &result
-			return &result
-		}
-		return aliasInfo
-	}
-
-	// Handle named types
-	if named, ok := t.(*types.Named); ok {
-		obj := named.Obj()
-		pkgPath := ""
-		if obj.Pkg() != nil {
-			pkgPath = obj.Pkg().Path()
-		}
-
-		// Check for special standard library types
-		if specialType := resolveSpecialType(pkgPath, obj.Name()); specialType != nil {
-			info.OpenAPIType = specialType.openAPIType
-			info.Format = specialType.format
-			r.typeCache[typeStr] = info
-			return info
-		}
-
-		// Recurse on underlying type
-		underlyingInfo := r.resolveType(named.Underlying())
-		if info.IsNullable {
-			// Preserve nullable from pointer detection
-			result := *underlyingInfo
-			result.IsNullable = true
-			r.typeCache[typeStr] = &result
-			return &result
-		}
-		return underlyingInfo
-	}
-
-	// Handle basic types
-	if basic, ok := t.(*types.Basic); ok {
-		switch basic.Kind() {
-		case types.Bool:
-			info.OpenAPIType = "boolean"
-		case types.Int, types.Int8, types.Int16, types.Int32:
-			info.OpenAPIType = "integer"
-			if basic.Kind() == types.Int32 {
-				info.Format = "int32"
-			}
-		case types.Int64:
-			info.OpenAPIType = "integer"
-			info.Format = "int64"
-		case types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64:
-			info.OpenAPIType = "integer"
-		case types.Float32:
-			info.OpenAPIType = "number"
-			info.Format = "float"
-		case types.Float64:
-			info.OpenAPIType = "number"
-			info.Format = "double"
-		case types.String:
-			info.OpenAPIType = "string"
-		default:
-			// Unknown basic type, default to string
-			info.OpenAPIType = "string"
-		}
-	} else if _, ok := t.(*types.Interface); ok {
-		// Interface type (any/interface{}) - any JSON value
-		info.IsAnyValue = true
-	} else {
-		// Unknown type, default to string
-		info.OpenAPIType = "string"
-	}
-
-	r.typeCache[typeStr] = info
-	return info
-}
-
-// resolveEndpoint resolves an endpoint
-func (r *Resolver) resolveEndpoint(endpoint *parser.Endpoint, parameters map[string]*ResolvedParameter, schemas map[string]*ResolvedSchema, defaultContentType string) (*ResolvedEndpoint, error) {
-	resolved := &ResolvedEndpoint{
-		FuncName:        endpoint.FuncName,
-		Method:          endpoint.Method,
-		Path:            endpoint.Path,
-		OperationID:     endpoint.OperationID,
-		Summary:         endpoint.Summary,
-		Description:     endpoint.Description,
-		Tags:            endpoint.Tags,
-		Deprecated:      endpoint.Deprecated,
-		Auth:            endpoint.Auth,
-		Responses:       make(map[string]*ResolvedResponse),
-		PathParams:      make([]*ResolvedParameter, 0),
-		QueryParams:     make([]*ResolvedParameter, 0),
-		HeaderParams:    make([]*ResolvedParameter, 0),
-		CookieParams:    make([]*ResolvedParameter, 0),
-		InlineResponses: make(map[string]*ResolvedInlineBody),
-	}
-
-	// Resolve request body
-	if endpoint.Request != nil && endpoint.Request.Body != nil {
-		contentType := endpoint.Request.ContentType
-		if contentType == "" {
-			contentType = defaultContentType
-		}
-		if contentType == "" {
-			contentType = "application/json" // Fallback
-		}
-		resolved.Request = &ResolvedRequestBody{
-			ContentType: contentType,
-			Body:        r.resolveBody(endpoint.Request.Body, schemas),
-			Required:    true, // Default to required
-		}
-	}
-
-	// Resolve responses
-	for statusCode, response := range endpoint.Responses {
-		contentType := response.ContentType
-		// Only apply default if response has a body
-		if contentType == "" && response.Body != nil {
-			contentType = defaultContentType
-		}
-		if contentType == "" && response.Body != nil {
-			contentType = "application/json" // Fallback
-		}
-
-		resolvedResponse := &ResolvedResponse{
-			StatusCode:  response.StatusCode,
-			Description: response.Description,
-			ContentType: contentType,
-			Body:        r.resolveBody(response.Body, schemas),
-		}
-
-		// Resolve response header references
-		for _, ref := range response.HeaderParams {
-			if param, ok := parameters[ref]; ok {
-				resolvedResponse.Headers = append(resolvedResponse.Headers, param)
-			}
-		}
-
-		resolved.Responses[statusCode] = resolvedResponse
-	}
-
-	// Resolve parameter references
-	for _, ref := range endpoint.PathParams {
-		if param, ok := parameters[ref]; ok {
-			resolved.PathParams = append(resolved.PathParams, param)
-		}
-	}
-
-	for _, ref := range endpoint.QueryParams {
-		if param, ok := parameters[ref]; ok {
-			resolved.QueryParams = append(resolved.QueryParams, param)
-		}
-	}
-
-	for _, ref := range endpoint.HeaderParams {
-		if param, ok := parameters[ref]; ok {
-			resolved.HeaderParams = append(resolved.HeaderParams, param)
-		}
-	}
-
-	for _, ref := range endpoint.CookieParams {
-		if param, ok := parameters[ref]; ok {
-			resolved.CookieParams = append(resolved.CookieParams, param)
-		}
-	}
-
-	// Resolve inline declarations from function body
-	if r.comments != nil && r.comments.FuncInlines != nil {
-		if inlines := r.comments.FuncInlines[endpoint.FuncName]; inlines != nil {
-			if err := r.resolveInlineDeclarations(resolved, inlines, parameters, schemas, defaultContentType); err != nil {
-				return nil, fmt.Errorf("failed to resolve inline declarations: %w", err)
-			}
-		}
-	}
-
-	return resolved, nil
-}
-
-// extractTagName extracts a field name from a specific struct tag key
-func extractTagName(tag string, key string) string {
-	// Parse struct tag
-	st := reflect.StructTag(tag)
-	value := st.Get(key)
-	if value == "" {
-		return ""
-	}
-
-	// Split by comma to remove options like omitempty
-	parts := strings.Split(value, ",")
-	if len(parts) > 0 {
-		return parts[0]
-	}
-
-	return ""
-}
-
-// SupportedTags defines struct tags checked for field names (in fallback order).
-// To add support for additional tags, append them to this slice.
-var SupportedTags = []string{"json", "xml"}
-
-// resolveFieldNameFromTag determines the field name using the fallback chain.
-// It checks tags in order (json, xml) and falls back to the Go field name.
-//
-// Fallback logic:
-//   - If tag is "-" → return "" (skip field entirely)
-//   - If tag not present or name part is empty → continue to next tag
-//   - If name part exists → use it
-//   - If no tags have a name → use Go field name
-//
-// Returns empty string "" if field should be skipped.
-func resolveFieldNameFromTag(tag string, goFieldName string) string {
-	st := reflect.StructTag(tag)
-
-	for _, tagKey := range SupportedTags {
-		tagValue := st.Get(tagKey)
-		if tagValue == "" {
-			// Tag not present or empty, continue to next tag
-			continue
-		}
-		if tagValue == "-" {
-			// Explicit skip - field should be omitted entirely
-			return ""
-		}
-		// Extract name part (before comma)
-		name := tagValue
-		if idx := strings.Index(tagValue, ","); idx != -1 {
-			name = tagValue[:idx]
-		}
+// resolveField resolves one struct field. It returns nil for a field that is
+// not serialized at all (json:"-").
+func (r *resolver) resolveField(field *types.Var, tag reflect.StructTag, anno *parser.Field, kind string) *Field {
+	var name string
+	if kind == "" {
+		// Only a body field can be skipped outright (json:"-"); a parameter
+		// always falls back to its Go name.
+		name = bodyFieldName(tag, field.Name())
 		if name == "" {
-			// Name part is empty (e.g., `json:",omitempty"`), continue to next tag
-			continue
+			return nil
 		}
-		return name
-	}
-	// No tags found with a name, use Go field name
-	return goFieldName
-}
-
-// resolveBody resolves a parser.Body to a ResolvedBody
-func (r *Resolver) resolveBody(body *parser.Body, schemas map[string]*ResolvedSchema) *ResolvedBody {
-	if body == nil {
-		return nil
-	}
-
-	resolved := &ResolvedBody{
-		Schema: body.Schema,
-	}
-
-	// Parse schema to determine if it's an array or map
-	schema := strings.TrimSpace(body.Schema)
-	if strings.HasPrefix(schema, "[]") {
-		resolved.IsArray = true
-		resolved.ElementType = strings.TrimPrefix(schema, "[]")
-	} else if strings.HasPrefix(schema, "map[string]") {
-		resolved.IsMap = true
-		resolved.ElementType = strings.TrimPrefix(schema, "map[string]")
 	} else {
-		resolved.ElementType = schema
+		name = paramFieldName(tag, kind, field.Name())
 	}
 
-	// Resolve bind target if present
-	if body.Bind != nil {
-		resolved.Bind = r.resolveBindTarget(body.Bind, schemas)
+	out := &Field{Name: name, GoName: field.Name()}
+	omitted := omitsWhenEmpty(tag, field.Type())
+
+	switch {
+	case kind == parser.ParamPath:
+		// A path parameter is part of the URL, so it is always required.
+		out.Required = true
+	case kind != "":
+		// Query, header and cookie parameters are optional unless the tag
+		// opts in, e.g. `query:"q,required"`.
+		out.Required = hasTagOption(tag, kind, "required")
+	default:
+		out.Required = !omitted
 	}
 
-	return resolved
+	if kind == "" {
+		r.resolveBodyType(out, field.Type(), omitted)
+	} else {
+		// Parameters serialize as plain text, which cannot carry null: a
+		// pointer only lets the handler tell absent from zero. @nullable true
+		// can still opt in.
+		out.Type, out.Format, _ = r.typeInfo(field.Type())
+	}
+
+	applyOverrides(out, anno)
+	return out
 }
 
-// resolveBindTarget resolves a parser.BindTarget to a ResolvedBindTarget
-func (r *Resolver) resolveBindTarget(bind *parser.BindTarget, schemas map[string]*ResolvedSchema) *ResolvedBindTarget {
-	if bind == nil {
-		return nil
+// resolveBodyType fills in the type of a body field. Anonymous structs are
+// inlined because they have no name to reference; everything else resolves
+// through typeInfo.
+func (r *resolver) resolveBodyType(out *Field, t types.Type, omitted bool) {
+	if st := anonymousStruct(t); st != nil {
+		out.Inline = r.anonymousFields(st)
+		out.Type = TypeInfo{OpenAPI: "object"}
+		return
+	}
+	if st := anonymousStruct(sliceElem(t)); st != nil {
+		out.ItemsInline = r.anonymousFields(st)
+		out.Type = TypeInfo{IsArray: true, Items: "object"}
+		return
+	}
+	if st := anonymousStruct(mapElem(t)); st != nil {
+		out.MapValueInline = r.anonymousFields(st)
+		out.Type = TypeInfo{IsMap: true, MapValue: "string"}
+		return
 	}
 
-	resolved := &ResolvedBindTarget{
-		Wrapper: bind.Wrapper,
-		Field:   bind.Field,
-	}
+	var nullable bool
+	out.Type, out.Format, nullable = r.typeInfo(t)
 
-	// Look up the wrapper schema
-	if wrapperSchema, ok := schemas[bind.Wrapper]; ok {
-		resolved.WrapperSchema = wrapperSchema
-	}
-
-	return resolved
+	// A tag that omits the empty value drops a nil pointer instead of encoding
+	// null, so the field can never appear as null on the wire.
+	out.Nullable = nullable && !omitted
+	out.Unresolved = r.unresolvedStruct(t)
 }
 
-// resolveInlineDeclarations resolves inline struct declarations from function body.
-// @query/@path/@header/@cookie are repeatable per schema — every inline struct in
-// each category is resolved and its fields concatenated into one *ResolvedInlineParams
-// (the downstream generator/validator consume a flat Fields list).
-func (r *Resolver) resolveInlineDeclarations(endpoint *ResolvedEndpoint, inlines *parser.FuncInlineInfo, parameters map[string]*ResolvedParameter, schemas map[string]*ResolvedSchema, defaultContentType string) error {
-	mergedPath, err := r.mergeInlineParams(inlines.Path, "path")
-	if err != nil {
-		return err
-	}
-	endpoint.InlinePathParams = mergedPath
+// anonymousFields resolves the fields of an anonymous struct.
+//
+// PINNED: the @field annotations of the enclosing declaration are not passed
+// down, so an annotated field inside an anonymous struct emits bare. That is
+// what examples/inline/inline.yaml records today (the nested items lose their
+// @description and @minimum), and it stays until the golden is regenerated.
+func (r *resolver) anonymousFields(st *types.Struct) []*Field {
+	var annotations []*parser.Field
+	return r.resolveStructFields(st, annotations, "", nil)
+}
 
-	mergedQuery, err := r.mergeInlineParams(inlines.Query, "query")
-	if err != nil {
-		return err
+// applyOverrides applies an @field annotation on top of what the Go type
+// implied. Every value is an override: an unset value in the annotation leaves
+// the resolved value alone.
+func applyOverrides(field *Field, anno *parser.Field) {
+	if anno == nil {
+		return
 	}
-	endpoint.InlineQueryParams = mergedQuery
 
-	mergedHeader, err := r.mergeInlineParams(inlines.Header, "header")
-	if err != nil {
-		return err
+	if anno.Description != "" {
+		field.Description = anno.Description
 	}
-	endpoint.InlineHeaderParams = mergedHeader
-
-	mergedCookie, err := r.mergeInlineParams(inlines.Cookie, "cookie")
-	if err != nil {
-		return err
+	if anno.Format != "" {
+		field.Format = anno.Format
 	}
-	endpoint.InlineCookieParams = mergedCookie
+	if anno.Required != nil {
+		field.Required = *anno.Required
+	}
+	if anno.Nullable != nil {
+		field.Nullable = *anno.Nullable
+	}
 
-	// Resolve inline request body
-	if inlines.Request != nil {
-		// Step 1: Parse inline annotation using InlineAnnotationSchema
-		parsed, err := ParseInlineDeclaration(inlines.Request.Comment, "request")
-		if err != nil {
-			return fmt.Errorf("failed to parse inline request: %w", err)
+	// Constraints are pure pass-through and nothing else sets them, so the
+	// whole block copies over.
+	field.Constraints = Constraints(anno.Constraints)
+}
+
+// resolveEndpoint resolves an endpoint into an operation with its parameters
+// and responses already in emission order.
+func (r *resolver) resolveEndpoint(endpoint *parser.Endpoint) *Endpoint {
+	return &Endpoint{
+		Method:      endpoint.Method,
+		Path:        endpoint.Path,
+		OperationID: endpoint.OperationID,
+		Summary:     endpoint.Summary,
+		Description: endpoint.Description,
+		Auth:        endpoint.Auth,
+		Tags:        endpoint.Tags,
+		Deprecated:  endpoint.Deprecated,
+		Parameters:  r.resolveParameters(endpoint),
+		Request:     r.resolveRequest(endpoint),
+		Responses:   r.resolveResponses(endpoint),
+	}
+}
+
+// resolveParameters builds the operation parameters in emission order: the
+// referenced parameter structs by kind first, then the inline declarations by
+// kind. Fields are emitted under the kind they were referenced as, which is
+// not necessarily the kind their struct was declared with.
+func (r *resolver) resolveParameters(endpoint *parser.Endpoint) []*Param {
+	var params []*Param
+
+	for _, kind := range paramKinds {
+		for _, name := range namedParams(endpoint, kind) {
+			// PINNED: a reference to an unknown parameter struct is dropped
+			// silently. Phase 4 turns it into a validation error.
+			for _, field := range r.groups[name] {
+				params = append(params, &Param{In: kind, Field: field})
+			}
 		}
-
-		// Step 2: Resolve inline body using parsed annotation
-		body, err := r.resolveInlineBody(inlines.Request, parsed, nil, schemas, defaultContentType)
-		if err != nil {
-			return fmt.Errorf("failed to resolve inline request body: %w", err)
-		}
-		endpoint.InlineRequest = body
 	}
 
-	// Resolve inline responses
-	for statusCode, respInfo := range inlines.Responses {
-		// Step 1: Parse inline annotation using InlineAnnotationSchema
-		parsed, err := ParseInlineDeclaration(respInfo.Comment, "response")
-		if err != nil {
-			return fmt.Errorf("failed to parse inline response %s: %w", statusCode, err)
-		}
-
-		// Step 2: Resolve inline body using parsed annotation (with parameters for header resolution)
-		body, err := r.resolveInlineBody(respInfo, parsed, parameters, schemas, defaultContentType)
-		if err != nil {
-			return fmt.Errorf("failed to resolve inline response %s: %w", statusCode, err)
-		}
-		endpoint.InlineResponses[statusCode] = body
+	if endpoint.Inline == nil {
+		return params
 	}
 
+	for _, kind := range paramKinds {
+		for _, decl := range inlineParams(endpoint.Inline, kind) {
+			for _, field := range r.resolveStructFields(decl.Struct, decl.Fields, kind, nil) {
+				params = append(params, &Param{In: kind, Field: field})
+			}
+		}
+	}
+
+	return params
+}
+
+// namedParams returns the parameter structs an endpoint references for a kind.
+func namedParams(endpoint *parser.Endpoint, kind string) []string {
+	switch kind {
+	case parser.ParamPath:
+		return endpoint.PathParams
+	case parser.ParamQuery:
+		return endpoint.QueryParams
+	case parser.ParamHeader:
+		return endpoint.HeaderParams
+	case parser.ParamCookie:
+		return endpoint.CookieParams
+	}
 	return nil
 }
 
-// inlineStructType looks up the *types.Struct for an inline var/type declaration
-// via TypesInfo.Defs. Works for both `var x struct{...}` (anonymous struct type)
-// and `type X struct{...}` (named type whose underlying is a struct) — calling
-// .Underlying() on either case returns the *types.Struct directly.
-func (r *Resolver) inlineStructType(info *parser.InlineStructInfo) (*types.Struct, error) {
-	if info == nil || info.Ident == nil {
-		return nil, fmt.Errorf("inline struct missing identifier")
+// inlineParams returns the inline parameter declarations of a kind, in
+// declaration order. A handler may declare several per kind; OpenAPI emits one
+// flat parameter list, so they concatenate.
+func inlineParams(inline *parser.EndpointInline, kind string) []*parser.InlineStruct {
+	switch kind {
+	case parser.ParamPath:
+		return inline.Path
+	case parser.ParamQuery:
+		return inline.Query
+	case parser.ParamHeader:
+		return inline.Header
+	case parser.ParamCookie:
+		return inline.Cookie
 	}
-	if r.pkg == nil || r.pkg.TypesInfo == nil {
-		return nil, fmt.Errorf("type info unavailable for inline struct %q", info.VarName)
-	}
-	obj := r.pkg.TypesInfo.Defs[info.Ident]
-	if obj == nil {
-		return nil, fmt.Errorf("could not resolve type for inline struct %q", info.VarName)
-	}
-	st, ok := obj.Type().Underlying().(*types.Struct)
-	if !ok {
-		return nil, fmt.Errorf("inline declaration %q is not a struct", info.VarName)
-	}
-	return st, nil
+	return nil
 }
 
-// mergeInlineParams resolves every inline struct in a repeatable category (e.g.
-// all inline @query structs declared in one handler) and concatenates their fields
-// into a single *ResolvedInlineParams. Returns nil when no inline structs exist
-// for the category — preserving the "nil means none" contract downstream code relies on.
-// OpenAPI emits one flat parameters array per operation regardless of how many
-// inline structs the handler declared, so the merge happens here.
-func (r *Resolver) mergeInlineParams(infos []*parser.InlineStructInfo, paramType string) (*ResolvedInlineParams, error) {
-	if len(infos) == 0 {
-		return nil, nil
-	}
-	merged := &ResolvedInlineParams{}
-	for _, info := range infos {
-		params, err := r.resolveInlineParams(info, paramType)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve inline %s params %q: %w", paramType, info.VarName, err)
+// resolveRequest builds the request body. A named @request with a body wins
+// over an inline declaration; a named @request without one produces no request
+// body at all.
+func (r *resolver) resolveRequest(endpoint *parser.Endpoint) *Request {
+	if endpoint.Request != nil && endpoint.Request.Body != nil {
+		body := endpoint.Request.Body
+		return &Request{
+			ContentType: r.contentType(endpoint.Request.ContentType),
+			Required:    true,
+			Content: &Content{
+				Ref:  typeRef(body.Schema),
+				Bind: r.bindTarget(body.Bind),
+			},
 		}
-		if params == nil {
+	}
+
+	if endpoint.Inline == nil || endpoint.Inline.Request == nil {
+		return nil
+	}
+
+	decl := endpoint.Inline.Request
+	request := &Request{
+		ContentType: r.contentType(decl.ContentType),
+		Required:    true,
+	}
+	if fields := r.resolveStructFields(decl.Struct, decl.Fields, "", nil); len(fields) > 0 {
+		request.Content = &Content{Fields: fields, Bind: r.bindTarget(decl.Bind)}
+	}
+	return request
+}
+
+// resolveResponses builds the responses in emission order: the statuses
+// declared in the endpoint comment sorted, then the inline ones sorted, with
+// a declared status winning over an inline one.
+func (r *resolver) resolveResponses(endpoint *parser.Endpoint) []*Response {
+	named := slices.Clone(endpoint.Responses)
+	slices.SortFunc(named, func(a, b *parser.Response) int {
+		return strings.Compare(a.Status, b.Status)
+	})
+
+	var responses []*Response
+	for _, response := range named {
+		responses = append(responses, r.namedResponse(response))
+	}
+
+	if endpoint.Inline == nil {
+		return responses
+	}
+
+	inline := slices.Clone(endpoint.Inline.Responses)
+	slices.SortFunc(inline, func(a, b *parser.InlineResponse) int {
+		return strings.Compare(a.Status, b.Status)
+	})
+	for _, response := range inline {
+		taken := slices.ContainsFunc(named, func(other *parser.Response) bool {
+			return other.Status == response.Status
+		})
+		if taken {
 			continue
 		}
-		merged.Fields = append(merged.Fields, params.Fields...)
+		responses = append(responses, r.inlineResponse(response))
 	}
-	if len(merged.Fields) == 0 {
-		return nil, nil
-	}
-	return merged, nil
+
+	return responses
 }
 
-// resolveInlineParams resolves an inline parameter struct via the same
-// *types.Struct + parsed *Field path as named parameter structs — no AST walk,
-// no resolver-side @field parsing.
-func (r *Resolver) resolveInlineParams(info *parser.InlineStructInfo, paramType string) (*ResolvedInlineParams, error) {
-	if info == nil {
-		return nil, nil
-	}
-	structType, err := r.inlineStructType(info)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parameters don't support anonymous struct fields, so pass nil for schemaNames.
-	fields, err := r.resolveParameterFields(structType, info.Fields, paramType, nil)
-	if err != nil {
-		return nil, err
+// namedResponse resolves an @response block of the endpoint comment. The
+// content type is defaulted only when the response has a body, so a bodyless
+// response emits no content at all.
+func (r *resolver) namedResponse(response *parser.Response) *Response {
+	out := &Response{
+		Status:      response.Status,
+		Description: response.Description,
+		ContentType: response.ContentType,
+		Headers:     r.headerFields(response.Headers),
 	}
 
-	return &ResolvedInlineParams{
-		Fields: fields,
-	}, nil
+	if response.Body == nil {
+		return out
+	}
+	out.ContentType = r.contentType(response.ContentType)
+
+	// An explicitly empty content type (@contentType empty) suppresses the
+	// content block even though a body was named.
+	if response.Body.Schema != "" && out.ContentType != "" {
+		out.Content = &Content{
+			Ref:  typeRef(response.Body.Schema),
+			Bind: r.bindTarget(response.Body.Bind),
+		}
+	}
+	return out
 }
 
-// resolveInlineBody resolves an inline request/response body struct using parsed annotation.
-// Uses the same *types.Struct + parsed *Field path as @schema structs.
-func (r *Resolver) resolveInlineBody(info *parser.InlineStructInfo, parsed *parser.ParsedAnnotation, parameters map[string]*ResolvedParameter, schemas map[string]*ResolvedSchema, defaultContentType string) (*ResolvedInlineBody, error) {
-	if info == nil {
-		return nil, nil
-	}
-	structType, err := r.inlineStructType(info)
-	if err != nil {
-		return nil, err
+// inlineResponse resolves a response declared in the handler body. The struct
+// is the body, so there is always a content type, and an undescribed response
+// gets a generated description.
+func (r *resolver) inlineResponse(response *parser.InlineResponse) *Response {
+	description := response.Description
+	if description == "" {
+		description = fmt.Sprintf("Response for status %s", response.Status)
 	}
 
-	// Build schemaNames for anonymous struct resolution
-	schemaNames := make(map[string]bool)
-	for name := range schemas {
-		schemaNames[name] = true
+	out := &Response{
+		Status:      response.Status,
+		Description: description,
+		ContentType: r.contentType(response.ContentType),
+		Headers:     r.headerFields(response.Headers),
+	}
+	if fields := r.resolveStructFields(response.Struct, response.Fields, "", nil); len(fields) > 0 {
+		out.Content = &Content{Fields: fields, Bind: r.bindTarget(response.Bind)}
+	}
+	return out
+}
+
+// headerFields flattens the @header parameter structs a response references
+// into fields, in group-then-field order.
+func (r *resolver) headerFields(refs []string) []*Field {
+	var fields []*Field
+	for _, ref := range refs {
+		// PINNED: an unknown header reference is dropped silently. Phase 4
+		// turns it into a validation error.
+		fields = append(fields, r.groups[ref]...)
+	}
+	return fields
+}
+
+// contentType applies the content-type defaulting chain: what the annotation
+// declared, else the API default, else JSON.
+func (r *resolver) contentType(declared string) string {
+	if declared != "" {
+		return declared
+	}
+	if r.defaultContentType != "" {
+		return r.defaultContentType
+	}
+	return "application/json"
+}
+
+// bindTarget resolves a @bind to the wrapper schema it names. An unknown
+// wrapper leaves Wrapper nil, which falls back to emitting the plain body; the
+// validator reports it.
+func (r *resolver) bindTarget(bind *parser.BindTarget) *BindTarget {
+	if bind == nil {
+		return nil
+	}
+	return &BindTarget{
+		Name:    bind.Wrapper,
+		Field:   bind.Field,
+		Wrapper: r.resolved[bind.Wrapper],
+	}
+}
+
+// primitiveTypes maps the Go primitive names a @body value can use to their
+// OpenAPI types. A @body naming anything else names a schema.
+var primitiveTypes = map[string]string{
+	"string":  "string",
+	"bool":    "boolean",
+	"int":     "integer",
+	"int8":    "integer",
+	"int16":   "integer",
+	"int32":   "integer",
+	"int64":   "integer",
+	"uint":    "integer",
+	"uint8":   "integer",
+	"uint16":  "integer",
+	"uint32":  "integer",
+	"uint64":  "integer",
+	"float32": "number",
+	"float64": "number",
+	// A []byte body is base64 text on the wire, not an array of numbers.
+	"byte": "string",
+}
+
+// typeRef parses a @body value into a reference: "User", "[]User" or
+// "map[string]User".
+func typeRef(schema string) *TypeRef {
+	ref := &TypeRef{}
+
+	element := strings.TrimSpace(schema)
+	switch {
+	case strings.HasPrefix(element, "[]"):
+		ref.IsArray = true
+		element = strings.TrimPrefix(element, "[]")
+	case strings.HasPrefix(element, "map[string]"):
+		ref.IsMap = true
+		element = strings.TrimPrefix(element, "map[string]")
 	}
 
-	fields, err := r.resolveSchemaFields(structType, info.Fields, schemaNames, nil)
-	if err != nil {
-		return nil, err
+	if primitive, ok := primitiveTypes[element]; ok {
+		ref.Primitive = primitive
+	} else {
+		ref.Schema = element
 	}
-
-	resolved := &ResolvedInlineBody{
-		Fields: fields,
-	}
-
-	// Use parsed annotation (already validated by inline parser)
-	if parsed != nil {
-		// Content type
-		if ct := parsed.GetChildValue("@contentType"); ct != "" {
-			resolved.ContentType = parser.ExpandContentType(ct)
-		}
-
-		// Description
-		resolved.Description = parsed.GetChildValue("@description")
-
-		// Bind
-		if bindValue := parsed.GetChildValue("@bind"); bindValue != "" {
-			bindTarget := parser.ParseBindTarget(bindValue)
-			resolved.Bind = r.resolveBindTarget(bindTarget, schemas)
-		}
-
-		// Resolve header references (response only)
-		if parameters != nil {
-			for _, headerChild := range parsed.GetRepeatedChildren("@header") {
-				if param, ok := parameters[headerChild.Value]; ok {
-					resolved.Headers = append(resolved.Headers, param)
-				}
-			}
-		}
-	}
-
-	// Apply defaults for content type
-	if resolved.ContentType == "" {
-		resolved.ContentType = defaultContentType
-	}
-	if resolved.ContentType == "" {
-		resolved.ContentType = "application/json"
-	}
-
-	return resolved, nil
+	return ref
 }

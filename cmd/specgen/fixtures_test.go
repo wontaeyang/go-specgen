@@ -6,9 +6,6 @@ import (
 	"testing"
 
 	"github.com/wontaeyang/go-specgen/pkg/generator"
-	"github.com/wontaeyang/go-specgen/pkg/parser"
-	"github.com/wontaeyang/go-specgen/pkg/resolver"
-	"github.com/wontaeyang/go-specgen/pkg/validator"
 )
 
 // TestFeatureFixtures is a mini-golden harness over testdata/ packages that
@@ -46,36 +43,9 @@ func TestFeatureFixtures(t *testing.T) {
 			// path, not an import path.
 			dir := "./" + filepath.Join("testdata", fx.name)
 
-			p := parser.NewParser(dir)
-			parsed, err := p.Parse()
+			got, err := buildSpec(dir, fx.version, fx.format)
 			if err != nil {
-				t.Fatalf("parse: %v", err)
-			}
-
-			r, err := resolver.NewResolver(dir, p.Comments())
-			if err != nil {
-				t.Fatalf("resolver: %v", err)
-			}
-
-			resolved, err := r.Resolve(parsed)
-			if err != nil {
-				t.Fatalf("resolve: %v", err)
-			}
-
-			v := validator.NewValidator()
-			if err := v.Validate(resolved); err != nil {
-				t.Fatalf("validate: %v", err)
-			}
-
-			gen, err := generator.NewGenerator(fx.version)
-			if err != nil {
-				t.Fatalf("generator: %v", err)
-			}
-			spec := gen.Generate(resolver.ConvertLegacy(resolved))
-
-			got, err := gen.Render(spec, fx.format)
-			if err != nil {
-				t.Fatalf("render: %v", err)
+				t.Fatalf("buildSpec: %v", err)
 			}
 
 			expectedFile := filepath.Join(dir, fx.expected)
