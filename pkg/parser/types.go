@@ -165,6 +165,12 @@ type Field struct {
 	Required *bool
 	Nullable *bool
 
+	// Fields holds the @field annotations of the anonymous struct this field
+	// spells out, same contract as Schema.Fields. A field that carries no
+	// annotation of its own still appears when its anonymous struct has
+	// annotated fields, so the nested annotations have a carrier.
+	Fields []*Field
+
 	Constraints
 }
 
@@ -291,7 +297,8 @@ type InlineStruct struct {
 	// Pos is the position of the declared identifier.
 	Pos token.Position
 
-	// Struct is the Go type of the declaration, resolved at parse time.
+	// Struct is the Go type of the declaration, resolved at parse time. It is
+	// nil for a standalone response, which declares nothing.
 	Struct *types.Struct
 
 	// Fields holds the parsed @field annotations of the struct's own fields,
@@ -309,11 +316,18 @@ type InlineStruct struct {
 	Headers []string
 }
 
-// InlineResponse is an inline struct that is a response body.
+// InlineResponse is a response declared inside a handler body, in one of two
+// shapes: an annotated struct declaration, where the struct is the body, or a
+// standalone @response, which names its body with @body because no declaration
+// follows it.
 type InlineResponse struct {
 	// Status is the literal status text, defaulting to "200" when the
 	// annotation carries none.
 	Status string
+
+	// Body is set for a standalone response, and nil when the declared struct
+	// is the body. Exactly one of Body and InlineStruct.Struct is set.
+	Body *Body
 
 	InlineStruct
 }

@@ -1,10 +1,12 @@
 package parser
 
 import (
+	"cmp"
 	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
+	"slices"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -83,6 +85,12 @@ type fieldDecl struct {
 	GoName string
 	Pos    token.Position
 	Doc    *CommentBlock
+
+	// Fields are the fields of the anonymous struct this field's type
+	// contains, if any. An anonymous struct has no declaration of its own to
+	// hang annotations on, so its fields are recorded here, under the field
+	// that spells the struct out.
+	Fields []*fieldDecl
 }
 
 // funcDecl is one function declaration, its comments, and the annotated
@@ -111,10 +119,15 @@ type inlineDecl struct {
 	// against InlineGrammar.
 	Lines []Line
 
-	// Struct is the declared Go type.
+	// Struct is the declared Go type. It is nil for a standalone declaration,
+	// which has none.
 	Struct *types.Struct
 
 	Fields []*fieldDecl
+
+	// Standalone marks an annotation that is attached to no declaration and
+	// stands on its own. Only @response may.
+	Standalone bool
 }
 
 // load loads the Go package at dir with the type information the parser and
@@ -171,7 +184,7 @@ func harvest(pkg *packages.Package) (*source, error) {
 					Pos:  pkg.Fset.Position(d.Name.Pos()),
 					Doc:  commentBlock(pkg.Fset, d.Doc),
 				}
-				inlines, err := extractInlines(pkg, d.Body)
+				inlines, err := extractInlines(pkg, file, d)
 				if err != nil {
 					return nil, wrapf(fn.Pos, err, "in function %s", fn.Name)
 				}
@@ -240,8 +253,9 @@ func newTypeDecl(fset *token.FileSet, decl *ast.GenDecl, ts *ast.TypeSpec) *type
 }
 
 // structFields records the named fields of a struct literal in declaration
-// order. Embedded fields have no name to bind a @field annotation to, so they
-// are skipped; the resolver flattens them from the Go type instead.
+// order, descending into the anonymous structs they spell out. Embedded fields
+// have no name to bind a @field annotation to, so they are skipped; the
+// resolver flattens them from the Go type instead.
 func structFields(fset *token.FileSet, st *ast.StructType) []*fieldDecl {
 	if st.Fields == nil {
 		return nil
@@ -252,13 +266,36 @@ func structFields(fset *token.FileSet, st *ast.StructType) []*fieldDecl {
 		if len(field.Names) == 0 {
 			continue
 		}
-		fields = append(fields, &fieldDecl{
+
+		decl := &fieldDecl{
 			GoName: field.Names[0].Name,
 			Pos:    fset.Position(field.Names[0].Pos()),
 			Doc:    commentBlock(fset, field.Doc),
-		})
+		}
+		if nested := anonymousStructType(field.Type); nested != nil {
+			decl.Fields = structFields(fset, nested)
+		}
+		fields = append(fields, decl)
 	}
 	return fields
+}
+
+// anonymousStructType returns the anonymous struct a field's type spells out,
+// looking through the wrappers the resolver also looks through: a pointer, a
+// slice or array element, a map value. Named types are not followed — those
+// have their own declaration to carry annotations.
+func anonymousStructType(expr ast.Expr) *ast.StructType {
+	switch e := expr.(type) {
+	case *ast.StructType:
+		return e
+	case *ast.StarExpr:
+		return anonymousStructType(e.X)
+	case *ast.ArrayType:
+		return anonymousStructType(e.Elt)
+	case *ast.MapType:
+		return anonymousStructType(e.Value)
+	}
+	return nil
 }
 
 // commentBlock strips the comment markers from a comment group and keeps the
@@ -295,13 +332,34 @@ func commentText(text string) string {
 // decides what the declaration is.
 var inlineMarkers = []string{"@query", "@path", "@header", "@cookie", "@request", "@response"}
 
-// extractInlines finds the annotated declarations in a function body, in
-// declaration order.
-func extractInlines(pkg *packages.Package, body *ast.BlockStmt) ([]*inlineDecl, error) {
-	if body == nil {
+// extractInlines finds the annotations in a function body, in declaration
+// order: those attached to a var or type declaration, and those standing on
+// their own.
+func extractInlines(pkg *packages.Package, file *ast.File, fn *ast.FuncDecl) ([]*inlineDecl, error) {
+	if fn.Body == nil {
 		return nil, nil
 	}
 
+	attached, err := attachedInlines(pkg, fn.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	standalone, err := standaloneInlines(pkg, file, fn)
+	if err != nil {
+		return nil, err
+	}
+
+	inlines := append(attached, standalone...)
+	slices.SortFunc(inlines, func(a, b *inlineDecl) int {
+		return cmp.Compare(a.Pos.Offset, b.Pos.Offset)
+	})
+	return inlines, nil
+}
+
+// attachedInlines finds the annotated var and type declarations of a function
+// body, in declaration order.
+func attachedInlines(pkg *packages.Package, body *ast.BlockStmt) ([]*inlineDecl, error) {
 	var inlines []*inlineDecl
 	for _, genDecl := range collectGenDecls(body) {
 		doc := commentBlock(pkg.Fset, genDecl.Doc)
@@ -340,6 +398,68 @@ func extractInlines(pkg *packages.Package, body *ast.BlockStmt) ([]*inlineDecl, 
 	}
 
 	return inlines, nil
+}
+
+// standaloneInlines finds the annotations in a function body that are attached
+// to no declaration at all.
+//
+// Only @response may stand on its own — it names its body rather than having a
+// struct spell it out. Every other annotation needs the declaration below it to
+// mean anything, so writing one here is a mistake rather than a no-op.
+func standaloneInlines(pkg *packages.Package, file *ast.File, fn *ast.FuncDecl) ([]*inlineDecl, error) {
+	var inlines []*inlineDecl
+
+	for _, cg := range floatingComments(file, fn) {
+		lines := commentBlock(pkg.Fset, cg).AnnotationLines()
+		if len(lines) == 0 {
+			continue
+		}
+
+		name := extractAnnotationName(lines[0].Text)
+		if Grammar[name] == nil && InlineGrammar[name] == nil {
+			// Not an annotation at all: ordinary prose between statements.
+			continue
+		}
+		if name != "@response" {
+			return nil, errorf(lines[0].Pos,
+				"%s is attached to no declaration; annotations in a function body describe the var or type declared under them", name)
+		}
+
+		inlines = append(inlines, &inlineDecl{
+			Marker:     "@response",
+			Status:     responseStatus(lines[0].Text),
+			Pos:        lines[0].Pos,
+			Lines:      lines,
+			Standalone: true,
+		})
+	}
+
+	return inlines, nil
+}
+
+// floatingComments returns the comment groups inside a function body that no
+// node claims as its own. Walking the function visits every comment attached
+// to a declaration, a spec or a struct field, so whatever is left over is
+// floating between statements.
+func floatingComments(file *ast.File, fn *ast.FuncDecl) []*ast.CommentGroup {
+	attached := make(map[*ast.CommentGroup]bool)
+	ast.Inspect(fn, func(node ast.Node) bool {
+		if cg, ok := node.(*ast.CommentGroup); ok {
+			attached[cg] = true
+		}
+		return true
+	})
+
+	var floating []*ast.CommentGroup
+	for _, cg := range file.Comments {
+		if cg.Pos() < fn.Body.Pos() || cg.End() > fn.Body.End() {
+			continue
+		}
+		if !attached[cg] {
+			floating = append(floating, cg)
+		}
+	}
+	return floating
 }
 
 // findInlineMarker returns the marker a comment block declares and the index of

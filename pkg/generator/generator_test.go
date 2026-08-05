@@ -100,6 +100,26 @@ func TestEnumTagging_Asymmetry(t *testing.T) {
 	}
 }
 
+func TestScalarTagging_DefaultAndExample(t *testing.T) {
+	// A default or example is annotation text. Emitted untagged, YAML would
+	// retype it: "true" on a string field would come back a boolean.
+	pkg := minimalPackage(&resolver.Schema{Name: "Flags", Fields: []*resolver.Field{
+		{Name: "text", Required: true, Type: resolver.TypeInfo{OpenAPI: "string"},
+			Constraints: resolver.Constraints{Default: "true", Example: "42"}},
+		{Name: "count", Required: true, Type: resolver.TypeInfo{OpenAPI: "integer"},
+			Constraints: resolver.Constraints{Default: "7"}},
+		{Name: "on", Required: true, Type: resolver.TypeInfo{OpenAPI: "boolean"},
+			Constraints: resolver.Constraints{Default: "true"}},
+	}})
+
+	out := renderYAML(t, "3.1", pkg)
+	for _, want := range []string{`default: "true"`, `example: "42"`, "default: 7", "default: true"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestGenerate_DoesNotAliasInput(t *testing.T) {
 	field := &resolver.Field{
 		Name: "id", Required: true,

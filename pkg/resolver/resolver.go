@@ -276,7 +276,7 @@ func (r *resolver) resolveField(field *types.Var, tag reflect.StructTag, anno *p
 	}
 
 	if kind == "" {
-		r.resolveBodyType(out, field.Type(), omitted)
+		r.resolveBodyType(out, field.Type(), anno, omitted)
 	} else {
 		// Parameters serialize as plain text, which cannot carry null: a
 		// pointer only lets the handler tell absent from zero. @nullable true
@@ -291,19 +291,19 @@ func (r *resolver) resolveField(field *types.Var, tag reflect.StructTag, anno *p
 // resolveBodyType fills in the type of a body field. Anonymous structs are
 // inlined because they have no name to reference; everything else resolves
 // through typeInfo.
-func (r *resolver) resolveBodyType(out *Field, t types.Type, omitted bool) {
+func (r *resolver) resolveBodyType(out *Field, t types.Type, anno *parser.Field, omitted bool) {
 	if st := anonymousStruct(t); st != nil {
-		out.Inline = r.anonymousFields(st)
+		out.Inline = r.anonymousFields(st, anno)
 		out.Type = TypeInfo{OpenAPI: "object"}
 		return
 	}
 	if st := anonymousStruct(sliceElem(t)); st != nil {
-		out.ItemsInline = r.anonymousFields(st)
+		out.ItemsInline = r.anonymousFields(st, anno)
 		out.Type = TypeInfo{IsArray: true, Items: "object"}
 		return
 	}
 	if st := anonymousStruct(mapElem(t)); st != nil {
-		out.MapValueInline = r.anonymousFields(st)
+		out.MapValueInline = r.anonymousFields(st, anno)
 		out.Type = TypeInfo{IsMap: true, MapValue: "string"}
 		return
 	}
@@ -317,14 +317,14 @@ func (r *resolver) resolveBodyType(out *Field, t types.Type, omitted bool) {
 	out.Unresolved = r.unresolvedStruct(t)
 }
 
-// anonymousFields resolves the fields of an anonymous struct.
-//
-// PINNED: the @field annotations of the enclosing declaration are not passed
-// down, so an annotated field inside an anonymous struct emits bare. That is
-// what examples/inline/inline.yaml records today (the nested items lose their
-// @description and @minimum), and it stays until the golden is regenerated.
-func (r *resolver) anonymousFields(st *types.Struct) []*Field {
+// anonymousFields resolves the fields of an anonymous struct. The struct has
+// no declaration of its own, so the parser collected its @field annotations
+// under the field that spells it out.
+func (r *resolver) anonymousFields(st *types.Struct, anno *parser.Field) []*Field {
 	var annotations []*parser.Field
+	if anno != nil {
+		annotations = anno.Fields
+	}
 	return r.resolveStructFields(st, annotations, "", nil)
 }
 
@@ -565,9 +565,10 @@ func (r *resolver) namedResponse(response *parser.Response) (*Response, error) {
 	return out, nil
 }
 
-// inlineResponse resolves a response declared in the handler body. The struct
-// is the body, so there is always a content type, and an undescribed response
-// gets a generated description.
+// inlineResponse resolves a response declared in the handler body, whether it
+// names its body or declares a struct that is the body. Either way there is a
+// body, so there is always a content type, and an undescribed response gets a
+// generated description.
 func (r *resolver) inlineResponse(response *parser.InlineResponse) (*Response, error) {
 	headers, err := r.headerFields(response.Headers, response.Pos)
 	if err != nil {
@@ -585,6 +586,14 @@ func (r *resolver) inlineResponse(response *parser.InlineResponse) (*Response, e
 		ContentType: r.contentType(response.ContentType),
 		Headers:     headers,
 	}
+	if response.Body != nil {
+		out.Content = &Content{
+			Ref:  typeRef(response.Body.Schema),
+			Bind: r.bindTarget(response.Body.Bind),
+		}
+		return out, nil
+	}
+
 	if fields := r.resolveStructFields(response.Struct, response.Fields, "", nil); len(fields) > 0 {
 		out.Content = &Content{Fields: fields, Bind: r.bindTarget(response.Bind)}
 	}

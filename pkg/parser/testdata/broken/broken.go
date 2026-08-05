@@ -51,3 +51,29 @@ func DuplicateRequest() {
 
 	_, _ = first, second
 }
+
+// BodylessStandalone writes an @response attached to nothing and names no
+// body, so it describes nothing at all.
+//
+//	@endpoint GET /bodyless {
+//	}
+func BodylessStandalone() {
+	// @response 400
+
+	_ = 1
+}
+
+// TwoBodies declares a struct that is the response body and names a second
+// one with @body.
+//
+//	@endpoint GET /twobodies {
+//	}
+func TwoBodies() {
+	// @response 200 { @body Good }
+	var resp struct {
+		// @field { @description Fine }
+		Name string `json:"name"`
+	}
+
+	_ = resp
+}

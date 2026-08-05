@@ -61,19 +61,31 @@ type Shapes struct {
 type Nested struct {
 	// @field { @description An inline object }
 	Inline struct {
-		// @field { @description Dropped: nested annotations are not applied }
+		// @field { @description The nested name }
 		Name string `json:"name"`
 	} `json:"inline"`
 
 	// @field { @description A list of inline objects }
 	Items []struct {
+		// @field { @description The item name @minLength 1 }
 		Name string `json:"name"`
 	} `json:"items"`
 
 	// @field { @description A map of inline objects }
 	Values map[string]struct {
+		// @field { @description The value name }
 		Name string `json:"name"`
 	} `json:"values"`
+
+	// Deeper nests an anonymous struct inside an anonymous struct, and
+	// annotates only the innermost field: the carrying entries have nothing
+	// to say about themselves.
+	Deeper struct {
+		Inner struct {
+			// @field { @description The innermost name }
+			Name string `json:"name"`
+		} `json:"inner"`
+	} `json:"deeper"`
 
 	Empty struct{} `json:"empty"`
 }

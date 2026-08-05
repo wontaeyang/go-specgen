@@ -121,6 +121,24 @@ var (
 	}
 )
 
+// ResponseNode is the @response block that names its body with @body. It is
+// the same annotation in both places it may be written: in an @endpoint block,
+// and on its own inside a handler body, where no struct declaration follows to
+// serve as the body.
+var ResponseNode = &GrammarNode{
+	Name:        "@response",
+	Type:        BlockAnnotation,
+	HasMetadata: true,
+	Repeatable:  true,
+	Children: map[string]*GrammarNode{
+		"@contentType": contentTypeChild,
+		"@body":        bodyChild,
+		"@bind":        bindChild,
+		"@description": descriptionChild,
+		"@header":      headerRefChild,
+	},
+}
+
 // apiNode is the @api block: document-level metadata, declared on the package.
 var apiNode = &GrammarNode{
 	Name: "@api",
@@ -262,19 +280,7 @@ var endpointNode = &GrammarNode{
 				"@bind":        bindChild,
 			},
 		},
-		"@response": {
-			Name:        "@response",
-			Type:        BlockAnnotation,
-			HasMetadata: true,
-			Repeatable:  true,
-			Children: map[string]*GrammarNode{
-				"@contentType": contentTypeChild,
-				"@body":        bodyChild,
-				"@bind":        bindChild,
-				"@description": descriptionChild,
-				"@header":      headerRefChild,
-			},
-		},
+		"@response": ResponseNode,
 	},
 }
 
@@ -341,7 +347,12 @@ var Grammar = map[string]*GrammarNode{
 // request body or a response body.
 //
 // The struct being declared IS the body here, which is why @request and
-// @response have no @body child. Parameter markers take no options at all.
+// @response have no @body child — naming a second body is an error, not a
+// choice. Parameter markers take no options at all.
+//
+// An @response written on its own, with no declaration under it, is parsed
+// against ResponseNode instead: with no struct to be the body, it has to name
+// one.
 var InlineGrammar = map[string]*GrammarNode{
 	"@path":   {Name: "@path", Type: FlagAnnotation},
 	"@query":  {Name: "@query", Type: FlagAnnotation},

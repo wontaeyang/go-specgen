@@ -131,6 +131,29 @@ type Envelope struct {
 	Data any `json:"data"`
 }
 
+// Anonymous carries anonymous structs, whose fields have no declaration of
+// their own to hang @field annotations on.
+// @schema
+type Anonymous struct {
+	// @field { @description The shipping address }
+	Address struct {
+		// @field { @description Street and number }
+		Street string `json:"street"`
+
+		// @field { @description Two-letter country code }
+		Country string `json:"country"`
+	} `json:"address"`
+
+	// Untagged carries nested annotations without one of its own.
+	Untagged []struct {
+		// @field { @description Line quantity @minimum 1 }
+		Quantity int `json:"quantity"`
+	} `json:"untagged"`
+
+	// @field { @description A plain field, with nothing nested }
+	Note string `json:"note"`
+}
+
 // Status is not a struct, so its @schema annotation is ignored — only struct
 // declarations and type aliases can become schemas.
 // @schema
@@ -409,6 +432,13 @@ func InlineHandler() {
 		// @field { @description Whether the call succeeded }
 		OK bool `json:"ok"`
 	}
+
+	// A standalone @response: no declaration follows it, so it names its body.
+	// @response 404 {
+	//   @body Error
+	//   @description Order not found
+	//   @header RateLimitHeaders
+	// }
 
 	_, _, _, _, _ = path, filters, paging, headers, cookies
 	_, _, _, _ = req, created, clientError, fallback

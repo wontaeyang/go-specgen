@@ -50,10 +50,14 @@ paths:
                                             properties:
                                                 id:
                                                     type: string
+                                                    format: uuid
+                                                    description: Order ID
                                                 status:
                                                     type: string
+                                                    description: Order status
                                                 total_cents:
                                                     type: integer
+                                                    description: Order total in cents
                                             required:
                                                 - id
                                                 - status
@@ -94,8 +98,12 @@ paths:
                                         properties:
                                             product_id:
                                                 type: string
+                                                format: uuid
+                                                description: Product ID
                                             quantity:
                                                 type: integer
+                                                minimum: 1
+                                                description: Quantity to order
                                         required:
                                             - product_id
                                             - quantity
@@ -105,12 +113,17 @@ paths:
                                     properties:
                                         street:
                                             type: string
+                                            description: Street address
                                         city:
                                             type: string
+                                            description: City
                                         postal_code:
                                             type: string
+                                            description: Postal code
                                         country:
                                             type: string
+                                            pattern: ^[A-Z]{2}$
+                                            description: Country code
                                     required:
                                         - street
                                         - city
@@ -145,6 +158,12 @@ paths:
                                     - id
                                     - status
                                     - estimated_delivery
+                "400":
+                    description: Response for status 400
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
     /orders/with-headers:
         get:
             responses:
@@ -175,8 +194,11 @@ paths:
                                             properties:
                                                 id:
                                                     type: string
+                                                    format: uuid
+                                                    description: Order ID
                                                 status:
                                                     type: string
+                                                    description: Order status
                                             required:
                                                 - id
                                                 - status
@@ -242,10 +264,15 @@ paths:
                                             properties:
                                                 name:
                                                     type: string
+                                                    description: Item name
                                                 quantity:
                                                     type: integer
+                                                    minimum: 1
+                                                    description: Item quantity
                                                 price_cents:
                                                     type: integer
+                                                    minimum: 0
+                                                    description: Item price in cents
                                             required:
                                                 - name
                                                 - quantity
@@ -451,8 +478,12 @@ paths:
                                             properties:
                                                 id:
                                                     type: string
+                                                    format: uuid
+                                                    description: User ID
                                                 email:
                                                     type: string
+                                                    format: email
+                                                    description: User email
                                             required:
                                                 - id
                                                 - email

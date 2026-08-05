@@ -2,6 +2,7 @@ package parser
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -191,6 +192,44 @@ func TestParse_SchemaFieldsAreDeclarationOrdered(t *testing.T) {
 	// for the full list and matches these by GoName.
 	if fieldNamed(user.Fields, "Internal") != nil {
 		t.Error("unannotated field Internal should have no Field entry")
+	}
+}
+
+func TestParse_AnonymousStructFields(t *testing.T) {
+	anonymous := schemaNamed(parseValid(t), "Anonymous")
+	if anonymous == nil {
+		t.Fatal("Anonymous schema missing")
+	}
+
+	// Declaration order holds at both levels, and a field with nothing to say
+	// about itself still appears to carry its nested annotations.
+	if got := fieldNames(anonymous.Fields); !reflect.DeepEqual(got, []string{"Address", "Untagged", "Note"}) {
+		t.Fatalf("fields = %v", got)
+	}
+
+	address := fieldNamed(anonymous.Fields, "Address")
+	if address.Description != "The shipping address" {
+		t.Errorf("Address description = %q", address.Description)
+	}
+	if got := fieldNames(address.Fields); !reflect.DeepEqual(got, []string{"Street", "Country"}) {
+		t.Errorf("Address nested fields = %v", got)
+	}
+	if got := fieldNamed(address.Fields, "Country").Description; got != "Two-letter country code" {
+		t.Errorf("Address.Country description = %q", got)
+	}
+
+	// The element struct of a slice is reached the same way.
+	untagged := fieldNamed(anonymous.Fields, "Untagged")
+	if untagged.Description != "" {
+		t.Errorf("Untagged should carry no annotation of its own, got %q", untagged.Description)
+	}
+	quantity := fieldNamed(untagged.Fields, "Quantity")
+	if quantity == nil || quantity.Minimum == nil || *quantity.Minimum != 1 {
+		t.Errorf("Untagged.Quantity = %+v, want @minimum 1", quantity)
+	}
+
+	if got := fieldNamed(anonymous.Fields, "Note").Fields; got != nil {
+		t.Errorf("a field with no anonymous struct should carry no nested fields, got %v", fieldNames(got))
 	}
 }
 
@@ -567,6 +606,8 @@ func TestParse_InlineResponseStatuses(t *testing.T) {
 		{"4XX", "clientError"},
 		{"default", "fallback"},
 		{"200", "unspecified"},
+		// The standalone response declares nothing, so it has no var name.
+		{"404", ""},
 	}
 
 	if len(inline.Responses) != len(want) {
@@ -585,6 +626,39 @@ func TestParse_InlineResponseStatuses(t *testing.T) {
 	}
 	if got := clientError.Headers; len(got) != 1 || got[0] != "RateLimitHeaders" {
 		t.Errorf("4XX headers = %v", got)
+	}
+}
+
+func TestParse_StandaloneResponse(t *testing.T) {
+	inline := endpointNamed(parseValid(t), "InlineHandler").Inline
+
+	var standalone *InlineResponse
+	for _, response := range inline.Responses {
+		if response.Status == "404" {
+			standalone = response
+		}
+	}
+	if standalone == nil {
+		t.Fatal("the standalone @response was not parsed")
+	}
+
+	// It names its body instead of declaring a struct to be one.
+	if standalone.Struct != nil {
+		t.Error("a standalone response declares no struct")
+	}
+	if standalone.Body == nil || standalone.Body.Schema != "Error" {
+		t.Fatalf("body = %+v, want a reference to Error", standalone.Body)
+	}
+
+	// The rest of the block reads exactly as it does on an endpoint response.
+	if standalone.Description != "Order not found" {
+		t.Errorf("description = %q", standalone.Description)
+	}
+	if got := standalone.Headers; len(got) != 1 || got[0] != "RateLimitHeaders" {
+		t.Errorf("headers = %v", got)
+	}
+	if standalone.Pos.Line == 0 || !strings.HasSuffix(standalone.Pos.Filename, "valid.go") {
+		t.Errorf("Pos = %v, want the annotation position", standalone.Pos)
 	}
 }
 
@@ -637,7 +711,7 @@ func TestParse_AccumulatesErrorsPerItem(t *testing.T) {
 		t.Fatalf("error %T does not join multiple errors", err)
 	}
 	errs := joined.Unwrap()
-	if len(errs) != 4 {
+	if len(errs) != 6 {
 		t.Fatalf("got %d errors, want one per broken item:\n%v", len(errs), err)
 	}
 
@@ -646,6 +720,9 @@ func TestParse_AccumulatesErrorsPerItem(t *testing.T) {
 		`invalid @field for BadBool.Name: @required value "maybe" is not a valid boolean`,
 		"unknown annotation @summry in @endpoint",
 		`in function DuplicateRequest: duplicate inline @request on "second" (previous: "first")`,
+		"in function BodylessStandalone: standalone @response 400 must name its body with @body",
+		// The declared struct is the body, so naming a second one is an error.
+		`in function TwoBodies: failed to parse inline @response on "resp": failed to parse @response children: unknown annotation @body in @response`,
 	}
 	for i, want := range wants {
 		if !strings.Contains(errs[i].Error(), want) {
@@ -662,6 +739,24 @@ func TestParse_AccumulatesErrorsPerItem(t *testing.T) {
 		if !strings.HasPrefix(errs[i].Error(), perr.Pos.Filename+":") {
 			t.Errorf("error %d = %q, want it to start with the position", i, errs[i])
 		}
+	}
+}
+
+func TestParse_FloatingAnnotationIsAnError(t *testing.T) {
+	_, err := Parse("./testdata/floating")
+	if err == nil {
+		t.Fatal("an annotation attached to no declaration should be an error, not a silent no-op")
+	}
+	if !strings.Contains(err.Error(), "@field is attached to no declaration") {
+		t.Errorf("error = %v, want it to name the stray annotation", err)
+	}
+
+	var perr *Error
+	if !errors.As(err, &perr) {
+		t.Fatalf("error is not a *parser.Error: %v", err)
+	}
+	if !strings.HasSuffix(perr.Pos.Filename, "floating.go") || perr.Pos.Line == 0 {
+		t.Errorf("position = %v, want the annotation's line", perr.Pos)
 	}
 }
 

@@ -86,7 +86,7 @@ func TestResolve_SchemasSortedByName(t *testing.T) {
 	}
 
 	want := []string{
-		"EmbeddedPtrTest", "EmbeddedTest", "Envelope", "Error", "Escapes",
+		"Anonymous", "EmbeddedPtrTest", "EmbeddedTest", "Envelope", "Error", "Escapes",
 		"FieldRequiredTest", "LegacyUser", "NestedEmbedTest", "Pair",
 		"Response", "StringUserPair", "User", "UserResponse",
 	}
@@ -340,19 +340,64 @@ func TestResolve_AnonymousStructs(t *testing.T) {
 	}
 }
 
-// TestResolve_AnonymousStructsDropAnnotations pins today's behavior: a @field
-// annotation inside an anonymous struct is not applied. Phase 4 flips this and
-// regenerates examples/inline/inline.yaml.
-func TestResolve_AnonymousStructsDropAnnotations(t *testing.T) {
-	pkg := resolvePackage(t, shapesPkg)
+// TestResolve_AnonymousStructAnnotations covers the @field annotations written
+// inside an anonymous struct: they have no declaration of their own, so the
+// parser collects them under the field spelling the struct out.
+func TestResolve_AnonymousStructAnnotations(t *testing.T) {
+	s := schema(t, resolvePackage(t, shapesPkg), "Nested")
 
-	nested := field(t, schema(t, pkg, "Nested"), "inline")
-	if len(nested.Inline) != 1 {
-		t.Fatalf("expected one inlined field, got %d", len(nested.Inline))
+	one := func(t *testing.T, fields []*Field) *Field {
+		t.Helper()
+		if len(fields) != 1 {
+			t.Fatalf("expected one nested field, got %d", len(fields))
+		}
+		return fields[0]
 	}
-	if description := nested.Inline[0].Description; description != "" {
-		t.Errorf("nested field description = %q, want it dropped", description)
-	}
+
+	t.Run("object", func(t *testing.T) {
+		nested := one(t, field(t, s, "inline").Inline)
+		if nested.Description != "The nested name" {
+			t.Errorf("nested description = %q", nested.Description)
+		}
+	})
+
+	t.Run("array items", func(t *testing.T) {
+		nested := one(t, field(t, s, "items").ItemsInline)
+		if nested.Description != "The item name" {
+			t.Errorf("nested description = %q", nested.Description)
+		}
+		if nested.MinLength == nil || *nested.MinLength != 1 {
+			t.Errorf("nested minLength = %v, want 1", nested.MinLength)
+		}
+	})
+
+	t.Run("map values", func(t *testing.T) {
+		nested := one(t, field(t, s, "values").MapValueInline)
+		if nested.Description != "The value name" {
+			t.Errorf("nested description = %q", nested.Description)
+		}
+	})
+
+	// An unannotated field still carries the annotations of the struct nested
+	// under it, however deep they sit.
+	t.Run("nested twice", func(t *testing.T) {
+		deeper := field(t, s, "deeper")
+		if deeper.Description != "" {
+			t.Errorf("carrying field should stay bare, got description %q", deeper.Description)
+		}
+		innermost := one(t, one(t, deeper.Inline).Inline)
+		if innermost.Description != "The innermost name" {
+			t.Errorf("innermost description = %q", innermost.Description)
+		}
+	})
+
+	// Binding stays scoped: an annotation of the enclosing struct does not
+	// leak into the anonymous struct below it.
+	t.Run("scoped to its own struct", func(t *testing.T) {
+		if got := one(t, field(t, s, "inline").Inline).Description; got == "An inline object" {
+			t.Errorf("nested field took the enclosing field's description: %q", got)
+		}
+	})
 }
 
 func TestResolve_Generics(t *testing.T) {
@@ -497,8 +542,37 @@ func TestResolve_ResponseOrder(t *testing.T) {
 	for _, response := range endpoint(t, pkg, "POST", "/orders").Responses {
 		got = append(got, response.Status)
 	}
-	if want := []string{"200", "201", "4XX", "default"}; !reflect.DeepEqual(got, want) {
+	// Lexicographic, and a standalone response sorts among the rest.
+	if want := []string{"200", "201", "404", "4XX", "default"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("statuses = %v, want %v", got, want)
+	}
+}
+
+func TestResolve_StandaloneResponse(t *testing.T) {
+	pkg := resolvePackage(t, validPkg)
+
+	var standalone *Response
+	for _, response := range endpoint(t, pkg, "POST", "/orders").Responses {
+		if response.Status == "404" {
+			standalone = response
+		}
+	}
+	if standalone == nil {
+		t.Fatal("the standalone response was not resolved")
+	}
+
+	// The named body becomes a reference, the way an endpoint @response does.
+	if standalone.Content == nil || standalone.Content.Ref == nil || standalone.Content.Ref.Schema != "Error" {
+		t.Fatalf("content = %+v, want a reference to Error", standalone.Content)
+	}
+	if standalone.ContentType != "application/json" {
+		t.Errorf("content type = %q", standalone.ContentType)
+	}
+	if standalone.Description != "Order not found" {
+		t.Errorf("description = %q", standalone.Description)
+	}
+	if len(standalone.Headers) != 1 || standalone.Headers[0].Name != "X-RateLimit-Limit" {
+		t.Errorf("headers = %v, want the fields of RateLimitHeaders", fieldNames(standalone.Headers))
 	}
 }
 

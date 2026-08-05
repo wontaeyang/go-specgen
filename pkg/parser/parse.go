@@ -430,6 +430,17 @@ func parseInline(fn *funcDecl) (*EndpointInline, error) {
 
 	inline := &EndpointInline{}
 	for _, decl := range fn.Inlines {
+		if decl.Standalone {
+			response, err := parseStandaloneResponse(decl)
+			if err != nil {
+				return nil, err
+			}
+			if err := inline.addResponse(response); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
 		declared, err := parseInlineStruct(decl)
 		if err != nil {
 			return nil, err
@@ -453,28 +464,58 @@ func parseInline(fn *funcDecl) (*EndpointInline, error) {
 			}
 			inline.Request = declared
 		case "@response":
-			if previous := inline.response(decl.Status); previous != nil {
-				return nil, errorf(decl.Pos, "duplicate inline @response %s on %q (previous: %q); each status code can have only one inline response per handler",
-					decl.Status, decl.VarName, previous.VarName)
-			}
-			inline.Responses = append(inline.Responses, &InlineResponse{
+			err := inline.addResponse(&InlineResponse{
 				Status:       decl.Status,
 				InlineStruct: *declared,
 			})
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
 	return inline, nil
 }
 
-// response returns the inline response already declared for a status, or nil.
-func (i *EndpointInline) response(status string) *InlineResponse {
-	for _, response := range i.Responses {
-		if response.Status == status {
-			return response
+// addResponse records an inline response, rejecting a status the handler has
+// already declared. The position of the second one names the mistake; the
+// caller adds the function it happened in.
+func (i *EndpointInline) addResponse(response *InlineResponse) error {
+	for _, previous := range i.Responses {
+		if previous.Status == response.Status {
+			return errorf(response.Pos, "duplicate inline @response %s; each status code can have only one inline response per handler",
+				response.Status)
 		}
 	}
+	i.Responses = append(i.Responses, response)
 	return nil
+}
+
+// parseStandaloneResponse parses an @response written on its own in a handler
+// body. With no declaration under it there is no struct to be the body, so the
+// block has to name one.
+func parseStandaloneResponse(decl *inlineDecl) (*InlineResponse, error) {
+	parsed, err := ParseAnnotationBlock(decl.Lines, decl.Marker, ResponseNode)
+	if err != nil {
+		return nil, wrapf(decl.Pos, err, "failed to parse standalone @response %s", decl.Status)
+	}
+
+	body := parseBody(parsed)
+	if body == nil {
+		return nil, errorf(decl.Pos,
+			"standalone @response %s must name its body with @body, or be written above the struct declaration that is the body", decl.Status)
+	}
+
+	return &InlineResponse{
+		Status: decl.Status,
+		Body:   body,
+		InlineStruct: InlineStruct{
+			Pos:         decl.Pos,
+			ContentType: ExpandContentType(parsed.ChildValue("@contentType")),
+			Description: parsed.ChildValue("@description"),
+			Headers:     references(parsed, "@header"),
+		},
+	}, nil
 }
 
 // parseInlineStruct parses one annotated declaration from a handler body: its
@@ -503,47 +544,53 @@ func parseInlineStruct(decl *inlineDecl) (*InlineStruct, error) {
 }
 
 // parseFields parses the @field annotation of every annotated field of a
-// struct, in declaration order.
+// struct, in declaration order, descending into the anonymous structs the
+// fields spell out.
 //
 // Fields with no @field annotation produce no entry: the resolver walks the Go
-// struct for the complete field list and matches these by GoName.
+// struct for the complete field list and matches these by GoName. The one
+// exception is a field whose anonymous struct has annotated fields — it needs
+// an entry to carry them, even with nothing to say about itself.
 func parseFields(fields []*fieldDecl, owner string) ([]*Field, error) {
 	var parsed []*Field
 	for _, decl := range fields {
-		if !decl.Doc.HasAnnotation("@field") {
+		nested, err := parseFields(decl.Fields, owner+"."+decl.GoName)
+		if err != nil {
+			return nil, err
+		}
+
+		annotated := decl.Doc.HasAnnotation("@field")
+		if !annotated && len(nested) == 0 {
 			continue
 		}
 
-		annotation, err := ParseAnnotationBlock(decl.Doc.AnnotationLines(), "@field", fieldNode)
-		if err != nil {
-			return nil, wrapf(decl.Pos, err, "failed to parse @field for %s.%s", owner, decl.GoName)
-		}
-
-		field, err := newField(decl, annotation)
-		if err != nil {
-			return nil, wrapf(decl.Pos, err, "invalid @field for %s.%s", owner, decl.GoName)
+		field := &Field{GoName: decl.GoName, Pos: decl.Pos, Fields: nested}
+		if annotated {
+			annotation, err := ParseAnnotationBlock(decl.Doc.AnnotationLines(), "@field", fieldNode)
+			if err != nil {
+				return nil, wrapf(decl.Pos, err, "failed to parse @field for %s.%s", owner, decl.GoName)
+			}
+			if err := applyField(field, annotation); err != nil {
+				return nil, wrapf(decl.Pos, err, "invalid @field for %s.%s", owner, decl.GoName)
+			}
 		}
 		parsed = append(parsed, field)
 	}
 	return parsed, nil
 }
 
-// newField converts a parsed @field annotation into a Field.
-func newField(decl *fieldDecl, a *Annotation) (*Field, error) {
-	field := &Field{
-		GoName:      decl.GoName,
-		Pos:         decl.Pos,
-		Description: a.ChildValue("@description"),
-		Format:      a.ChildValue("@format"),
-		Constraints: Constraints{
-			Default:     a.ChildValue("@default"),
-			Example:     a.ChildValue("@example"),
-			Pattern:     a.ChildValue("@pattern"),
-			UniqueItems: a.HasChild("@uniqueItems"),
-			Deprecated:  a.HasChild("@deprecated"),
-			ReadOnly:    a.HasChild("@readOnly"),
-			WriteOnly:   a.HasChild("@writeOnly"),
-		},
+// applyField fills in a Field from its parsed @field annotation.
+func applyField(field *Field, a *Annotation) error {
+	field.Description = a.ChildValue("@description")
+	field.Format = a.ChildValue("@format")
+	field.Constraints = Constraints{
+		Default:     a.ChildValue("@default"),
+		Example:     a.ChildValue("@example"),
+		Pattern:     a.ChildValue("@pattern"),
+		UniqueItems: a.HasChild("@uniqueItems"),
+		Deprecated:  a.HasChild("@deprecated"),
+		ReadOnly:    a.HasChild("@readOnly"),
+		WriteOnly:   a.HasChild("@writeOnly"),
 	}
 
 	if enum := a.ChildValue("@enum"); enum != "" {
@@ -554,37 +601,37 @@ func newField(decl *fieldDecl, a *Annotation) (*Field, error) {
 
 	var err error
 	if field.MinLength, err = intChild(a, "@minLength"); err != nil {
-		return nil, err
+		return err
 	}
 	if field.MaxLength, err = intChild(a, "@maxLength"); err != nil {
-		return nil, err
+		return err
 	}
 	if field.MinItems, err = intChild(a, "@minItems"); err != nil {
-		return nil, err
+		return err
 	}
 	if field.MaxItems, err = intChild(a, "@maxItems"); err != nil {
-		return nil, err
+		return err
 	}
 	if field.Minimum, err = floatChild(a, "@minimum"); err != nil {
-		return nil, err
+		return err
 	}
 	if field.Maximum, err = floatChild(a, "@maximum"); err != nil {
-		return nil, err
+		return err
 	}
 	if field.ExclusiveMinimum, err = floatChild(a, "@exclusiveMinimum"); err != nil {
-		return nil, err
+		return err
 	}
 	if field.ExclusiveMaximum, err = floatChild(a, "@exclusiveMaximum"); err != nil {
-		return nil, err
+		return err
 	}
 	if field.Required, err = boolChild(a, "@required"); err != nil {
-		return nil, err
+		return err
 	}
 	if field.Nullable, err = boolChild(a, "@nullable"); err != nil {
-		return nil, err
+		return err
 	}
 
-	return field, nil
+	return nil
 }
 
 // intChild reads an optional integer child annotation. A missing annotation is

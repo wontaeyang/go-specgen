@@ -199,10 +199,10 @@ func (g *Generator) applyConstraints(schema *base.Schema, field *resolver.Field)
 		}
 	}
 	if field.Example != "" {
-		schema.Example = &yaml.Node{Kind: yaml.ScalarNode, Value: field.Example}
+		schema.Example = scalarNode(field.Example, field.Type.OpenAPI)
 	}
 	if field.Default != "" {
-		schema.Default = &yaml.Node{Kind: yaml.ScalarNode, Value: field.Default}
+		schema.Default = scalarNode(field.Default, field.Type.OpenAPI)
 	}
 	if field.Pattern != "" {
 		schema.Pattern = field.Pattern
@@ -284,10 +284,10 @@ func (g *Generator) parameterFieldSchema(field *resolver.Field) *base.SchemaProx
 		schema.Format = field.Format
 	}
 	if field.Example != "" {
-		schema.Example = &yaml.Node{Kind: yaml.ScalarNode, Value: field.Example}
+		schema.Example = scalarNode(field.Example, field.Type.OpenAPI)
 	}
 	if field.Default != "" {
-		schema.Default = &yaml.Node{Kind: yaml.ScalarNode, Value: field.Default}
+		schema.Default = scalarNode(field.Default, field.Type.OpenAPI)
 	}
 	if field.Pattern != "" {
 		schema.Pattern = field.Pattern
@@ -422,6 +422,24 @@ func (g *Generator) typeRefSchema(ref *resolver.TypeRef) *base.SchemaProxy {
 	}
 
 	return element()
+}
+
+// scalarNode builds the yaml node of a default or example value, tagged by the
+// type the field emits so the emitter cannot retype it: a string field with a
+// default of "true" stays the text true, not the boolean.
+func scalarNode(value, openAPIType string) *yaml.Node {
+	node := &yaml.Node{Kind: yaml.ScalarNode, Value: value}
+	switch openAPIType {
+	case "string":
+		node.Tag = "!!str"
+	case "integer":
+		node.Tag = "!!int"
+	case "number":
+		node.Tag = "!!float"
+	case "boolean":
+		node.Tag = "!!bool"
+	}
+	return node
 }
 
 // enumNodes converts enum values to yaml nodes, tagging them as integers
