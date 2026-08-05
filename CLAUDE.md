@@ -23,3 +23,9 @@
 - To run golden tests: `go test ./cmd/specgen -run TestGoldenFiles`
 - To update golden files after code changes: `go test ./cmd/specgen -run TestGoldenFiles -update`
 - Comparison is byte-for-byte exact match — always update golden files when output changes
+- Any golden change must be intentional and traceable to a named bug fix or feature; review every changed line before committing
+
+# Feature fixture tests
+- Mini-golden fixtures live in `cmd/specgen/testdata/*/` and lock features the examples don't cover (readOnly/writeOnly, exclusive bounds, OpenAPI 3.0 output, JSON output, $ref variants, mixed block+inline responses, primitive type matrix)
+- To run: `go test ./cmd/specgen -run TestFeatureFixtures`; update with `-update` (same review rule as goldens)
+- Output formatting is owned by libopenapi + go.yaml.in/yaml/v4 — do not upgrade those pins or replace `doc.Render()` without expecting every golden byte to move

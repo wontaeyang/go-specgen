@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -139,6 +140,12 @@ func load(dir string) (*packages.Package, error) {
 			packages.NeedSyntax |
 			packages.NeedTypes |
 			packages.NeedTypesInfo,
+	}
+
+	// A bare relative path like "examples/petstore" would be treated as an
+	// import path by go/packages; prefix it so it resolves as a directory.
+	if !filepath.IsAbs(dir) && !strings.HasPrefix(dir, ".") {
+		dir = "./" + dir
 	}
 
 	pkgs, err := packages.Load(cfg, dir)
