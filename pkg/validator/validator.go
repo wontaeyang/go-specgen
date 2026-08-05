@@ -68,15 +68,27 @@ type validator struct {
 	// schemas is the resolved schemas by name, for reference checks.
 	schemas map[string]*resolver.Schema
 
+	// schemes is the declared security schemes by name, for @security and
+	// @auth reference checks.
+	schemes map[string]bool
+
 	errors []error
 }
 
 // Validate checks a resolved package and returns every rule it breaks as a
 // *MultiError, or nil when it breaks none.
 func Validate(pkg *resolver.Package) error {
-	v := &validator{schemas: make(map[string]*resolver.Schema, len(pkg.Schemas))}
+	v := &validator{
+		schemas: make(map[string]*resolver.Schema, len(pkg.Schemas)),
+		schemes: make(map[string]bool),
+	}
 	for _, schema := range pkg.Schemas {
 		v.schemas[schema.Name] = schema
+	}
+	if pkg.API != nil {
+		for _, scheme := range pkg.API.SecuritySchemes {
+			v.schemes[scheme.Name] = true
+		}
 	}
 
 	if pkg.API == nil {
@@ -118,15 +130,13 @@ func (v *validator) validateAPI(api *parser.APIInfo) {
 		v.add("@api", "missing required @version")
 	}
 
-	schemes := make(map[string]bool, len(api.SecuritySchemes))
 	for _, scheme := range api.SecuritySchemes {
-		schemes[scheme.Name] = true
 		v.validateSecurityScheme(scheme)
 	}
 
 	for i, group := range api.Security {
 		for j, requirement := range group {
-			if !schemes[requirement.SchemeName] {
+			if !v.schemes[requirement.SchemeName] {
 				v.add(fmt.Sprintf("@api.@security[%d].@with[%d]", i, j),
 					"references unknown security scheme: %s", requirement.SchemeName)
 			}
@@ -311,6 +321,13 @@ func (v *validator) validateEndpoint(endpoint *resolver.Endpoint, api *parser.AP
 		v.add(path, "missing path")
 	} else {
 		v.validatePath(path, endpoint.Path)
+	}
+
+	// An @auth names the one scheme this operation requires, overriding the
+	// API default. A name with no scheme behind it emits a security
+	// requirement no consumer can satisfy.
+	if endpoint.Auth != "" && !v.schemes[endpoint.Auth] {
+		v.add(path, "@auth references unknown security scheme: %s", endpoint.Auth)
 	}
 
 	v.validateParameters(path, endpoint)

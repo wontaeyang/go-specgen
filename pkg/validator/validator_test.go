@@ -460,6 +460,27 @@ func TestValidate_MissingOperationIDsAreNotDuplicates(t *testing.T) {
 	}
 }
 
+func TestValidate_EndpointAuth(t *testing.T) {
+	pkg := validPackage()
+	pkg.API.SecuritySchemes = []*parser.SecurityScheme{
+		{Name: "bearerAuth", Type: "http", Scheme: "bearer"},
+	}
+
+	t.Run("declared scheme", func(t *testing.T) {
+		pkg.Endpoints[0].Auth = "bearerAuth"
+
+		if err := Validate(pkg); err != nil {
+			t.Errorf("@auth naming a declared scheme should pass: %v", err)
+		}
+	})
+
+	t.Run("unknown scheme", func(t *testing.T) {
+		pkg.Endpoints[0].Auth = "ghostAuth"
+
+		assertReported(t, Validate(pkg), "@endpoint[GET /users/{id}]", "@auth references unknown security scheme: ghostAuth")
+	})
+}
+
 func TestValidate_EndpointTags(t *testing.T) {
 	pkg := validPackage()
 	pkg.API.Tags = []*parser.Tag{{Name: "users"}}
