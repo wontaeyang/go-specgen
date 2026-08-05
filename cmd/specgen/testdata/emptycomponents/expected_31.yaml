@@ -1,0 +1,21 @@
+openapi: 3.1.0
+info:
+    title: EmptyComponents Fixture
+    version: 1.0.0
+paths:
+    /health:
+        get:
+            responses:
+                "200":
+                    description: Response for status 200
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    status:
+                                        type: string
+                                        description: Service status
+                                required:
+                                    - status
+components: {}

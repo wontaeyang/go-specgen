@@ -1,0 +1,48 @@
+openapi: 3.0.3
+info:
+    title: RefVariants Fixture
+    version: 1.0.0
+paths:
+    /item:
+        get:
+            responses:
+                "200":
+                    description: The item
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Item'
+components:
+    schemas:
+        Item:
+            type: object
+            properties:
+                plain:
+                    $ref: '#/components/schemas/Owner'
+                documented:
+                    allOf:
+                        - $ref: '#/components/schemas/Owner'
+                    description: Documented owner reference
+                nullable_ref:
+                    allOf:
+                        - $ref: '#/components/schemas/Owner'
+                    nullable: true
+                note:
+                    type: string
+                    description: Optional note
+                    nullable: true
+            required:
+                - plain
+                - documented
+                - nullable_ref
+                - note
+            description: An item with reference variants
+        Owner:
+            type: object
+            properties:
+                name:
+                    type: string
+                    description: Owner name
+            required:
+                - name
+            description: Resource owner

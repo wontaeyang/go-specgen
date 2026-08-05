@@ -1,0 +1,32 @@
+openapi: 3.1.0
+info:
+    title: Deprecated Fixture
+    version: 1.0.0
+paths:
+    /legacy:
+        get:
+            responses:
+                "200":
+                    description: Legacy record
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Legacy'
+            deprecated: true
+components:
+    schemas:
+        Legacy:
+            type: object
+            properties:
+                old:
+                    type: string
+                    description: Old identifier
+                    deprecated: true
+                new:
+                    type: string
+                    description: Replacement identifier
+            required:
+                - old
+                - new
+            description: A legacy record
+            deprecated: true
