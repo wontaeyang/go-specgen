@@ -18,6 +18,7 @@ func TestGoldenFiles(t *testing.T) {
 	}{
 		{"block", "block.yaml"},
 		{"closure", "closure.yaml"},
+		{"constraints", "constraints.yaml"},
 		{"customtypes", "customtypes.yaml"},
 		{"enum", "enum.yaml"},
 		{"overrides", "overrides.yaml"},

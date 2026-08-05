@@ -586,6 +586,8 @@ See the [examples/](examples/) directory for complete working examples:
 - Basic API setup
 - Path, query, header, and cookie parameters
 - Request/response bodies
+- Field constraints: read/write visibility, array bounds and uniqueness, numeric bounds, deprecation
+- Enums and nullability overrides
 - Security schemes
 - Inline structs
 - Closure handler factories

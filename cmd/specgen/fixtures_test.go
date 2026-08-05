@@ -8,11 +8,17 @@ import (
 	"github.com/wontaeyang/go-specgen/pkg/generator"
 )
 
-// TestFeatureFixtures is a mini-golden harness over testdata/ packages that
-// lock features the examples/ golden files do not cover: readOnly/writeOnly,
-// array constraints, exclusive bounds, deprecation, $ref emission variants,
-// OpenAPI 3.0 output, JSON output, empty components, mixed block+inline
-// responses, the primitive type matrix, and inline-body builder behavior.
+// TestFeatureFixtures is a mini-golden harness for output the examples/ golden
+// files structurally cannot reach. TestGoldenFiles renders every example once,
+// as OpenAPI 3.1 YAML, so anything version- or format-specific lives here:
+// OpenAPI 3.0 rendering (exclusive bounds as boolean flags, $ref siblings via
+// allOf) and JSON output. The rest are edge cases that would read as noise in a
+// documentation example: empty components, block/inline response merge order,
+// the exhaustive primitive type matrix, and inline-body builder behavior.
+//
+// Annotation features themselves belong in examples/, which is the coverage
+// surface — see examples/constraints for read/write visibility, array bounds,
+// numeric bounds, and deprecation.
 //
 // Expected files are updated with the same -update flag as TestGoldenFiles.
 func TestFeatureFixtures(t *testing.T) {
@@ -22,11 +28,7 @@ func TestFeatureFixtures(t *testing.T) {
 		format   generator.OutputFormat
 		expected string
 	}{
-		{"readwrite", "3.1", generator.FormatYAML, "expected_31.yaml"},
-		{"arrayconstraints", "3.1", generator.FormatYAML, "expected_31.yaml"},
-		{"exclusivebounds", "3.1", generator.FormatYAML, "expected_31.yaml"},
 		{"exclusivebounds", "3.0", generator.FormatYAML, "expected_30.yaml"},
-		{"deprecated", "3.1", generator.FormatYAML, "expected_31.yaml"},
 		{"refvariants", "3.1", generator.FormatYAML, "expected_31.yaml"},
 		{"refvariants", "3.0", generator.FormatYAML, "expected_30.yaml"},
 		{"jsonoutput", "3.1", generator.FormatJSON, "expected_31.json"},
