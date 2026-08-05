@@ -588,6 +588,7 @@ See the [examples/](examples/) directory for complete working examples:
 - Request/response bodies
 - Field constraints: read/write visibility, array bounds and uniqueness, numeric bounds, deprecation
 - Enums and nullability overrides
+- Schema references, including nullable and annotated refs
 - Security schemes
 - Inline structs
 - Closure handler factories

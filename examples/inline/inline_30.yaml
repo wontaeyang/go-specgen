@@ -1,0 +1,543 @@
+openapi: 3.0.3
+info:
+    title: Inline Structs Example
+    description: |-
+        Demonstrates inline struct declarations within handler functions.
+        Inline structs are NOT added to components/schemas - they are inlined in the spec.
+    version: 1.0.0
+paths:
+    /orders:
+        get:
+            parameters:
+                - name: status
+                  in: query
+                  description: Filter by status
+                  required: false
+                  schema:
+                    type: string
+                    enum:
+                        - pending
+                        - processing
+                        - shipped
+                        - delivered
+                - name: limit
+                  in: query
+                  description: Maximum results
+                  required: false
+                  schema:
+                    type: integer
+                    maximum: 100
+                    minimum: 1
+                    default: 20
+                - name: cursor
+                  in: query
+                  description: Pagination cursor
+                  required: false
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: Response for status 200
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    orders:
+                                        type: array
+                                        items:
+                                            type: object
+                                            properties:
+                                                id:
+                                                    type: string
+                                                    format: uuid
+                                                    description: Order ID
+                                                status:
+                                                    type: string
+                                                    description: Order status
+                                                total_cents:
+                                                    type: integer
+                                                    description: Order total in cents
+                                            required:
+                                                - id
+                                                - status
+                                                - total_cents
+                                        description: List of orders
+                                    next_cursor:
+                                        type: string
+                                        description: Next page cursor
+                                    has_more:
+                                        type: boolean
+                                        description: Whether there are more results
+                                required:
+                                    - orders
+                                    - has_more
+        post:
+            parameters:
+                - name: X-Idempotency-Key
+                  in: header
+                  description: Idempotency key
+                  required: false
+                  schema:
+                    type: string
+                    format: uuid
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                customer_id:
+                                    type: string
+                                    format: uuid
+                                    description: Customer ID
+                                items:
+                                    type: array
+                                    items:
+                                        type: object
+                                        properties:
+                                            product_id:
+                                                type: string
+                                                format: uuid
+                                                description: Product ID
+                                            quantity:
+                                                type: integer
+                                                minimum: 1
+                                                description: Quantity to order
+                                        required:
+                                            - product_id
+                                            - quantity
+                                    description: Order items
+                                shipping_address:
+                                    type: object
+                                    properties:
+                                        street:
+                                            type: string
+                                            description: Street address
+                                        city:
+                                            type: string
+                                            description: City
+                                        postal_code:
+                                            type: string
+                                            description: Postal code
+                                        country:
+                                            type: string
+                                            pattern: ^[A-Z]{2}$
+                                            description: Country code
+                                    required:
+                                        - street
+                                        - city
+                                        - postal_code
+                                        - country
+                                    description: Shipping address
+                            required:
+                                - customer_id
+                                - items
+                                - shipping_address
+                required: true
+            responses:
+                "201":
+                    description: Response for status 201
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    id:
+                                        type: string
+                                        format: uuid
+                                        description: Order ID
+                                    status:
+                                        type: string
+                                        description: Order status
+                                    estimated_delivery:
+                                        type: string
+                                        format: date
+                                        description: Estimated delivery date
+                                required:
+                                    - id
+                                    - status
+                                    - estimated_delivery
+                "400":
+                    description: Response for status 400
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /orders/with-headers:
+        get:
+            responses:
+                "200":
+                    description: List of orders with rate limit info
+                    headers:
+                        X-RateLimit-Limit:
+                            description: Request limit per hour
+                            schema:
+                                type: integer
+                        X-RateLimit-Remaining:
+                            description: Remaining requests in current window
+                            schema:
+                                type: integer
+                        X-RateLimit-Reset:
+                            description: Unix timestamp when limit resets
+                            schema:
+                                type: integer
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    orders:
+                                        type: array
+                                        items:
+                                            type: object
+                                            properties:
+                                                id:
+                                                    type: string
+                                                    format: uuid
+                                                    description: Order ID
+                                                status:
+                                                    type: string
+                                                    description: Order status
+                                            required:
+                                                - id
+                                                - status
+                                        description: List of orders
+                                required:
+                                    - orders
+    /orders/{id}:
+        get:
+            parameters:
+                - name: id
+                  in: path
+                  description: Order ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+                - name: include
+                  in: query
+                  description: Fields to include in response
+                  required: false
+                  schema:
+                    type: array
+                    items:
+                        type: string
+                        enum:
+                            - items
+                            - shipping
+                            - billing
+                - name: with_meta
+                  in: query
+                  description: Whether to include metadata
+                  required: false
+                  schema:
+                    type: boolean
+            responses:
+                "200":
+                    description: Response for status 200
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    id:
+                                        type: string
+                                        format: uuid
+                                        description: Order ID
+                                    status:
+                                        type: string
+                                        enum:
+                                            - pending
+                                            - processing
+                                            - shipped
+                                            - delivered
+                                        description: Order status
+                                    total_cents:
+                                        type: integer
+                                        minimum: 0
+                                        description: Order total in cents
+                                    items:
+                                        type: array
+                                        items:
+                                            type: object
+                                            properties:
+                                                name:
+                                                    type: string
+                                                    description: Item name
+                                                quantity:
+                                                    type: integer
+                                                    minimum: 1
+                                                    description: Item quantity
+                                                price_cents:
+                                                    type: integer
+                                                    minimum: 0
+                                                    description: Item price in cents
+                                            required:
+                                                - name
+                                                - quantity
+                                                - price_cents
+                                        description: Order items
+                                required:
+                                    - id
+                                    - status
+                                    - total_cents
+                                    - items
+                "404":
+                    description: Response for status 404
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    code:
+                                        type: string
+                                        description: Error code
+                                    message:
+                                        type: string
+                                        description: Error message
+                                required:
+                                    - code
+                                    - message
+        delete:
+            parameters:
+                - name: id
+                  in: path
+                  description: Order ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "204":
+                    description: Order deleted
+                "404":
+                    description: Order not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /users:
+        get:
+            parameters:
+                - name: limit
+                  in: query
+                  description: Maximum results
+                  required: false
+                  schema:
+                    type: integer
+                    maximum: 100
+                    minimum: 1
+                - name: offset
+                  in: query
+                  description: Page offset
+                  required: false
+                  schema:
+                    type: integer
+                    minimum: 0
+                - name: status
+                  in: query
+                  description: Filter by status
+                  required: false
+                  schema:
+                    type: string
+                    enum:
+                        - active
+                        - inactive
+            responses:
+                "200":
+                    description: Response for status 200
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    users:
+                                        type: array
+                                        items:
+                                            type: object
+                                            properties:
+                                                id:
+                                                    type: string
+                                                email:
+                                                    type: string
+                                            required:
+                                                - id
+                                                - email
+                                        description: List of users
+                                    total:
+                                        type: integer
+                                        description: Total count
+                                required:
+                                    - users
+                                    - total
+        post:
+            parameters:
+                - name: X-Request-ID
+                  in: header
+                  description: Request tracking ID
+                  required: false
+                  schema:
+                    type: string
+                    format: uuid
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                email:
+                                    type: string
+                                    format: email
+                                    description: User email
+                                name:
+                                    type: string
+                                    description: User name
+                            required:
+                                - email
+                                - name
+                required: true
+            responses:
+                "201":
+                    description: Response for status 201
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    id:
+                                        type: string
+                                        format: uuid
+                                        description: User ID
+                                required:
+                                    - id
+                "400":
+                    description: Response for status 400
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    code:
+                                        type: string
+                                        description: Error code
+                                    message:
+                                        type: string
+                                        description: Error message
+                                required:
+                                    - code
+                                    - message
+    /users/search:
+        get:
+            parameters:
+                - name: limit
+                  in: query
+                  description: Maximum results
+                  required: false
+                  schema:
+                    type: integer
+                    maximum: 100
+                    minimum: 1
+                    default: 20
+                - name: offset
+                  in: query
+                  description: Page offset
+                  required: false
+                  schema:
+                    type: integer
+                    minimum: 0
+                    default: 0
+                - name: status
+                  in: query
+                  description: Filter by status
+                  required: false
+                  schema:
+                    type: string
+                    enum:
+                        - active
+                        - inactive
+                        - banned
+                - name: email_contains
+                  in: query
+                  description: Substring match on email
+                  required: false
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: Response for status 200
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    users:
+                                        type: array
+                                        items:
+                                            type: object
+                                            properties:
+                                                id:
+                                                    type: string
+                                                    format: uuid
+                                                    description: User ID
+                                                email:
+                                                    type: string
+                                                    format: email
+                                                    description: User email
+                                            required:
+                                                - id
+                                                - email
+                                        description: Matching users
+                                    total:
+                                        type: integer
+                                        description: Total count of matches
+                                required:
+                                    - users
+                                    - total
+    /users/{id}:
+        get:
+            parameters:
+                - name: id
+                  in: path
+                  description: User ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "200":
+                    description: Response for status 200
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    id:
+                                        type: string
+                                        format: uuid
+                                        description: User ID
+                                    email:
+                                        type: string
+                                        format: email
+                                        description: User email
+                                    name:
+                                        type: string
+                                        description: User name
+                                required:
+                                    - id
+                                    - email
+                                    - name
+components:
+    schemas:
+        Error:
+            type: object
+            properties:
+                code:
+                    type: string
+                    description: Error code
+                message:
+                    type: string
+                    description: Error message
+            required:
+                - code
+                - message

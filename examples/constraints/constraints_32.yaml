@@ -1,0 +1,189 @@
+openapi: 3.2.0
+info:
+    title: Constraints Example
+    description: |-
+        Demonstrates field constraints: read/write visibility, array
+        bounds and uniqueness, numeric bounds (inclusive and exclusive), string
+        lengths and patterns, and deprecation at every level.
+    version: 1.0.0
+paths:
+    /accounts:
+        post:
+            summary: Create an account
+            description: Write-only fields are accepted here and omitted from responses.
+            operationId: createAccount
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/Account'
+                required: true
+            responses:
+                "201":
+                    description: The created account
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Account'
+    /accounts/{id}:
+        get:
+            summary: Get an account
+            operationId: getAccount
+            parameters:
+                - name: id
+                  in: path
+                  description: Account ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "200":
+                    description: The account
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Account'
+    /inventory:
+        get:
+            summary: List inventory
+            operationId: listInventory
+            parameters:
+                - name: limit
+                  in: query
+                  description: Maximum results
+                  required: false
+                  schema:
+                    type: integer
+                    maximum: 200
+                    minimum: 1
+                    default: 50
+                - name: warehouses
+                  in: query
+                  description: Warehouse codes to include
+                  required: false
+                  schema:
+                    type: array
+                    items:
+                        type: string
+                    maxItems: 25
+                    uniqueItems: true
+                - name: min_fill_rate
+                  in: query
+                  description: Minimum fill rate to report
+                  required: false
+                  schema:
+                    exclusiveMinimum: 0
+                    type: number
+                    format: double
+            responses:
+                "200":
+                    description: Matching inventory records
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/Inventory'
+    /legacy/accounts:
+        get:
+            summary: List legacy accounts
+            description: Superseded by GET /accounts.
+            operationId: listLegacyAccounts
+            responses:
+                "200":
+                    description: Legacy accounts
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/LegacyAccount'
+            deprecated: true
+components:
+    schemas:
+        Account:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: Account ID
+                    readOnly: true
+                password:
+                    type: string
+                    maxLength: 128
+                    minLength: 12
+                    description: Account password
+                    writeOnly: true
+                handle:
+                    type: string
+                    maxLength: 30
+                    minLength: 3
+                    pattern: ^[a-z0-9_]+$
+                    description: Account handle
+                created_at:
+                    type: string
+                    format: date-time
+                    description: Creation timestamp
+                    readOnly: true
+            required:
+                - id
+                - password
+                - handle
+                - created_at
+            description: A user account
+        Inventory:
+            type: object
+            properties:
+                warehouses:
+                    type: array
+                    items:
+                        type: string
+                    maxItems: 25
+                    minItems: 1
+                    uniqueItems: true
+                    description: Distinct warehouse codes
+                history:
+                    type: array
+                    items:
+                        type: integer
+                    maxItems: 365
+                    minItems: 7
+                    description: Recent daily counts, newest first
+                on_hand:
+                    type: integer
+                    maximum: 100000
+                    minimum: 0
+                    description: Units on hand
+                fill_rate:
+                    exclusiveMaximum: 1
+                    exclusiveMinimum: 0
+                    type: number
+                    format: double
+                    description: Fill rate, strictly between 0 and 1
+                reorder_at:
+                    type: integer
+                    minimum: 1
+                    description: Reorder threshold
+            required:
+                - warehouses
+                - history
+                - on_hand
+                - fill_rate
+            description: Stock levels for a product
+        LegacyAccount:
+            type: object
+            properties:
+                account_no:
+                    type: integer
+                    description: Numeric account ID, replaced by Account.ID
+                    deprecated: true
+                handle:
+                    type: string
+                    description: Account handle
+            required:
+                - account_no
+                - handle
+            description: Superseded by Account
+            deprecated: true

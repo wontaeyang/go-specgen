@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/wontaeyang/go-specgen/pkg/generator"
@@ -11,83 +12,89 @@ import (
 
 var update = flag.Bool("update", false, "update golden files")
 
+// examples are the packages under examples/. Each one is rendered at every
+// supported OpenAPI version, so version-specific emission (nullability,
+// exclusive bounds, $ref siblings) is covered by the same sources that
+// document the annotations.
+var examples = []string{
+	"block",
+	"closure",
+	"constraints",
+	"customtypes",
+	"enum",
+	"overrides",
+	"generics",
+	"inline",
+	"nested",
+	"parameters",
+	"petstore",
+	"refs",
+	"responses",
+	"security",
+	"standalone_api",
+	"tags",
+}
+
+// openAPIVersions are the versions the CLI accepts. The suffix names the
+// golden file: examples/petstore/petstore_31.yaml.
+var openAPIVersions = []struct {
+	version string
+	suffix  string
+}{
+	{"3.0", "30"},
+	{"3.1", "31"},
+	{"3.2", "32"},
+}
+
 func TestGoldenFiles(t *testing.T) {
-	examples := []struct {
-		name string
-		yaml string
-	}{
-		{"block", "block.yaml"},
-		{"closure", "closure.yaml"},
-		{"constraints", "constraints.yaml"},
-		{"customtypes", "customtypes.yaml"},
-		{"enum", "enum.yaml"},
-		{"overrides", "overrides.yaml"},
-		{"generics", "generics.yaml"},
-		{"inline", "inline.yaml"},
-		{"nested", "nested.yaml"},
-		{"parameters", "parameters.yaml"},
-		{"petstore", "petstore.yaml"},
-		{"responses", "responses.yaml"},
-		{"security", "security.yaml"},
-		{"standalone_api", "standalone_api.yaml"},
-		{"tags", "tags.yaml"},
-	}
+	for _, name := range examples {
+		for _, v := range openAPIVersions {
+			t.Run(name+"_"+v.suffix, func(t *testing.T) {
+				dir := filepath.Join("..", "..", "examples", name)
 
-	for _, ex := range examples {
-		t.Run(ex.name, func(t *testing.T) {
-			dir := filepath.Join("..", "..", "examples", ex.name)
-
-			got, err := buildSpec(dir, "3.1", generator.FormatYAML)
-			if err != nil {
-				t.Fatalf("buildSpec: %v", err)
-			}
-
-			goldenFile := filepath.Join(dir, ex.yaml)
-
-			// Update golden files if -update flag is set
-			if *update {
-				if err := os.WriteFile(goldenFile, got, 0644); err != nil {
-					t.Fatalf("update golden file: %v", err)
+				got, err := buildSpec(dir, v.version, generator.FormatYAML)
+				if err != nil {
+					t.Fatalf("buildSpec: %v", err)
 				}
-				return
-			}
 
-			// Compare against golden file
-			want, err := os.ReadFile(goldenFile)
-			if err != nil {
-				t.Fatalf("read golden file: %v", err)
-			}
-
-			if string(got) != string(want) {
-				t.Errorf("output differs from %s", goldenFile)
-				// Show first differing line for easier debugging
-				gotLines := splitLines(string(got))
-				wantLines := splitLines(string(want))
-				for i := 0; i < len(gotLines) && i < len(wantLines); i++ {
-					if gotLines[i] != wantLines[i] {
-						t.Errorf("first diff at line %d:\n  got:  %s\n  want: %s", i+1, gotLines[i], wantLines[i])
-						break
-					}
-				}
-				if len(gotLines) != len(wantLines) {
-					t.Errorf("line count differs: got %d, want %d", len(gotLines), len(wantLines))
-				}
-			}
-		})
+				goldenFile := filepath.Join(dir, name+"_"+v.suffix+".yaml")
+				compareGolden(t, goldenFile, got)
+			})
+		}
 	}
 }
 
-func splitLines(s string) []string {
-	var lines []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			lines = append(lines, s[start:i])
-			start = i + 1
+// compareGolden compares generated output against a golden file, or rewrites
+// the golden file when -update is set.
+func compareGolden(t *testing.T, goldenFile string, got []byte) {
+	t.Helper()
+
+	if *update {
+		if err := os.WriteFile(goldenFile, got, 0644); err != nil {
+			t.Fatalf("update golden file: %v", err)
+		}
+		return
+	}
+
+	want, err := os.ReadFile(goldenFile)
+	if err != nil {
+		t.Fatalf("read golden file: %v", err)
+	}
+
+	if string(got) == string(want) {
+		return
+	}
+
+	t.Errorf("output differs from %s", goldenFile)
+	gotLines := strings.Split(string(got), "\n")
+	wantLines := strings.Split(string(want), "\n")
+	for i := 0; i < len(gotLines) && i < len(wantLines); i++ {
+		if gotLines[i] != wantLines[i] {
+			t.Errorf("first diff at line %d:\n  got:  %s\n  want: %s", i+1, gotLines[i], wantLines[i])
+			break
 		}
 	}
-	if start < len(s) {
-		lines = append(lines, s[start:])
+	if len(gotLines) != len(wantLines) {
+		t.Errorf("line count differs: got %d, want %d", len(gotLines), len(wantLines))
 	}
-	return lines
 }

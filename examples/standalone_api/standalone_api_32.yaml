@@ -1,0 +1,39 @@
+openapi: 3.2.0
+info:
+    title: Standalone API
+    description: Demonstrates @api declared as a standalone comment block.
+    version: 1.0.0
+paths:
+    /items/{id}:
+        get:
+            summary: Get item by ID
+            parameters:
+                - name: id
+                  in: path
+                  description: Item ID
+                  required: true
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "200":
+                    description: The item
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Item'
+components:
+    schemas:
+        Item:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: Item ID
+                name:
+                    type: string
+                    description: Human-readable name
+            required:
+                - id
+                - name
