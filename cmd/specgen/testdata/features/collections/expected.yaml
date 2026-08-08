@@ -54,6 +54,26 @@ components:
                     items:
                         $ref: '#/components/schemas/Item'
                     description: List of items
+                ids:
+                    type: array
+                    items:
+                        type: integer
+                    description: Identifiers
+                times:
+                    type: array
+                    items:
+                        type: string
+                    description: Event times
+                sizes:
+                    type: object
+                    additionalProperties:
+                        type: integer
+                    description: Sizes keyed by name
+                ratios:
+                    type: array
+                    items:
+                        type: number
+                    description: Ratios
             required:
                 - by_id
                 - groups
@@ -62,6 +82,10 @@ components:
                 - nested
                 - matrix
                 - items
+                - ids
+                - times
+                - sizes
+                - ratios
         Item:
             type: object
             properties:

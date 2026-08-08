@@ -11,7 +11,10 @@
 //	}
 package collections
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 // Item is referenced from inside containers.
 // @schema
@@ -43,6 +46,21 @@ type Containers struct {
 
 	// @field { @description List of items }
 	Items []Item `json:"items"`
+
+	// Element formats: nothing anywhere else uses a formatted scalar inside a
+	// container, so this is the only coverage of whether the format survives.
+
+	// @field { @description Identifiers }
+	IDs []int64 `json:"ids"`
+
+	// @field { @description Event times }
+	Times []time.Time `json:"times"`
+
+	// @field { @description Sizes keyed by name }
+	Sizes map[string]int64 `json:"sizes"`
+
+	// @field { @description Ratios }
+	Ratios []float32 `json:"ratios"`
 }
 
 // GetContainers returns the container sampler.
