@@ -84,17 +84,24 @@ func (p *parser) parse() (*Package, error) {
 // Maps are visited in sorted order so that when several structs have bad
 // annotations, the same one is reported every run.
 func (p *parser) parseStructFields(result *Package) error {
-	// @schema structs
-	for _, structName := range slices.Sorted(maps.Keys(result.Schemas)) {
-		fieldComments, ok := p.comments.FieldComments[structName]
-		if !ok {
-			continue
-		}
-		fields, err := p.parseFieldComments(fieldComments, structName)
+	// Every struct type in the package, not only the annotated ones. An
+	// embedded struct contributes its fields to whatever embeds it, and it
+	// carries its own @field annotations along with them, whether or not it is
+	// a @schema in its own right.
+	result.StructFields = make(map[string][]*Field, len(p.comments.FieldComments))
+	for _, structName := range slices.Sorted(maps.Keys(p.comments.FieldComments)) {
+		fields, err := p.parseFieldComments(p.comments.FieldComments[structName], structName)
 		if err != nil {
 			return err
 		}
-		result.Schemas[structName].Fields = fields
+		result.StructFields[structName] = fields
+	}
+
+	for name, schema := range result.Schemas {
+		schema.Fields = result.StructFields[name]
+	}
+	for name, param := range result.Parameters {
+		param.Fields = result.StructFields[name]
 	}
 
 	// Inline var structs declared in function bodies
@@ -435,16 +442,12 @@ func (p *parser) parseParameters(result *Package) error {
 			continue
 		}
 
-		fields, err := p.parseFieldComments(p.comments.FieldComments[structName], structName)
-		if err != nil {
-			return err
-		}
-
+		// Fields are filled in by parseStructFields, which parses every
+		// struct's annotations once.
 		result.Parameters[structName] = &Parameter{
 			Name:       structName,
 			Type:       paramType,
 			GoTypeName: structName,
-			Fields:     fields,
 		}
 	}
 

@@ -383,7 +383,29 @@ func (r *Resolver) flattenEmbeddedField(field *types.Var, annotations []*parser.
 		return nil, nil
 	}
 
-	return r.resolveSchemaFields(embeddedStruct, annotations, visited)
+	return r.resolveSchemaFields(embeddedStruct, r.embeddedAnnotations(field, annotations), visited)
+}
+
+// embeddedAnnotations returns the @field annotations to apply to an embedded
+// struct's fields.
+//
+// They belong to the embedded type, not to the struct doing the embedding: a
+// field of Base is declared in Base, and that is the only place its @field can
+// be written. The enclosing struct's annotations are the fallback for an
+// anonymous embedded struct, which has no type name to look up.
+func (r *Resolver) embeddedAnnotations(field *types.Var, enclosing []*parser.Field) []*parser.Field {
+	t := field.Type()
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+
+	if named, ok := t.(*types.Named); ok {
+		if own, found := r.parsed.StructFields[named.Obj().Name()]; found {
+			return own
+		}
+	}
+
+	return enclosing
 }
 
 // extractTypeArg extracts the type argument from a generic instantiation
@@ -474,7 +496,7 @@ func (r *Resolver) flattenEmbeddedParamField(field *types.Var, annotations []*pa
 		return nil, nil
 	}
 
-	return r.resolveParameterFields(embeddedStruct, annotations, paramType, visited)
+	return r.resolveParameterFields(embeddedStruct, r.embeddedAnnotations(field, annotations), paramType, visited)
 }
 
 // resolveField resolves a single struct field.

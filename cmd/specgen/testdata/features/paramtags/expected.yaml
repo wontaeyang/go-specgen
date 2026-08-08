@@ -40,9 +40,12 @@ paths:
                     type: string
                 - name: per_page
                   in: query
+                  description: Results per page
                   required: false
                   schema:
                     type: integer
+                    maximum: 100
+                    minimum: 1
             responses:
                 "200":
                     description: ""

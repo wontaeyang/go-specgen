@@ -28,6 +28,12 @@ type Package struct {
 	// FuncInlines are the declarations found inside handler bodies, keyed by
 	// function name. Their @field annotations are already parsed.
 	FuncInlines map[string]*FuncInlineInfo
+
+	// StructFields holds the parsed @field annotations of every struct type in
+	// the package, keyed by type name. Schemas and Parameters index into this;
+	// so does the resolver, when it flattens an embedded struct that carries no
+	// annotation of its own.
+	StructFields map[string][]*Field
 }
 
 // APIInfo represents the @api annotation
