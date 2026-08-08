@@ -50,7 +50,57 @@ func (v *Validator) Validate(pkg *resolver.Package) error {
 		v.validateEndpoint(endpoint, pkg)
 	}
 
+	// Checks that span endpoints, so they cannot live in validateEndpoint.
+	v.validateUniqueRoutes(pkg.Endpoints)
+	v.validateUniqueOperationIDs(pkg.Endpoints)
+
 	return v.errs.Err()
+}
+
+// validateUniqueRoutes checks that no two handlers claim the same method and
+// path.
+//
+// A document has one operation per method per path, so the second handler does
+// not merge with the first — it replaces it, and the first disappears from the
+// output with nothing said. The function name is in the message because the
+// path cannot tell the two apart: both carry the same route.
+func (v *Validator) validateUniqueRoutes(endpoints []*resolver.Endpoint) {
+	seen := make(map[string]string, len(endpoints))
+	for _, endpoint := range endpoints {
+		route := endpoint.Method + " " + endpoint.Path
+		if first, taken := seen[route]; taken {
+			v.addError(endpointPath(endpoint),
+				fmt.Sprintf("%s is already declared by %s; two handlers cannot share one route", route, first))
+			continue
+		}
+		seen[route] = endpoint.FuncName
+	}
+}
+
+// validateUniqueOperationIDs checks that no two operations share an
+// operationId. OpenAPI requires it to be unique across the document, because
+// client generators use it to name the method they emit.
+//
+// An endpoint without an @operationID is unnamed rather than named "", so those
+// are not compared against each other.
+func (v *Validator) validateUniqueOperationIDs(endpoints []*resolver.Endpoint) {
+	seen := make(map[string]string, len(endpoints))
+	for _, endpoint := range endpoints {
+		if endpoint.OperationID == "" {
+			continue
+		}
+		if first, taken := seen[endpoint.OperationID]; taken {
+			v.addError(endpointPath(endpoint),
+				fmt.Sprintf("@operationID %s is already used by %s; it must be unique across the document", endpoint.OperationID, first))
+			continue
+		}
+		seen[endpoint.OperationID] = endpoint.FuncName
+	}
+}
+
+// endpointPath is the annotation path an endpoint's errors are reported at.
+func endpointPath(endpoint *resolver.Endpoint) string {
+	return fmt.Sprintf("@endpoint[%s %s]", endpoint.Method, endpoint.Path)
 }
 
 // addError adds a validation error
@@ -324,7 +374,7 @@ func describeShape(t *resolver.TypeRef) string {
 
 // validateEndpoint validates an endpoint
 func (v *Validator) validateEndpoint(endpoint *resolver.Endpoint, pkg *resolver.Package) {
-	path := fmt.Sprintf("@endpoint[%s %s]", endpoint.Method, endpoint.Path)
+	path := endpointPath(endpoint)
 
 	// Validate method
 	validMethods := map[string]bool{

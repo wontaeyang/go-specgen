@@ -371,3 +371,162 @@ func TestExtractFuncInlines_Closure(t *testing.T) {
 		t.Error("Response should have Greeting field comment")
 	}
 }
+
+func TestDetectInlineAnnotation(t *testing.T) {
+	tests := []struct {
+		name           string
+		lines          []string
+		wantAnnotation string
+		wantStatusCode string
+	}{
+		{
+			name:           "query annotation",
+			lines:          []string{"@query"},
+			wantAnnotation: "query",
+			wantStatusCode: "",
+		},
+		{
+			name:           "path annotation",
+			lines:          []string{"@path"},
+			wantAnnotation: "path",
+			wantStatusCode: "",
+		},
+		{
+			name:           "header annotation",
+			lines:          []string{"@header"},
+			wantAnnotation: "header",
+			wantStatusCode: "",
+		},
+		{
+			name:           "cookie annotation",
+			lines:          []string{"@cookie"},
+			wantAnnotation: "cookie",
+			wantStatusCode: "",
+		},
+		{
+			name:           "request annotation",
+			lines:          []string{"@request"},
+			wantAnnotation: "request",
+			wantStatusCode: "",
+		},
+		{
+			name:           "response without status code",
+			lines:          []string{"@response"},
+			wantAnnotation: "response",
+			wantStatusCode: "200",
+		},
+		{
+			name:           "response with status code 200",
+			lines:          []string{"@response 200"},
+			wantAnnotation: "response",
+			wantStatusCode: "200",
+		},
+		{
+			name:           "response with status code 201",
+			lines:          []string{"@response 201"},
+			wantAnnotation: "response",
+			wantStatusCode: "201",
+		},
+		{
+			name:           "response with status code 404",
+			lines:          []string{"@response 404"},
+			wantAnnotation: "response",
+			wantStatusCode: "404",
+		},
+		{
+			name:           "response with status code and block",
+			lines:          []string{"@response 201 {"},
+			wantAnnotation: "response",
+			wantStatusCode: "201",
+		},
+		{
+			name:           "no annotation",
+			lines:          []string{"some comment", "more text"},
+			wantAnnotation: "",
+			wantStatusCode: "",
+		},
+		{
+			name:           "annotation with preceding text",
+			lines:          []string{"some description", "@query"},
+			wantAnnotation: "query",
+			wantStatusCode: "",
+		},
+		{
+			name:           "whitespace before annotation",
+			lines:          []string{"  @path  "},
+			wantAnnotation: "path",
+			wantStatusCode: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotAnnotation, gotStatusCode := detectInlineAnnotation(tt.lines)
+			if gotAnnotation != tt.wantAnnotation {
+				t.Errorf("detectInlineAnnotation() annotation = %q, want %q", gotAnnotation, tt.wantAnnotation)
+			}
+			if gotStatusCode != tt.wantStatusCode {
+				t.Errorf("detectInlineAnnotation() statusCode = %q, want %q", gotStatusCode, tt.wantStatusCode)
+			}
+		})
+	}
+}
+
+func TestFuncInlineInfo_Fields(t *testing.T) {
+	// Test that the FuncInlineInfo struct is correctly initialized.
+	// @query/@path/@header/@cookie are repeatable (slices); @request is single-slot;
+	// @response is keyed by status code.
+	info := &FuncInlineInfo{
+		Query:     []*InlineStructInfo{{VarName: "query"}},
+		Path:      []*InlineStructInfo{{VarName: "path"}},
+		Header:    []*InlineStructInfo{{VarName: "header"}},
+		Cookie:    []*InlineStructInfo{{VarName: "cookie"}},
+		Request:   &InlineStructInfo{VarName: "request"},
+		Responses: make(map[string]*InlineStructInfo),
+	}
+	info.Responses["200"] = &InlineStructInfo{VarName: "resp200", StatusCode: "200"}
+	info.Responses["404"] = &InlineStructInfo{VarName: "resp404", StatusCode: "404"}
+
+	if len(info.Query) != 1 || info.Query[0].VarName != "query" {
+		t.Errorf("Query[0].VarName = %q, want %q", info.Query[0].VarName, "query")
+	}
+	if len(info.Path) != 1 || info.Path[0].VarName != "path" {
+		t.Errorf("Path[0].VarName = %q, want %q", info.Path[0].VarName, "path")
+	}
+	if len(info.Header) != 1 || info.Header[0].VarName != "header" {
+		t.Errorf("Header[0].VarName = %q, want %q", info.Header[0].VarName, "header")
+	}
+	if len(info.Cookie) != 1 || info.Cookie[0].VarName != "cookie" {
+		t.Errorf("Cookie[0].VarName = %q, want %q", info.Cookie[0].VarName, "cookie")
+	}
+	if info.Request.VarName != "request" {
+		t.Errorf("Request.VarName = %q, want %q", info.Request.VarName, "request")
+	}
+	if len(info.Responses) != 2 {
+		t.Errorf("len(Responses) = %d, want %d", len(info.Responses), 2)
+	}
+	if info.Responses["200"].StatusCode != "200" {
+		t.Errorf("Responses[200].StatusCode = %q, want %q", info.Responses["200"].StatusCode, "200")
+	}
+}
+
+func TestInlineStructInfo_Fields(t *testing.T) {
+	// Test that the InlineStructInfo struct is correctly initialized
+	info := &InlineStructInfo{
+		VarName:       "testVar",
+		Annotation:    "query",
+		StatusCode:    "",
+		FieldComments: make(map[string]*FieldComments),
+	}
+	info.FieldComments["ID"] = &FieldComments{Comment: &CommentBlock{Lines: []string{"@field { @description User ID }"}}}
+
+	if info.VarName != "testVar" {
+		t.Errorf("VarName = %q, want %q", info.VarName, "testVar")
+	}
+	if info.Annotation != "query" {
+		t.Errorf("Annotation = %q, want %q", info.Annotation, "query")
+	}
+	if len(info.FieldComments) != 1 {
+		t.Errorf("len(FieldComments) = %d, want %d", len(info.FieldComments), 1)
+	}
+}

@@ -63,7 +63,7 @@ func TestParseBracedBlock(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			content, err := ParseBracedBlock(tt.lines)
+			content, err := ParseBracedBlock(tt.lines, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ParseBracedBlock() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -281,13 +281,77 @@ func TestParseBracedBlock_PathParams(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			content, err := ParseBracedBlock(tt.lines)
+			content, err := ParseBracedBlock(tt.lines, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ParseBracedBlock() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !tt.wantErr && len(content) != tt.expectedLines {
 				t.Errorf("ParseBracedBlock() returned %d lines, want %d. Content: %v", len(content), tt.expectedLines, content)
+			}
+		})
+	}
+}
+
+// TestParseBracedBlock_RawValueBraces pins the rule that a raw value's braces
+// are text. @pattern holds a regex, where {2} is a quantifier and } may appear
+// unpaired; counting those as structure closed the block early and dropped
+// everything after it, silently.
+//
+// The two forms are checked against each other on purpose. They used to be
+// parsed by different code and gave different answers to the same input.
+func TestParseBracedBlock_RawValueBraces(t *testing.T) {
+	field := annotation.Schema.GetChild("@field")
+
+	tests := []struct {
+		name    string
+		lines   []string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name:  "unpaired brace in regex, one line",
+			lines: []string{"@field { @pattern ^a}b$ }"},
+			want:  []string{"@pattern ^a}b$"},
+		},
+		{
+			name:  "unpaired brace in regex, block",
+			lines: []string{"@field {", "@pattern ^a}b$", "}"},
+			want:  []string{"@pattern ^a}b$"},
+		},
+		{
+			name:  "quantifier, one line",
+			lines: []string{"@field { @description Country code @pattern ^[A-Z]{2}$ }"},
+			want:  []string{"@description Country code @pattern ^[A-Z]{2}$"},
+		},
+		{
+			name:  "quantifier, block",
+			lines: []string{"@field {", "@description Locale", "@pattern ^[a-z]{2}(-[A-Z]{2})?$", "}"},
+			want:  []string{"@description Locale", "@pattern ^[a-z]{2}(-[A-Z]{2})?$"},
+		},
+		{
+			name:    "a block that really is unbalanced still reports",
+			lines:   []string{"@field {", "@description Test"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content, err := ParseBracedBlock(tt.lines, field)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseBracedBlock() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if len(content) != len(tt.want) {
+				t.Fatalf("ParseBracedBlock() = %q, want %q", content, tt.want)
+			}
+			for i := range tt.want {
+				if content[i] != tt.want[i] {
+					t.Errorf("line %d = %q, want %q", i, content[i], tt.want[i])
+				}
 			}
 		})
 	}
@@ -709,4 +773,248 @@ func TestParseAnnotationBlock_MultilineTermination(t *testing.T) {
 			t.Error("@deprecated after an escaped line was swallowed")
 		}
 	})
+}
+
+// The tests below cover a block written on one line. They used to call a second
+// entry point of their own, which extracted the block by a different rule than
+// the multi-line path and disagreed with it. Both forms now go through
+// ParseAnnotationBlock.
+
+// parseOneLine parses a block written on a single line, failing the test if it
+// does not parse.
+func parseOneLine(t *testing.T, line, name string, node *annotation.Def) *ParsedAnnotation {
+	t.Helper()
+	parsed, err := ParseAnnotationBlock([]string{line}, name, node)
+	if err != nil {
+		t.Fatalf("ParseAnnotationBlock(%q) error = %v", line, err)
+	}
+	if parsed == nil {
+		t.Fatalf("ParseAnnotationBlock(%q) returned nil without an error", line)
+	}
+	return parsed
+}
+
+func TestParseAnnotationBlock_OneLine(t *testing.T) {
+	fieldNode := annotation.Schema.GetChild("@field")
+
+	tests := []struct {
+		name    string
+		line    string
+		wantErr bool
+	}{
+		{name: "simple", line: "@field { @description Test }"},
+		{name: "several children", line: "@field { @description User email @format email @example test }"},
+		{name: "empty block", line: "@field { }"},
+		{name: "child that does not belong here", line: "@field { @with oauth { @scope read } }", wantErr: true},
+		// A bare @field is not an error. The block is optional, and a field
+		// that opens none simply carries no annotation.
+		{name: "no block at all", line: "@field"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed, err := ParseAnnotationBlock([]string{tt.line}, "@field", fieldNode)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseAnnotationBlock() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && parsed == nil {
+				t.Error("ParseAnnotationBlock() returned nil without an error")
+			}
+		})
+	}
+}
+
+func TestParseAnnotationBlock_OneLineValues(t *testing.T) {
+	fieldNode := annotation.Schema.GetChild("@field")
+	parsed := parseOneLine(t, "@field { @description User email @format email @example test }", "@field", fieldNode)
+
+	for _, tt := range []struct{ child, want string }{
+		{"@description", "User email"},
+		{"@format", "email"},
+		{"@example", "test"},
+	} {
+		if got := parsed.GetChildValue(tt.child); got != tt.want {
+			t.Errorf("GetChildValue(%s) = %q, want %q", tt.child, got, tt.want)
+		}
+	}
+}
+
+func TestParseAnnotationBlock_OneLineFlag(t *testing.T) {
+	fieldNode := annotation.Schema.GetChild("@field")
+	parsed := parseOneLine(t, "@field { @description Test @deprecated }", "@field", fieldNode)
+
+	deprecated := parsed.Children["@deprecated"]
+	if deprecated == nil {
+		t.Fatal("@deprecated child not found")
+	}
+	if !deprecated.IsFlag {
+		t.Error("@deprecated should be a flag annotation")
+	}
+}
+
+func TestParseAnnotationBlock_OneLineNestedBlockRejected(t *testing.T) {
+	// A child that opens its own block cannot be written on one line: its
+	// braces would be indistinguishable from the parent's.
+	endpointNode := annotation.Schema.GetChild("@endpoint")
+	line := "@endpoint GET /users { @response 200 { @body User } }"
+
+	if _, err := ParseAnnotationBlock([]string{line}, "@endpoint", endpointNode); err == nil {
+		t.Error("a nested block written on one line should be rejected")
+	}
+}
+
+func TestParseAnnotationBlock_OneLineBlockChildren(t *testing.T) {
+	apiNode := annotation.Schema.GetChild("@api")
+	parsed := parseOneLine(t, "@api { @title Test API @version 1.0.0 }", "@api", apiNode)
+
+	if got := parsed.GetChildValue("@title"); got != "Test API" {
+		t.Errorf("@title = %q, want %q", got, "Test API")
+	}
+	if got := parsed.GetChildValue("@version"); got != "1.0.0" {
+		t.Errorf("@version = %q, want %q", got, "1.0.0")
+	}
+
+	contactNode := apiNode.GetChild("@contact")
+	contact := parseOneLine(t, "@contact { @name API Team @url https://example.com }", "@contact", contactNode)
+	if !contact.HasChild("@name") || !contact.HasChild("@url") {
+		t.Error("@contact should carry both @name and @url")
+	}
+}
+
+func TestParseAnnotationBlock_OneLineRepeatable(t *testing.T) {
+	securityNode := annotation.Schema.GetChild("@api").GetChild("@security")
+	parsed := parseOneLine(t, "@security { @with apiKey }", "@security", securityNode)
+
+	withChildren := parsed.RepeatedChildren["@with"]
+	if len(withChildren) != 1 {
+		t.Fatalf("expected 1 @with child, got %d", len(withChildren))
+	}
+	if withChildren[0].Value != "apiKey" {
+		t.Errorf("@with value = %q, want %q", withChildren[0].Value, "apiKey")
+	}
+}
+
+func TestParseAnnotationBlock_OneLineEscapes(t *testing.T) {
+	fieldNode := annotation.Schema.GetChild("@field")
+
+	tests := []struct {
+		name  string
+		line  string
+		child string
+		want  string
+	}{
+		{
+			name:  "raw braces in pattern pass through",
+			line:  `@field { @pattern ^[A-Z]{2}$ }`,
+			child: "@pattern",
+			want:  "^[A-Z]{2}$",
+		},
+		{
+			name:  "quantifier range",
+			line:  `@field { @pattern ^[a-z]{3,5}$ }`,
+			child: "@pattern",
+			want:  "^[a-z]{3,5}$",
+		},
+		{
+			name:  "escaped @ in description",
+			line:  `@field { @description Email uses \@ symbol }`,
+			child: "@description",
+			want:  "Email uses @ symbol",
+		},
+		{
+			name:  "escaped backslash",
+			line:  `@field { @example path\\to\\file }`,
+			child: "@example",
+			want:  `path\to\file`,
+		},
+		{
+			name:  "JSON example with escaped braces",
+			line:  `@field { @example \{"key": "value"\} }`,
+			child: "@example",
+			want:  `{"key": "value"}`,
+		},
+		{
+			name:  "email in example",
+			line:  `@field { @example admin\@example.com }`,
+			child: "@example",
+			want:  "admin@example.com",
+		},
+		{
+			name:  "mixed escapes",
+			line:  `@field { @description Use \@ and \{ \} for escaping }`,
+			child: "@description",
+			want:  "Use @ and { } for escaping",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed := parseOneLine(t, tt.line, "@field", fieldNode)
+			if got := parsed.GetChildValue(tt.child); got != tt.want {
+				t.Errorf("GetChildValue(%s) = %q, want %q", tt.child, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseAnnotationBlock_OneLineRawPatternWithSibling(t *testing.T) {
+	// A raw value's braces must not end the block early, leaving the sibling
+	// after it unparsed.
+	fieldNode := annotation.Schema.GetChild("@field")
+	parsed := parseOneLine(t, `@field { @pattern ^[a-fA-F0-9]{64}$ @description SHA-256 digest }`, "@field", fieldNode)
+
+	if got := parsed.GetChildValue("@pattern"); got != "^[a-fA-F0-9]{64}$" {
+		t.Errorf("@pattern = %q, want %q", got, "^[a-fA-F0-9]{64}$")
+	}
+	if got := parsed.GetChildValue("@description"); got != "SHA-256 digest" {
+		t.Errorf("@description = %q, want %q", got, "SHA-256 digest")
+	}
+}
+
+func TestParseAnnotation_RejectsUnescapedSpecials(t *testing.T) {
+	fieldNode := annotation.Schema.GetChild("@field")
+	apiNode := annotation.Schema.GetChild("@api")
+
+	tests := []struct {
+		name  string
+		lines []string
+		node  *annotation.Def
+		root  string
+		want  string // substring expected in the error
+	}{
+		{
+			name: "unescaped @ in block @email value",
+			lines: []string{
+				"@api {",
+				"  @title T",
+				"  @version 1",
+				"  @contact {",
+				"    @email user@example.com",
+				"  }",
+				"}",
+			},
+			node: apiNode,
+			root: "@api",
+			want: "unescaped '@' in @email",
+		},
+		{
+			name:  "unescaped { in one-line @description",
+			lines: []string{`@field { @description Use {placeholder} here }`},
+			node:  fieldNode,
+			root:  "@field",
+			want:  "unescaped '{' in @description",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseAnnotationBlock(tt.lines, tt.root, tt.node)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tt.want)
+			}
+		})
+	}
 }

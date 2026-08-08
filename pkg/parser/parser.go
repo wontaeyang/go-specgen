@@ -209,13 +209,9 @@ func parseFieldAnnotation(fieldName string, comment *CommentBlock, context strin
 	lines := comment.GetAnnotationLines()
 	fieldNode := annotation.Schema.GetChild("@field")
 
-	var parsed *ParsedAnnotation
-	var err error
-	if IsInlineFormat(lines) {
-		parsed, err = ParseInlineAnnotation(lines[0], "@field", fieldNode)
-	} else {
-		parsed, err = ParseAnnotationBlock(lines, "@field", fieldNode)
-	}
+	// One entry point, whichever form the user wrote. ParseAnnotationBlock
+	// decides inline vs block itself, from the source it was handed.
+	parsed, err := ParseAnnotationBlock(lines, "@field", fieldNode)
 	if err != nil {
 		return nil, &specerr.Error{Path: path, Message: err.Error()}
 	}

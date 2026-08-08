@@ -1,0 +1,1 @@
+validate: @endpoint[GET /widgets]: GET /widgets is already declared by ListWidgets; two handlers cannot share one route

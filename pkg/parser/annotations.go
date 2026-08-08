@@ -39,46 +39,69 @@ type ParsedAnnotation struct {
 // Path params like {id} have no space before the brace.
 // Returns the position of '{' or -1 if no block delimiter found.
 func findBlockOpener(line string) int {
-	for i, b := range unescapedBytes(line) {
-		if (b == ' ' || b == '\t') && i+1 < len(line) && line[i+1] == '{' {
-			return i + 1
+	for c := range scan(line) {
+		if c.Escaped {
+			continue
+		}
+		if c.Val != ' ' && c.Val != '\t' {
+			continue
+		}
+		// The brace is read from the raw line on purpose: an escaped \{ leaves
+		// a backslash here, so it is not a block opener.
+		if c.Pos+1 < len(line) && line[c.Pos+1] == '{' {
+			return c.Pos + 1
 		}
 	}
 	return -1
 }
 
-// countBracesFromPosition counts unescaped braces starting from a given position.
-// Returns the final depth.
-func countBracesFromPosition(line string, startPos int) int {
-	depth := 0
-	for _, b := range unescapedBytes(line[startPos:]) {
-		switch b {
-		case '{':
-			depth++
-		case '}':
-			depth--
-		}
+// openerDepth returns the brace depth contributed by a block's opening line,
+// counting from the opener at startPos.
+//
+// Only the braces before the first child annotation are structure. Everything
+// from that annotation on is its text, and a value is free to contain braces
+// that close nothing — which is why counting the whole line is wrong.
+func openerDepth(line string, startPos int) int {
+	head := line[startPos:]
+	if _, at := FindUnescaped(head, "@"); at >= 0 {
+		head = head[:at]
 	}
-	return depth
+	return CountUnescapedBraces(head)
 }
 
-// ParseBracedBlock extracts content within braces { }
-// Returns the content lines and any error.
-// Uses position-based detection: block delimiter is " {" (space + brace).
-// This allows path parameters like {id} to coexist with block delimiters.
-func ParseBracedBlock(lines []string) ([]string, error) {
+// startsWithRawValue reports whether line begins with a child of node whose
+// value is raw.
+//
+// A raw value is a grammar of its own — @pattern holds a regex, where {2} is a
+// quantifier and } may appear unpaired. Those braces are text, so a line
+// carrying one must not move the block's depth.
+func startsWithRawValue(line string, node *annotation.Def) bool {
+	if node == nil {
+		return false
+	}
+	child := node.GetChild(extractAnnotationName(line))
+	return child != nil && child.RawValue
+}
+
+// ParseBracedBlock extracts the content of the { } block that opens somewhere in
+// lines. Returns nil content when there is no block at all — a marker or a flag.
+//
+// The opener is found by position: a brace preceded by a space or tab. That is
+// what keeps a path parameter apart from a block, since "/users/{id}" has no
+// space before its brace and "@endpoint GET /users/{id} {" does.
+//
+// node is the annotation whose block this is. It is needed because finding the
+// closing brace is not a counting problem: a child may hold a raw value with
+// braces of its own. Both rules below exist for that reason.
+func ParseBracedBlock(lines []string, node *annotation.Def) ([]string, error) {
 	if len(lines) == 0 {
 		return nil, nil
 	}
 
-	// Find the line with block opener (" {" pattern)
-	openLineIndex := -1
-	openBracePos := -1
+	openLineIndex, openBracePos := -1, -1
 	for i, line := range lines {
-		pos := findBlockOpener(line)
-		if pos >= 0 {
-			openLineIndex = i
-			openBracePos = pos
+		if pos := findBlockOpener(line); pos >= 0 {
+			openLineIndex, openBracePos = i, pos
 			break
 		}
 	}
@@ -88,58 +111,55 @@ func ParseBracedBlock(lines []string) ([]string, error) {
 		return nil, nil
 	}
 
-	// Extract content between braces
+	first := lines[openLineIndex]
+
+	// A block that closes on its opening line ends at the last unescaped brace
+	// of that line, whatever the depth in between says. "@field { @pattern
+	// ^a}b$ }" is one block holding one regex, not a block that closed early.
+	if closePos := LastUnescaped(first, '}'); closePos > openBracePos {
+		content := strings.TrimSpace(first[openBracePos+1 : closePos])
+		if content == "" {
+			return nil, nil
+		}
+		return []string{content}, nil
+	}
+
+	// A multi-line block. Depth is counted from here on, skipping the lines
+	// whose value is raw, so a regex on its own line closes nothing.
 	var content []string
-	braceDepth := 0
+	braceDepth := openerDepth(first, openBracePos)
 
-	for i := openLineIndex; i < len(lines); i++ {
-		line := lines[i]
-		originalLine := line
+	if rest := strings.TrimSpace(first[openBracePos+1:]); rest != "" {
+		content = append(content, rest)
+	}
 
-		// For the first line, only count braces from the block opener position
-		if i == openLineIndex {
-			braceDepth += countBracesFromPosition(line, openBracePos)
-			// Take everything after the opening brace
-			line = line[openBracePos+1:]
-		} else {
-			// For subsequent lines, count all braces
-			lineDepth := CountUnescapedBraces(line)
-			braceDepth += lineDepth
+	for i := openLineIndex + 1; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+
+		if !startsWithRawValue(line, node) {
+			braceDepth += CountUnescapedBraces(line)
 		}
 
-		line = strings.TrimSpace(line)
-
-		// Check if we've closed all braces
+		// The closing line is the block's, not its content's.
 		if braceDepth == 0 {
-			// For inline blocks like "{ @desc foo }", extract content before closing brace
-			if i == openLineIndex && line != "" {
-				// Remove the trailing } if present
-				line = strings.TrimSuffix(line, "}")
-				line = strings.TrimSpace(line)
-				if line != "" {
-					content = append(content, line)
-				}
+			// A line that closes the block while carrying other text is almost
+			// always a value with an unescaped brace in it. Returning here
+			// would drop that line and every line under it, and say nothing.
+			if line != "}" {
+				return nil, fmt.Errorf("%q closes the block but carries other text; write \\} for a literal brace in a value", line)
 			}
 			return content, nil
 		}
+		if braceDepth < 0 {
+			return nil, fmt.Errorf("unbalanced braces at line: %s", lines[i])
+		}
 
-		// Add non-empty lines to content
 		if line != "" {
 			content = append(content, line)
 		}
-
-		// Safety check
-		if braceDepth < 0 {
-			return nil, fmt.Errorf("unbalanced braces at line: %s", originalLine)
-		}
 	}
 
-	// If we get here, braces are unbalanced
-	if braceDepth != 0 {
-		return nil, fmt.Errorf("unbalanced braces: depth=%d", braceDepth)
-	}
-
-	return content, nil
+	return nil, fmt.Errorf("unbalanced braces: depth=%d", braceDepth)
 }
 
 // ExtractMetadata extracts metadata from the opening line of an annotation
@@ -207,9 +227,7 @@ func ParseAnnotationBlock(lines []string, annotationName string, node *annotatio
 	if node.Kind == annotation.Value {
 		if len(lines) > 0 {
 			// Extract value (everything after annotation name)
-			firstLine := lines[0]
-			value := strings.TrimPrefix(firstLine, annotationName)
-			value = strings.TrimSpace(value)
+			value := strings.TrimSpace(strings.TrimPrefix(lines[0], annotationName))
 
 			// Append continuation lines only for annotations that support multiline
 			if node.SupportsMultiline {
@@ -234,9 +252,7 @@ func ParseAnnotationBlock(lines []string, annotationName string, node *annotatio
 	if node.Kind == annotation.Reference {
 		if len(lines) > 0 {
 			// Extract reference name(s) - can be comma-separated
-			firstLine := lines[0]
-			value := strings.TrimPrefix(firstLine, annotationName)
-			value = strings.TrimSpace(value)
+			value := strings.TrimSpace(strings.TrimPrefix(lines[0], annotationName))
 			resolved, err := resolveValue(value, node, annotationName)
 			if err != nil {
 				return nil, err
@@ -249,7 +265,7 @@ func ParseAnnotationBlock(lines []string, annotationName string, node *annotatio
 	// Handle block annotations and sub-commands
 	if node.Kind == annotation.Block || node.Kind == annotation.SubCommand {
 		// Extract content within braces
-		content, err := ParseBracedBlock(lines)
+		content, err := ParseBracedBlock(lines, node)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse %s: %w", annotationName, err)
 		}
@@ -266,13 +282,16 @@ func ParseAnnotationBlock(lines []string, annotationName string, node *annotatio
 		// format (opener and closer on the same line). Multiple input lines is a
 		// multi-line block, regardless of whether the inner content collapses to
 		// a single line.
+		// A child's error is returned as it stands. It already names the
+		// annotation it is about, and the caller prefixes the declaration, so
+		// wrapping it here only repeats the annotation a third time.
 		if len(lines) == 1 {
 			if err := parseInlineChildren(content[0], node, result); err != nil {
-				return nil, fmt.Errorf("failed to parse %s children: %w", annotationName, err)
+				return nil, err
 			}
 		} else {
 			if err := parseChildren(content, node, result); err != nil {
-				return nil, fmt.Errorf("failed to parse %s children: %w", annotationName, err)
+				return nil, err
 			}
 		}
 	}
@@ -320,21 +339,29 @@ func parseChildren(lines []string, parentNode *annotation.Def, result *ParsedAnn
 		annotationLines := []string{line}
 		i++
 
-		// Check if this annotation has a block delimiter (" {" pattern)
+		// How far this child reaches. The three cases are a block that spans
+		// lines, a block that opened and closed on this one, and a value that
+		// continues onto the next lines.
 		blockPos := findBlockOpener(line)
-		if blockPos >= 0 {
-			// Count braces starting from block position
-			braceDepth := countBracesFromPosition(line, blockPos)
+		switch {
+		case blockPos >= 0 && LastUnescaped(line, '}') <= blockPos:
+			braceDepth := openerDepth(line, blockPos)
 
 			for i < len(lines) && braceDepth > 0 {
 				nextLine := lines[i]
 				annotationLines = append(annotationLines, nextLine)
 
-				lineDepth := CountUnescapedBraces(nextLine)
-				braceDepth += lineDepth
+				// Same rule as ParseBracedBlock: a raw value's braces are text.
+				if !startsWithRawValue(nextLine, childNode) {
+					braceDepth += CountUnescapedBraces(nextLine)
+				}
 				i++
 			}
-		} else if childNode.SupportsMultiline {
+
+		case blockPos >= 0:
+			// Opened and closed on this line; there is nothing to collect.
+
+		case childNode.SupportsMultiline:
 			// No braces, collect continuation lines only for multiline annotations
 			for i < len(lines) {
 				nextLine := lines[i]
@@ -379,6 +406,82 @@ func parseChildren(lines []string, parentNode *annotation.Def, result *ParsedAnn
 			}
 			result.Children[annotationName] = parsed
 		}
+	}
+
+	return nil
+}
+
+// parseInlineChildren parses the children of a block written on one line:
+// "@description User email @format email @example test\@example.com".
+//
+// It is parseChildren's sibling: same job, different separator. A block written
+// on one line separates its children by @ because it cannot separate them by
+// newline. Which of the two runs is decided in ParseAnnotationBlock and nowhere
+// else — there used to be a second entry point that decided it again, by a
+// different rule, and the two disagreed.
+func parseInlineChildren(content string, parentNode *annotation.Def, result *ParsedAnnotation) error {
+	if content == "" {
+		return nil
+	}
+
+	for i, part := range SplitOnUnescapedAt(content) {
+		// The text before the first @ is empty for well-formed content.
+		if i == 0 && strings.TrimSpace(part) == "" {
+			continue
+		}
+
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		// Extract annotation name and value. No space means a flag.
+		annotationName, value := "@"+part, ""
+		if spaceIdx := strings.IndexAny(part, " \t"); spaceIdx >= 0 {
+			annotationName = "@" + part[:spaceIdx]
+			value = strings.TrimSpace(part[spaceIdx+1:])
+		}
+
+		childNode := parentNode.GetChild(annotationName)
+		if childNode == nil {
+			return fmt.Errorf("unknown annotation %s in %s", annotationName, parentNode.Name)
+		}
+
+		// A child that opens its own block cannot be written inline: its braces
+		// would be indistinguishable from the parent's.
+		if childNode.Kind == annotation.SubCommand && len(childNode.Children) > 0 {
+			if ContainsUnescapedBrace(value) {
+				return fmt.Errorf("sub-commands with sub-blocks cannot be inlined: %s", annotationName)
+			}
+		}
+
+		resolvedValue, err := resolveValue(value, childNode, annotationName)
+		if err != nil {
+			return err
+		}
+
+		parsed := &ParsedAnnotation{
+			Name:             annotationName,
+			Value:            resolvedValue,
+			IsFlag:           childNode.Kind == annotation.Flag,
+			Children:         make(map[string]*ParsedAnnotation),
+			RepeatedChildren: make(map[string][]*ParsedAnnotation),
+		}
+		if childNode.HasMetadata {
+			parsed.Metadata = resolvedValue
+		}
+
+		if childNode.Repeatable {
+			result.RepeatedChildren[annotationName] = append(
+				result.RepeatedChildren[annotationName],
+				parsed,
+			)
+			continue
+		}
+		if _, exists := result.Children[annotationName]; exists {
+			return fmt.Errorf("%s appears multiple times but is not repeatable", annotationName)
+		}
+		result.Children[annotationName] = parsed
 	}
 
 	return nil

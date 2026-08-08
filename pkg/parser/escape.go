@@ -5,16 +5,32 @@ import (
 	"strings"
 )
 
-// Escape sequence support for annotation values.
-// Supported escapes:
-//   \{ → {
-//   \} → }
-//   \@ → @
-//   \\ → \
+// This file is the escape engine. Annotation text supports four escapes:
+//
+//	\{ → {   \} → }   \@ → @   \\ → \
+//
+// Every operation that has to tell structure from text — brace counting, @
+// splitting, unescaping, special-character validation, block-opener detection —
+// goes through scan, so all of them agree on what is escaped and what is not.
+// A second opinion here is how the same annotation ends up parsed two ways.
+
+// char is one character of annotation text as the engine sees it.
+type char struct {
+	// Pos is the byte index in the scanned string. For an escape sequence it
+	// is the index of the backslash.
+	Pos int
+
+	// Val is the character value: for an escape sequence, the character the
+	// sequence stands for.
+	Val byte
+
+	// Escaped reports that Val arrived as a two-byte escape sequence, and so is
+	// literal text rather than structure.
+	Escaped bool
+}
 
 // isEscapeAt reports whether content[i:i+2] is a recognized escape sequence
-// (\{, \}, \@, \\). Callers that respect escapes should advance by 2 when
-// this returns true.
+// (\{, \}, \@, \\).
 func isEscapeAt(content string, i int) bool {
 	if i+1 >= len(content) || content[i] != '\\' {
 		return false
@@ -23,19 +39,22 @@ func isEscapeAt(content string, i int) bool {
 	return next == '{' || next == '}' || next == '@' || next == '\\'
 }
 
-// unescapedBytes iterates content yielding only the bytes that are NOT part
-// of an escape sequence. Escape pairs (\{, \}, \@, \\) are consumed atomically
-// and skipped — the iterator never yields the backslash or its successor.
-// Yielded positions are absolute indices in content.
-func unescapedBytes(content string) iter.Seq2[int, byte] {
-	return func(yield func(int, byte) bool) {
-		i := 0
-		for i < len(content) {
+// scan walks content left to right, yielding one char per source character with
+// escape sequences collapsed into the single character they stand for.
+//
+// A backslash that does not begin a recognized sequence is yielded as itself,
+// so a Windows path or a regex escape such as \d survives untouched.
+func scan(content string) iter.Seq[char] {
+	return func(yield func(char) bool) {
+		for i := 0; i < len(content); {
 			if isEscapeAt(content, i) {
+				if !yield(char{Pos: i, Val: content[i+1], Escaped: true}) {
+					return
+				}
 				i += 2
 				continue
 			}
-			if !yield(i, content[i]) {
+			if !yield(char{Pos: i, Val: content[i], Escaped: false}) {
 				return
 			}
 			i++
@@ -43,25 +62,34 @@ func unescapedBytes(content string) iter.Seq2[int, byte] {
 	}
 }
 
-// UnescapeValue converts escape sequences to literal characters.
-// Order matters: handle \\ first to avoid double-unescaping.
+// UnescapeValue converts escape sequences to the characters they stand for.
+//
+// It reads the same left-to-right scan as everything else rather than
+// substituting one sequence at a time, which needed a placeholder to keep \\
+// from being unescaped twice and could not agree with the scanners by
+// construction.
 func UnescapeValue(value string) string {
-	// First replace \\ with a placeholder to avoid issues with other escapes
-	const backslashPlaceholder = "\x00BS\x00"
-	result := strings.ReplaceAll(value, "\\\\", backslashPlaceholder)
-	result = strings.ReplaceAll(result, "\\{", "{")
-	result = strings.ReplaceAll(result, "\\}", "}")
-	result = strings.ReplaceAll(result, "\\@", "@")
-	result = strings.ReplaceAll(result, backslashPlaceholder, "\\")
-	return result
+	if !strings.ContainsRune(value, '\\') {
+		return value
+	}
+
+	var b strings.Builder
+	b.Grow(len(value))
+	for c := range scan(value) {
+		b.WriteByte(c.Val)
+	}
+	return b.String()
 }
 
 // CountUnescapedBraces returns the brace depth of content, ignoring escaped braces.
 // Zero means balanced; positive means more openers than closers.
 func CountUnescapedBraces(content string) int {
 	depth := 0
-	for _, b := range unescapedBytes(content) {
-		switch b {
+	for c := range scan(content) {
+		if c.Escaped {
+			continue
+		}
+		switch c.Val {
 		case '{':
 			depth++
 		case '}':
@@ -74,28 +102,47 @@ func CountUnescapedBraces(content string) int {
 // FindUnescaped returns the first unescaped byte in content that appears in
 // targets, and its index. Returns (0, -1) if none found.
 func FindUnescaped(content, targets string) (byte, int) {
-	for i, b := range unescapedBytes(content) {
-		if strings.IndexByte(targets, b) >= 0 {
-			return b, i
+	for c := range scan(content) {
+		if c.Escaped {
+			continue
+		}
+		if strings.IndexByte(targets, c.Val) >= 0 {
+			return c.Val, c.Pos
 		}
 	}
 	return 0, -1
 }
 
-// SplitOnUnescapedAt splits content at every @ that isn't part of an escape
-// sequence. Escapes (\@, \\, \{, \}) are consumed atomically left-to-right,
-// matching the grammar used by UnescapeValue and FindUnescapedSpecial.
+// LastUnescaped returns the index of the last unescaped occurrence of target in
+// content, or -1 when there is none.
+//
+// It is how a block written on one line finds its closing brace. Counting
+// cannot: a RawValue child such as @pattern may carry braces of its own, and
+// only the final brace on the line can be the one that closes the block.
+func LastUnescaped(content string, target byte) int {
+	idx := -1
+	for c := range scan(content) {
+		if !c.Escaped && c.Val == target {
+			idx = c.Pos
+		}
+	}
+	return idx
+}
+
+// SplitOnUnescapedAt splits content at every unescaped @. This is how the
+// children of a block written on one line are separated:
+// "@description Email @format email".
 func SplitOnUnescapedAt(content string) []string {
 	var parts []string
 	start := 0
-	for i, b := range unescapedBytes(content) {
-		if b == '@' {
-			parts = append(parts, content[start:i])
-			start = i + 1
+	for c := range scan(content) {
+		if c.Escaped || c.Val != '@' {
+			continue
 		}
+		parts = append(parts, content[start:c.Pos])
+		start = c.Pos + 1
 	}
-	parts = append(parts, content[start:])
-	return parts
+	return append(parts, content[start:])
 }
 
 // ContainsUnescapedBrace checks if string has unescaped { or }.

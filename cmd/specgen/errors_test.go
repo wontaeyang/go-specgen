@@ -52,10 +52,12 @@ func TestErrorFixtures(t *testing.T) {
 	}
 }
 
-// pkgDir builds a package path for buildSpec. The "./" prefix matters:
-// packages.Load reads an unprefixed relative path as an import path, not a
-// directory. examples/ escapes this because "../../examples/x" already starts
-// with a dot.
+// pkgDir builds a package path for buildSpec.
+//
+// The "./" prefix is no longer required — ExtractComments adds one to any bare
+// relative path, since packages.Load would otherwise read it as an import path.
+// It stays because the prefix is what the fixture messages are normalized
+// against, and a package path that says it is a directory reads better here.
 func pkgDir(root, name string) string {
 	return "./" + filepath.Join(root, name)
 }

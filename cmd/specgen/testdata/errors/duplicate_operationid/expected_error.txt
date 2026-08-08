@@ -1,0 +1,1 @@
+validate: @endpoint[GET /widgets]: @operationID listWidgets is already used by ListGadgets; it must be unique across the document

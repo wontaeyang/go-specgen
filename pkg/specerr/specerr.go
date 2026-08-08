@@ -9,6 +9,14 @@
 //
 // Nothing here knows about annotations, Go types, or OpenAPI. It is the shape
 // of an error report and nothing else.
+//
+// There is deliberately no source position. Only the parser could supply one
+// cheaply — it is the only stage still holding comment text — and a position on
+// parse errors alone would make the three stages report differently for no
+// reason the reader can see. Levelling that up means carrying a position on
+// every IR type through to the validator, which is a lot of structure to add
+// for a prefix. The path is what makes a message actionable, and every stage
+// can produce one.
 package specerr
 
 import (

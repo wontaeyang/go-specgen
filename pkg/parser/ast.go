@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"path/filepath"
 	"strings"
 
 	"github.com/wontaeyang/go-specgen/pkg/annotation"
@@ -191,6 +192,13 @@ type TypeDeclInfo struct {
 
 // ExtractComments extracts all comment blocks from a Go package
 func ExtractComments(packagePath string) (*PackageComments, error) {
+	// A bare relative path is read by go/packages as an import path, not a
+	// directory: "examples/petstore" is looked for in std and not found. The
+	// caller means a directory, so say so.
+	if !filepath.IsAbs(packagePath) && !strings.HasPrefix(packagePath, ".") {
+		packagePath = "./" + packagePath
+	}
+
 	// Load the package with documentation
 	cfg := &packages.Config{
 		Mode: packages.NeedName |

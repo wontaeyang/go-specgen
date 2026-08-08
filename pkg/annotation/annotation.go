@@ -110,22 +110,6 @@ func (n *Def) CanBeEmpty() bool {
 	return true
 }
 
-// HasBlockChildren returns true if any child of this node is itself a block-producing
-// annotation (Block or SubCommand with children). When false, braces inside
-// a value (e.g. a regex quantifier like {64}) cannot be confused with a nested block,
-// so nested-brace validation can be skipped.
-func (n *Def) HasBlockChildren() bool {
-	for _, child := range n.Children {
-		if child.Kind == Block {
-			return true
-		}
-		if child.Kind == SubCommand && len(child.Children) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // InitializeParents recursively sets parent references in the grammar tree
 func (n *Def) InitializeParents() {
 	if n.Children == nil {
