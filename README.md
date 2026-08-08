@@ -661,7 +661,7 @@ All block annotations use curly braces `{ }` for grouping. Blocks can be written
 |--------|--------|----------|
 | `\{`   | `{`    | Regex quantifiers, JSON examples |
 | `\}`   | `}`    | Regex quantifiers, JSON examples |
-| `\@`   | `@`    | Email addresses |
+| `\@`   | `@`    | Email addresses; a description line that starts with `@` |
 | `\\`   | `\`    | Literal backslash |
 
 ```go
@@ -683,6 +683,20 @@ Only `@description` supports multi-line values:
 //   And this line too.
 // }
 ```
+
+The value ends at the next line beginning with an unescaped `@`, whether or not
+specgen recognizes the name. A line of prose that starts with `@` escapes it:
+
+```go
+// @field {
+//   @description Questions go to
+//   \@support, not the on-call rota.
+// }
+```
+
+Without the escape, that line is an annotation named `@support`, and specgen
+reports it as unknown. That is deliberate: the alternative is reading a
+misspelled annotation as prose and publishing it in the description.
 
 ### Parameter Rules
 
@@ -743,7 +757,28 @@ specgen fails rather than emitting a spec it cannot stand behind. The cases:
 - the same parameter name twice in the same location
 - constraints that contradict each other, or apply to the wrong type
 
-Validation errors accumulate, so one run reports all of them.
+Every stage accumulates, so one run reports every mistake it can reach rather
+than stopping at the first:
+
+```
+$ specgen -package ./api -yaml openapi.yaml
+Error: parse: 4 parse errors:
+  1. @endpoint[ListOrders]: failed to parse @endpoint children: unknown annotation @produces in @endpoint
+  2. @field[Customer.Tier]: unknown annotation @oneOf in @field
+  3. @field[Order.ItemCount]: unknown annotation @desc in @field
+  4. @field[Order.TotalCents]: unknown annotation @multipleOf in @field
+```
+
+Each error names the declaration it came from — `@schema[Order].ItemCount`,
+`@query[OrderFilter].TenantID`, `@endpoint[GET /orders]` — in the annotation
+vocabulary rather than Go's.
+
+Two things still end a run early. Inside a single annotation block, parsing stops
+at the first name it does not recognize — `{ @desc Line items @min 1 }` reports
+`@desc`, and `@min` turns up on the next run. And stage boundaries hold: parse,
+then resolve, then validate. The resolver never sees a package that failed to
+parse, so a run reports everything wrong at one stage rather than across all
+three.
 
 ### Limitations
 
