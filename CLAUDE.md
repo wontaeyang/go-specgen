@@ -17,9 +17,22 @@
 - Run Golang LSP
 - After editing Go code, run `go fmt`, `go vet`
 
-# Golden file tests
-- Golden files live in `examples/*/` as `.yaml` files
-- All golden files are generated with OpenAPI 3.1 and YAML format
-- To run golden tests: `go test ./cmd/specgen -run TestGoldenFiles`
-- To update golden files after code changes: `go test ./cmd/specgen -run TestGoldenFiles -update`
-- Comparison is byte-for-byte exact match — always update golden files when output changes
+# Test corpora
+Two harnesses, one directory each. Both auto-discover, so adding a case means
+adding a directory — there is no list to update.
+
+- `examples/*/` — packages that must generate. Compared against `<name>.yaml`,
+  and against `<name>.json` when that file exists (JSON is opt-in per package:
+  `touch examples/x/x.json` then `-update`).
+- `cmd/specgen/testdata/errors/*/` — packages that must fail. Compared against
+  `expected_error.txt`. They live under `testdata/` because they are wrong on
+  purpose and `go build`/`go vet` skip that directory.
+
+One directory is one case: `@api` is package-level, so a directory holds exactly
+one document.
+
+- All expected files are OpenAPI 3.1
+- Run: `go test ./cmd/specgen`
+- Update: `go test ./cmd/specgen -update`
+- Comparison is byte-for-byte exact — `-update` rewrites unconditionally, so
+  always read the diff before committing it

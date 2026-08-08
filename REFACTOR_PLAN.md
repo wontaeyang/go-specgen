@@ -300,31 +300,39 @@ from one pipeline pass.
 
 ## 5. Test strategy
 
-`cmd/specgen/testdata/` in four groups, all snapshotted from current code first:
+Two harnesses, one corpus each, both auto-discovered.
 
-- **features** — the 7 annotations with zero example coverage (`@exclusiveMinimum`,
-  `@exclusiveMaximum`, `@uniqueItems`, `@readOnly`, `@writeOnly`, `@minItems`,
-  `@maxItems`), mixed named+inline parameters and responses, `map[string][]T`,
-  struct-typed parameter fields, grouped `X, Y` fields, embedded structs in parameter
-  structs, the embedded-field family, `chan`/`func` fields, the parameter tag matrix
-- **errors** — packages that must fail, with expected message text. Zero coverage today
-- **json** — `nested`, `responses`, `petstore`. Both formats serialize the same
-  `*v3.Document`, so YAML goldens already prove specgen's correctness; these catch
-  serializer breakage or a libopenapi upgrade changing output
+**`examples/*/` — must generate.** Compared against `<name>.yaml`, and against
+`<name>.json` where that file exists. Documentation and test corpus at once: some
+packages demonstrate a feature, some exist to pin an edge case, and all of them are
+compiled and vetted with the module.
+
+Coverage this added, all previously golden-uncovered: the 7 orphaned `@field`
+annotations, mixed named+inline (0 of the original 14 examples), embedded fields
+(0, despite the README documenting them), nested containers and their element
+formats, schema refs reached from inline structs, the parameter tag matrix,
+grouped `X, Y` declarations, and JSON rendering.
+
+**`cmd/specgen/testdata/errors/*/` — must fail.** Compared against
+`expected_error.txt`. This corpus exists because a success-only suite cannot
+notice a check that stopped firing: every golden asserts "this input produces this
+output", none can assert "this input produces no output", so deleting a validation
+rule leaves every golden passing. Bug #10 is the existence proof. They stay under
+`testdata/` because they are wrong on purpose, and that is the one directory name
+`go build ./...` and `go vet ./...` refuse to descend into.
+
+How much one error package can demonstrate depends on the stage that rejects it:
+parser and resolver errors abort the pipeline, so such a package shows exactly one
+error; validator errors accumulate, so those can show several.
+
 Everything is rendered at 3.1 and only at 3.1. 3.2 stays a valid `-openapi` value —
 it differs from 3.1 by the version string alone — but nothing tests it.
 
-A fixture whose behavior becomes an error moves from `features/` to `errors/` in the
-commit that changes it — `param_struct_field` and `unsupported_types` at C8 and C9,
-`undefined_tag` at C7 — and `param_conflict` moves the other way at C7. The move is
-the diff: one directory rename plus one expected file swapping a rendered spec for a
-message.
+A fixture whose behavior becomes an error moves between the two corpora in the
+commit that changes it. The move is the diff: one directory rename plus one
+expected file swapping a rendered spec for a message.
 
-Unit tests move with the code they cover. The fixtures are the behavioral contract.
-
-Coverage gaps this closes, all currently golden-uncovered: mixed named+inline (0 of 14
-examples), embedded fields (0, despite being documented in the README), the 7 orphaned
-annotations, all error messages, JSON rendering.
+Unit tests move with the code they cover. These corpora are the behavioral contract.
 
 ---
 

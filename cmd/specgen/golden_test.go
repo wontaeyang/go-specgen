@@ -8,20 +8,45 @@ import (
 	"testing"
 )
 
-var update = flag.Bool("update", false, "update golden and fixture files")
+// This is the golden harness: every package under examples/ must generate, and
+// its output must match the files checked in beside it byte for byte. The
+// error harness, for packages that must fail instead, is in errors_test.go.
+//
+// Adding a case means adding a directory. There is no list to keep in sync, and
+// no way to add a package that nothing asserts on.
+//
+// One directory is one case. @api is a package-level annotation, so a directory
+// holds exactly one document — two independent cases cannot share one, and a
+// new case means either extending an existing document or a new directory.
+//
+// Regenerate every expected file with:
+//
+//	go test ./cmd/specgen -update
+//
+// and read the diff. -update rewrites the goldens unconditionally, so it will
+// happily record a regression as the new truth if nobody looks.
+
+var update = flag.Bool("update", false, "update golden and expected-error files")
 
 const (
-	// examplesDir holds the documented, hand-written example packages. Every
-	// subdirectory is a golden case; there is no list to keep in sync.
+	// examplesDir holds every package that must generate. They are documentation
+	// and test corpus at once: some demonstrate a feature, some exist to pin an
+	// edge case, and all of them are compiled and vetted with the module.
 	examplesDir = "../../examples"
 
-	// goldenVersion is the OpenAPI version all goldens and fixtures are
-	// rendered at. 3.2 differs only in the version string — see TestVersionGuard.
+	// goldenVersion is the OpenAPI version everything is rendered at. 3.2 is a
+	// valid -openapi value and differs only in the version string; nothing
+	// tests it.
 	goldenVersion = "3.1"
 )
 
-// TestGoldenFiles renders every package under examples/ and compares it
-// byte-for-byte against the <name>.yaml checked in beside it.
+// TestGoldenFiles renders every package under examples/ and compares it against
+// the <name>.yaml checked in beside it.
+//
+// JSON is opt-in per package: if <name>.json exists it is compared too, and if
+// it does not, JSON is not checked for that package. Both formats come from one
+// pipeline pass either way. To add JSON coverage, create the empty file and run
+// with -update; to drop it, delete the file.
 func TestGoldenFiles(t *testing.T) {
 	for _, name := range subdirs(t, examplesDir) {
 		t.Run(name, func(t *testing.T) {
@@ -33,8 +58,19 @@ func TestGoldenFiles(t *testing.T) {
 			}
 
 			compareGolden(t, filepath.Join(dir, name+".yaml"), spec.YAML)
+
+			if jsonPath := filepath.Join(dir, name+".json"); exists(jsonPath) {
+				compareGolden(t, jsonPath, spec.JSON)
+			}
 		})
 	}
+}
+
+// exists reports whether a path is present, which is how a package opts in to
+// JSON coverage.
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // subdirs returns the names of every directory directly under root, sorted.
