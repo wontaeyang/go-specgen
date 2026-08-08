@@ -136,6 +136,12 @@ type Field struct {
 	// Name is the field name (from json/query/path/header/cookie tag)
 	Name string
 
+	// Fields are the annotations on the fields of this field's type, when that
+	// type is an anonymous struct. Annotations mirror the shape of the types
+	// they describe, so the resolver can attach each one at the level it was
+	// written.
+	Fields []*Field
+
 	// GoName is the Go field name
 	GoName string
 

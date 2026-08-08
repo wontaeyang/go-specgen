@@ -584,9 +584,9 @@ func TestInlineStructInfo_Fields(t *testing.T) {
 		VarName:       "testVar",
 		Annotation:    "query",
 		StatusCode:    "",
-		FieldComments: make(map[string]*CommentBlock),
+		FieldComments: make(map[string]*FieldComments),
 	}
-	info.FieldComments["ID"] = &CommentBlock{Lines: []string{"@field { @description User ID }"}}
+	info.FieldComments["ID"] = &FieldComments{Comment: &CommentBlock{Lines: []string{"@field { @description User ID }"}}}
 
 	if info.VarName != "testVar" {
 		t.Errorf("VarName = %q, want %q", info.VarName, "testVar")

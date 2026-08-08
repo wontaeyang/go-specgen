@@ -278,14 +278,7 @@ func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*
 			continue
 		}
 
-		// Find annotation for this field
-		var fieldAnnotation *parser.Field
-		for _, f := range annotations {
-			if f.GoName == field.Name() {
-				fieldAnnotation = f
-				break
-			}
-		}
+		fieldAnnotation := findAnnotation(annotations, field.Name())
 
 		// Resolve field type
 		resolvedField, err := r.resolveField(field, tag, fieldAnnotation)
@@ -413,14 +406,7 @@ func (r *Resolver) resolveParameterFields(structType *types.Struct, annotations 
 			continue
 		}
 
-		// Find annotation for this field
-		var fieldAnnotation *parser.Field
-		for _, f := range annotations {
-			if f.GoName == field.Name() {
-				fieldAnnotation = f
-				break
-			}
-		}
+		fieldAnnotation := findAnnotation(annotations, field.Name())
 
 		// Resolve field type
 		resolvedField, err := r.resolveFieldWithParamType(field, tag, fieldAnnotation, paramType)
@@ -464,7 +450,7 @@ func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser
 		return nil, nil
 	}
 
-	typeRef := r.resolveTypeRef(field.Type())
+	typeRef := r.resolveTypeRef(field.Type(), annotationFields(annotation))
 
 	// omitempty/omitzero drop a nil pointer rather than encoding null, so such
 	// a field can never appear as null on the wire.
@@ -485,12 +471,28 @@ func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser
 	return resolved, nil
 }
 
-// resolveAnonymousFields resolves the members of an anonymous struct.
-//
-// Annotations do not reach here yet: the parser harvests @field comments only
-// at the top level of a struct, so nested ones are parsed and dropped. That is
-// bug #4, fixed separately.
-func (r *Resolver) resolveAnonymousFields(structType *types.Struct) []*Field {
+// findAnnotation returns the @field annotation written on a Go field, or nil.
+func findAnnotation(annotations []*parser.Field, goName string) *parser.Field {
+	for _, annotation := range annotations {
+		if annotation.GoName == goName {
+			return annotation
+		}
+	}
+	return nil
+}
+
+// annotationFields returns the nested @field annotations of an annotation, or
+// nil when there is no annotation at all.
+func annotationFields(annotation *parser.Field) []*parser.Field {
+	if annotation == nil {
+		return nil
+	}
+	return annotation.Fields
+}
+
+// resolveAnonymousFields resolves the members of an anonymous struct, attaching
+// each field's own @field annotation from the enclosing field's nested set.
+func (r *Resolver) resolveAnonymousFields(structType *types.Struct, annotations []*parser.Field) []*Field {
 	fields := make([]*Field, 0, structType.NumFields())
 
 	for i := 0; i < structType.NumFields(); i++ {
@@ -506,7 +508,7 @@ func (r *Resolver) resolveAnonymousFields(structType *types.Struct) []*Field {
 			continue
 		}
 
-		resolved, err := r.resolveField(field, tag, nil)
+		resolved, err := r.resolveField(field, tag, findAnnotation(annotations, field.Name()))
 		if err != nil || resolved == nil {
 			continue
 		}

@@ -197,9 +197,9 @@ func TestPackageComments_Getters(t *testing.T) {
 		StructComments: map[string]*CommentBlock{
 			"User": {Lines: []string{"@schema"}},
 		},
-		FieldComments: map[string]map[string]*CommentBlock{
+		FieldComments: map[string]map[string]*FieldComments{
 			"User": {
-				"ID": {Lines: []string{"@field"}},
+				"ID": {Comment: &CommentBlock{Lines: []string{"@field"}}},
 			},
 		},
 		FunctionComments: map[string]*CommentBlock{

@@ -31,8 +31,15 @@ paths:
                                             properties:
                                                 name:
                                                     type: string
+                                                    minLength: 1
+                                                    description: Entry name
                                                 code:
                                                     type: string
+                                                    enum:
+                                                        - ok
+                                                        - skipped
+                                                        - failed
+                                                    description: Result code
                                             required:
                                                 - name
                                                 - code
@@ -54,6 +61,11 @@ components:
                     properties:
                         kind:
                             type: string
+                            enum:
+                                - a
+                                - b
+                                - c
+                            description: Payload kind
                         entries:
                             type: array
                             items:
@@ -61,12 +73,19 @@ components:
                                 properties:
                                     name:
                                         type: string
+                                        minLength: 1
+                                        description: Entry name
                                     weight:
                                         type: number
+                                        maximum: 1
+                                        minimum: 0
                                         format: double
+                                        description: Entry weight
                                 required:
                                     - name
                                     - weight
+                            minItems: 1
+                            description: Nested entries
                     required:
                         - kind
                         - entries

@@ -136,38 +136,75 @@ func (p *parser) parseStructFields(result *Package) error {
 // in declaration order and looks each field's annotation up by name. Sorting is
 // for the error path: without it, which of several bad fields gets reported
 // would vary run to run.
-func (p *parser) parseFieldComments(fieldComments map[string]*CommentBlock, context string) ([]*Field, error) {
+func (p *parser) parseFieldComments(fieldComments map[string]*FieldComments, context string) ([]*Field, error) {
 	var fields []*Field
-	fieldNode := annotation.Schema.GetChild("@field")
 
 	for _, fieldName := range slices.Sorted(maps.Keys(fieldComments)) {
-		fieldComment := fieldComments[fieldName]
-		if fieldComment == nil || !fieldComment.HasAnnotation("@field") {
+		harvested := fieldComments[fieldName]
+		if harvested == nil {
 			continue
 		}
-		fieldLines := fieldComment.GetAnnotationLines()
 
-		var parsedField *ParsedAnnotation
-		var err error
-		if IsInlineFormat(fieldLines) {
-			parsedField, err = ParseInlineAnnotation(fieldLines[0], "@field", fieldNode)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse inline @field for %s.%s: %w", context, fieldName, err)
-			}
-		} else {
-			parsedField, err = ParseAnnotationBlock(fieldLines, "@field", fieldNode)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse @field for %s.%s: %w", context, fieldName, err)
-			}
-		}
-
-		field, err := convertParsedField(fieldName, parsedField)
+		// A field's own annotation, and the annotations on the fields of its
+		// type when that type is an anonymous struct. Either may be absent: a
+		// field can carry an @field with no nested struct, or an inline struct
+		// whose own field is unannotated.
+		nested, err := p.parseFieldComments(harvested.Fields, context+"."+fieldName)
 		if err != nil {
-			return nil, fmt.Errorf("invalid @field for %s.%s: %w", context, fieldName, err)
+			return nil, err
 		}
+
+		field, err := parseFieldAnnotation(fieldName, harvested.Comment, context)
+		if err != nil {
+			return nil, err
+		}
+
+		switch {
+		case field != nil:
+			field.Fields = nested
+		case len(nested) > 0:
+			// No @field of its own, but something below it is annotated, so
+			// the field has to exist to carry them down.
+			field = &Field{GoName: fieldName, Name: fieldName, Fields: nested}
+		default:
+			continue
+		}
+
 		fields = append(fields, field)
 	}
+
 	return fields, nil
+}
+
+// parseFieldAnnotation parses one field's @field comment, in either the inline
+// or the block form. Returns nil when the comment carries no @field at all.
+func parseFieldAnnotation(fieldName string, comment *CommentBlock, context string) (*Field, error) {
+	if comment == nil || !comment.HasAnnotation("@field") {
+		return nil, nil
+	}
+
+	lines := comment.GetAnnotationLines()
+	fieldNode := annotation.Schema.GetChild("@field")
+
+	var parsed *ParsedAnnotation
+	var err error
+	if IsInlineFormat(lines) {
+		parsed, err = ParseInlineAnnotation(lines[0], "@field", fieldNode)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse inline @field for %s.%s: %w", context, fieldName, err)
+		}
+	} else {
+		parsed, err = ParseAnnotationBlock(lines, "@field", fieldNode)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse @field for %s.%s: %w", context, fieldName, err)
+		}
+	}
+
+	field, err := convertParsedField(fieldName, parsed)
+	if err != nil {
+		return nil, fmt.Errorf("invalid @field for %s.%s: %w", context, fieldName, err)
+	}
+	return field, nil
 }
 
 // parseAPI parses the @api annotation from package-level comments

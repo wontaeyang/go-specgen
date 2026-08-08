@@ -3,6 +3,8 @@ package resolver
 import (
 	"fmt"
 	"go/types"
+
+	"github.com/wontaeyang/go-specgen/pkg/parser"
 )
 
 // resolveTypeRef describes a Go type as an emission-ready shape.
@@ -13,16 +15,23 @@ import (
 // Because it recurses, map[string][]User is describable at all — the flat form
 // had one element-type slot and had to pick a level to remember.
 //
-// schemaNames is the set of @schema type names. It is what separates a named
-// struct that becomes a $ref from one that has no representation.
-func (r *Resolver) resolveTypeRef(t types.Type) *TypeRef {
+// annotations are the @field annotations written on the fields of this type,
+// when it is (or contains) an anonymous struct. They travel through containers
+// unchanged, because an annotation inside `Items []struct{...}` describes a
+// field of the element, not of the slice.
+func (r *Resolver) resolveTypeRef(t types.Type, annotations ...[]*parser.Field) *TypeRef {
+	var nested []*parser.Field
+	if len(annotations) > 0 {
+		nested = annotations[0]
+	}
+
 	switch typ := t.(type) {
 	case *types.Pointer:
 		// A pointer changes whether a field may be null, not what shape it has.
-		return r.resolveTypeRef(typ.Elem())
+		return r.resolveTypeRef(typ.Elem(), nested)
 
 	case *types.Alias:
-		return r.resolveTypeRef(typ.Rhs())
+		return r.resolveTypeRef(typ.Rhs(), nested)
 
 	case *types.Named:
 		return r.resolveNamedTypeRef(typ)
@@ -30,7 +39,7 @@ func (r *Resolver) resolveTypeRef(t types.Type) *TypeRef {
 	case *types.Struct:
 		// Reached only for an anonymous struct: a named one is *types.Named,
 		// handled above, and becomes a $ref or an error.
-		return &TypeRef{Shape: ShapeObject, Fields: r.resolveAnonymousFields(typ)}
+		return &TypeRef{Shape: ShapeObject, Fields: r.resolveAnonymousFields(typ, nested)}
 
 	case *types.Slice:
 		// []byte is base64 text on the wire, not a JSON array. Deliberately
@@ -39,15 +48,15 @@ func (r *Resolver) resolveTypeRef(t types.Type) *TypeRef {
 		if basic, ok := typ.Elem().(*types.Basic); ok && basic.Kind() == types.Byte {
 			return &TypeRef{Shape: ShapeScalar, Type: "string", Format: "byte"}
 		}
-		return &TypeRef{Shape: ShapeArray, Elem: r.resolveTypeRef(typ.Elem())}
+		return &TypeRef{Shape: ShapeArray, Elem: r.resolveTypeRef(typ.Elem(), nested)}
 
 	case *types.Array:
-		return &TypeRef{Shape: ShapeArray, Elem: r.resolveTypeRef(typ.Elem())}
+		return &TypeRef{Shape: ShapeArray, Elem: r.resolveTypeRef(typ.Elem(), nested)}
 
 	case *types.Map:
 		// OpenAPI keys are always strings; a non-string Go key still marshals
 		// as one, so only the value type matters here.
-		return &TypeRef{Shape: ShapeMap, Elem: r.resolveTypeRef(typ.Elem())}
+		return &TypeRef{Shape: ShapeMap, Elem: r.resolveTypeRef(typ.Elem(), nested)}
 
 	case *types.Interface:
 		return &TypeRef{Shape: ShapeAny}

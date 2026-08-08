@@ -20,6 +20,77 @@ type CommentBlock struct {
 	Position token.Position
 }
 
+// FieldComments is the doc comment above one struct field, together with the
+// comments on the fields of its type when that type is an anonymous struct.
+//
+// It is a tree because Go types are: an @field written inside an inline struct
+// describes a field of that struct, not of the one containing it, and flattening
+// the two would make them indistinguishable.
+type FieldComments struct {
+	// Comment is the doc comment above the field itself, if it has one.
+	Comment *CommentBlock
+
+	// Fields are the comments on the fields of this field's type, when that
+	// type is an anonymous struct (or a slice or map of one).
+	Fields map[string]*FieldComments
+}
+
+// harvestFieldComments collects the doc comments on a struct's fields, and
+// recursively on the fields of any anonymous struct nested inside them.
+//
+// The previous version walked one level and stopped, so an @field written
+// inside an inline struct was parsed and then dropped -- 16 of them in
+// examples/inline alone.
+func harvestFieldComments(fset *token.FileSet, structType *ast.StructType) map[string]*FieldComments {
+	if structType == nil {
+		return nil
+	}
+
+	comments := make(map[string]*FieldComments)
+
+	for _, field := range structType.Fields.List {
+		nested := harvestFieldComments(fset, anonymousStructOf(field.Type))
+		if field.Doc == nil && nested == nil {
+			continue
+		}
+		if len(field.Names) == 0 {
+			continue
+		}
+
+		harvested := &FieldComments{Fields: nested}
+		if field.Doc != nil {
+			harvested.Comment = extractCommentBlock(fset, field.Doc)
+		}
+
+		comments[field.Names[0].Name] = harvested
+	}
+
+	if len(comments) == 0 {
+		return nil
+	}
+	return comments
+}
+
+// anonymousStructOf returns the anonymous struct a type expression describes,
+// looking through pointers, slices, arrays and maps so that []struct{...} and
+// map[string]struct{...} are reached as readily as a bare struct{...}.
+//
+// A named type returns nil: its fields carry their own comments where the type
+// is declared, and harvesting them again here would duplicate them.
+func anonymousStructOf(expr ast.Expr) *ast.StructType {
+	switch t := expr.(type) {
+	case *ast.StructType:
+		return t
+	case *ast.StarExpr:
+		return anonymousStructOf(t.X)
+	case *ast.ArrayType:
+		return anonymousStructOf(t.Elt)
+	case *ast.MapType:
+		return anonymousStructOf(t.Value)
+	}
+	return nil
+}
+
 // PackageComments represents all comments extracted from a package
 type PackageComments struct {
 	// Name is the package name
@@ -35,7 +106,7 @@ type PackageComments struct {
 	StructComments map[string]*CommentBlock // Key: struct name
 
 	// Field-level comments (for @field)
-	FieldComments map[string]map[string]*CommentBlock // Key: struct name -> field name
+	FieldComments map[string]map[string]*FieldComments // Key: struct name -> field name
 
 	// Function-level comments (for @endpoint)
 	FunctionComments map[string]*CommentBlock // Key: function name
@@ -97,7 +168,7 @@ type InlineStructInfo struct {
 	// FieldComments are the raw per-field comments collected at extraction time.
 	// Consumed by parseStructFields to populate Fields. Parser-internal — the
 	// resolver does not read this.
-	FieldComments map[string]*CommentBlock
+	FieldComments map[string]*FieldComments
 
 	// Fields are the parsed @field annotations. Populated by the parser so the
 	// resolver does not re-parse annotations. Shape mirrors Schema.Fields so both
@@ -143,7 +214,7 @@ func ExtractComments(packagePath string) (*PackageComments, error) {
 		Name:             pkg.Name,
 		Pkg:              pkg,
 		StructComments:   make(map[string]*CommentBlock),
-		FieldComments:    make(map[string]map[string]*CommentBlock),
+		FieldComments:    make(map[string]map[string]*FieldComments),
 		FunctionComments: make(map[string]*CommentBlock),
 		TypeInfo:         make(map[string]*TypeDeclInfo),
 		FuncInlines:      make(map[string]*FuncInlineInfo),
@@ -214,14 +285,7 @@ func ExtractComments(packagePath string) (*PackageComments, error) {
 
 								// Extract field-level comments
 								if structType, ok := typeSpec.Type.(*ast.StructType); ok {
-									comments.FieldComments[typeName] = make(map[string]*CommentBlock)
-
-									for _, field := range structType.Fields.List {
-										if field.Doc != nil && len(field.Names) > 0 {
-											fieldName := field.Names[0].Name
-											comments.FieldComments[typeName][fieldName] = extractCommentBlock(fset, field.Doc)
-										}
-									}
+									comments.FieldComments[typeName] = harvestFieldComments(fset, structType)
 								}
 							}
 
@@ -326,7 +390,9 @@ func (pc *PackageComments) GetStructComment(structName string) *CommentBlock {
 // GetFieldComment returns the comment block for a field
 func (pc *PackageComments) GetFieldComment(structName, fieldName string) *CommentBlock {
 	if fields, ok := pc.FieldComments[structName]; ok {
-		return fields[fieldName]
+		if field, ok := fields[fieldName]; ok {
+			return field.Comment
+		}
 	}
 	return nil
 }
@@ -513,22 +579,13 @@ func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.Bl
 			continue
 		}
 
-		// Extract field comments from the struct
-		fieldComments := make(map[string]*CommentBlock)
-		for _, field := range structType.Fields.List {
-			if field.Doc != nil && len(field.Names) > 0 {
-				fieldName := field.Names[0].Name
-				fieldComments[fieldName] = extractCommentBlock(fset, field.Doc)
-			}
-		}
-
 		inline := &InlineStructInfo{
 			VarName:       ident.Name,
 			Annotation:    annotation,
 			Comment:       commentBlock,
 			Ident:         ident,
 			StatusCode:    statusCode,
-			FieldComments: fieldComments,
+			FieldComments: harvestFieldComments(fset, structType),
 		}
 
 		// Store based on annotation type. @query/@path/@header/@cookie are
