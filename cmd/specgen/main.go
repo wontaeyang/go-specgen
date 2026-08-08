@@ -7,76 +7,80 @@ import (
 	"path/filepath"
 )
 
-const (
-	version = "1.0.0"
-)
+const version = "1.0.0"
 
 func main() {
-	// Define flags
 	packagePath := flag.String("package", ".", "Path to the Go package to parse")
-	outputPath := flag.String("output", "openapi.yaml", "Output file path")
-	format := flag.String("format", "yaml", "Output format: json or yaml")
-	openapiVersion := flag.String("openapi", "3.0", "OpenAPI version: 3.0, 3.1, or 3.2")
+	yamlPath := flag.String("yaml", "", "Write the spec as YAML to this path")
+	jsonPath := flag.String("json", "", "Write the spec as JSON to this path")
+	openapiVersion := flag.String("openapi", "3.1", "OpenAPI version: 3.1 or 3.2")
 	showVersion := flag.Bool("version", false, "Show version")
 	showHelp := flag.Bool("help", false, "Show help")
 
 	flag.Parse()
 
-	// Show version
 	if *showVersion {
 		fmt.Printf("specgen version %s\n", version)
 		os.Exit(0)
 	}
 
-	// Show help
 	if *showHelp {
 		printHelp()
 		os.Exit(0)
 	}
 
-	// Validate format
-	switch *format {
-	case "json", "yaml", "yml":
-	default:
-		fmt.Fprintf(os.Stderr, "Error: invalid format '%s'. Must be 'json' or 'yaml'\n", *format)
+	if err := run(*packagePath, *yamlPath, *jsonPath, *openapiVersion); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
 
-	// Validate OpenAPI version
-	if *openapiVersion != "3.0" && *openapiVersion != "3.1" && *openapiVersion != "3.2" {
-		fmt.Fprintf(os.Stderr, "Error: invalid OpenAPI version '%s'. Must be '3.0', '3.1', or '3.2'\n", *openapiVersion)
-		os.Exit(1)
+func run(packagePath, yamlPath, jsonPath, openapiVersion string) error {
+	// Output lands only where it was named. Defaulting to openapi.yaml in the
+	// working directory writes a file the caller never asked for.
+	if yamlPath == "" && jsonPath == "" {
+		return fmt.Errorf("specify -yaml and/or -json to say where the spec should be written")
 	}
 
-	spec, err := buildSpec(*packagePath, *openapiVersion)
+	if openapiVersion != "3.1" && openapiVersion != "3.2" {
+		return fmt.Errorf("invalid OpenAPI version %q: must be 3.1 or 3.2", openapiVersion)
+	}
+
+	// One pipeline pass feeds both files, so they can never disagree.
+	spec, err := buildSpec(packagePath, openapiVersion)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
-	data := spec.YAML
-	if *format == "json" {
-		data = spec.JSON
+	for _, out := range []struct {
+		path string
+		data []byte
+	}{
+		{yamlPath, spec.YAML},
+		{jsonPath, spec.JSON},
+	} {
+		if out.path == "" {
+			continue
+		}
+		if err := writeFile(out.path, out.data); err != nil {
+			return err
+		}
+		fmt.Printf("Wrote %s\n", out.path)
 	}
 
-	if err := writeFile(*outputPath, data); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Successfully generated OpenAPI spec: %s\n", *outputPath)
+	return nil
 }
 
 // writeFile writes data to path, creating the parent directory if needed.
 func writeFile(path string, data []byte) error {
 	if dir := filepath.Dir(path); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create output directory: %w", err)
+			return fmt.Errorf("create output directory %s: %w", dir, err)
 		}
 	}
 
 	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("failed to write output file: %w", err)
+		return fmt.Errorf("write %s: %w", path, err)
 	}
 
 	return nil
@@ -91,24 +95,24 @@ func printHelp() {
 	fmt.Println("Options:")
 	fmt.Println("  -package string")
 	fmt.Println("        Path to the Go package to parse (default \".\")")
-	fmt.Println("  -output string")
-	fmt.Println("        Output file path (default \"openapi.yaml\")")
-	fmt.Println("  -format string")
-	fmt.Println("        Output format: json or yaml (default \"yaml\")")
+	fmt.Println("  -yaml string")
+	fmt.Println("        Write the spec as YAML to this path")
+	fmt.Println("  -json string")
+	fmt.Println("        Write the spec as JSON to this path")
 	fmt.Println("  -openapi string")
-	fmt.Println("        OpenAPI version: 3.0, 3.1, or 3.2 (default \"3.0\")")
+	fmt.Println("        OpenAPI version: 3.1 or 3.2 (default \"3.1\")")
 	fmt.Println("  -version")
 	fmt.Println("        Show version")
 	fmt.Println("  -help")
 	fmt.Println("        Show this help message")
 	fmt.Println()
+	fmt.Println("At least one of -yaml or -json is required; the spec is written")
+	fmt.Println("only to the paths you name.")
+	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  # Generate OpenAPI spec from current directory")
-	fmt.Println("  specgen")
+	fmt.Println("  # Generate both formats from one pass")
+	fmt.Println("  specgen -package ./api -yaml openapi.yaml -json openapi.json")
 	fmt.Println()
-	fmt.Println("  # Generate JSON spec from a specific package")
-	fmt.Println("  specgen -package ./api/handlers -format json -output openapi.json")
-	fmt.Println()
-	fmt.Println("  # Generate OpenAPI 3.1 spec")
-	fmt.Println("  specgen -openapi 3.1 -output openapi-3.1.yaml")
+	fmt.Println("  # YAML only")
+	fmt.Println("  specgen -package ./api -yaml docs/openapi.yaml")
 }

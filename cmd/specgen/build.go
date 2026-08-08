@@ -49,10 +49,10 @@ func buildSpec(packagePath, openapiVersion string) (*Spec, error) {
 	}
 
 	spec := &Spec{}
-	if spec.YAML, err = gen.Render(doc, generator.FormatYAML); err != nil {
+	if spec.YAML, err = gen.RenderYAML(doc); err != nil {
 		return nil, fmt.Errorf("render yaml: %w", err)
 	}
-	if spec.JSON, err = gen.Render(doc, generator.FormatJSON); err != nil {
+	if spec.JSON, err = gen.RenderJSON(doc); err != nil {
 		return nil, fmt.Errorf("render json: %w", err)
 	}
 

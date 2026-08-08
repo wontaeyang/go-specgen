@@ -10,13 +10,13 @@ import (
 )
 
 func TestNewGenerator(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	if gen == nil {
 		t.Fatal("NewGenerator() returned nil")
 	}
 
-	if gen.version != "3.0" {
-		t.Errorf("version = %s, want 3.0", gen.version)
+	if gen.version != "3.1" {
+		t.Errorf("version = %s, want 3.1", gen.version)
 	}
 }
 
@@ -51,7 +51,7 @@ func TestGenerator_Generate(t *testing.T) {
 		},
 	}
 
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	spec, err := gen.Generate(pkg)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
@@ -62,8 +62,8 @@ func TestGenerator_Generate(t *testing.T) {
 	}
 
 	// Verify openapi version
-	if spec.Version != "3.0.3" {
-		t.Errorf("openapi = %v, want 3.0.3", spec.Version)
+	if spec.Version != "3.1.0" {
+		t.Errorf("openapi = %v, want 3.1.0", spec.Version)
 	}
 
 	// Verify info
@@ -99,7 +99,7 @@ func TestGenerator_GenerateInfo(t *testing.T) {
 		},
 	}
 
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	info := gen.generateInfo(api)
 
 	if info.Title != "Test API" {
@@ -135,7 +135,7 @@ func TestGenerator_GenerateServers(t *testing.T) {
 		},
 	}
 
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	result := gen.generateServers(servers)
 
 	if len(result) != 2 {
@@ -176,7 +176,7 @@ func TestGenerator_GenerateSchemas(t *testing.T) {
 		},
 	}
 
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	result := gen.generateSchemas(schemas)
 
 	if result.Len() != 1 {
@@ -208,15 +208,15 @@ func TestGenerator_RenderJSON(t *testing.T) {
 		},
 	}
 
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	doc, err := gen.Generate(pkg)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
 
-	data, err := gen.Render(doc, FormatJSON)
+	data, err := gen.RenderJSON(doc)
 	if err != nil {
-		t.Fatalf("Render() error = %v", err)
+		t.Fatalf("render error = %v", err)
 	}
 
 	// Verify it's valid JSON
@@ -268,15 +268,15 @@ func TestGenerator_RenderYAML(t *testing.T) {
 		},
 	}
 
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	doc, err := gen.Generate(pkg)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
 
-	data, err := gen.Render(doc, FormatYAML)
+	data, err := gen.RenderYAML(doc)
 	if err != nil {
-		t.Fatalf("Render() error = %v", err)
+		t.Fatalf("render error = %v", err)
 	}
 
 	// Verify it contains YAML-like content
@@ -320,7 +320,7 @@ func TestGenerator_GeneratePaths(t *testing.T) {
 		},
 	}
 
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	paths := gen.generatePaths(endpoints, map[string]*resolver.ResolvedParameter{}, map[string]*resolver.ResolvedSchema{})
 
 	if paths.PathItems.Len() != 1 {
@@ -380,7 +380,7 @@ func TestGenerator_GenerateOperation(t *testing.T) {
 		"User": {Name: "User"},
 	}
 
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	op := gen.generateOperation(endpoint, paramMap, schemas)
 
 	if op.Summary != "Get user" {
@@ -422,7 +422,7 @@ func TestGenerator_HTTPMethodsLowercase(t *testing.T) {
 		},
 	}
 
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	paths := gen.generatePaths(endpoints, map[string]*resolver.ResolvedParameter{}, map[string]*resolver.ResolvedSchema{})
 
 	testPath := paths.PathItems.GetOrZero("/test")
@@ -441,7 +441,7 @@ func TestGenerator_HTTPMethodsLowercase(t *testing.T) {
 }
 
 func TestGenerator_GenerateTags(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	tests := []struct {
 		name string
@@ -500,7 +500,7 @@ func TestGenerator_GenerateTags(t *testing.T) {
 }
 
 func TestGenerator_GenerateWithTags(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	pkg := &resolver.ResolvedPackage{
 		API: &resolver.ResolvedAPI{
@@ -560,7 +560,7 @@ func TestGenerator_GenerateWithTags(t *testing.T) {
 
 func TestGenerator_GenerateBodySchema_Ref(t *testing.T) {
 	// Test body without bind - should use $ref
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	body := &resolver.ResolvedBody{
 		Schema:      "User",
@@ -582,7 +582,7 @@ func TestGenerator_GenerateBodySchema_Ref(t *testing.T) {
 
 func TestGenerator_GenerateBodySchema_Wrapped(t *testing.T) {
 	// Test body with bind - should be wrapped
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	wrapperSchema := &resolver.ResolvedSchema{
 		Name: "DataResponse",
@@ -630,7 +630,7 @@ func TestGenerator_GenerateBodySchema_Wrapped(t *testing.T) {
 }
 
 func TestGenerator_GenerateSchemaRef_Simple(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	result := gen.generateSchemaRef("User", false, false, "User")
 
@@ -644,7 +644,7 @@ func TestGenerator_GenerateSchemaRef_Simple(t *testing.T) {
 }
 
 func TestGenerator_GenerateSchemaRef_Array(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	result := gen.generateSchemaRef("[]User", true, false, "User")
 
@@ -663,7 +663,7 @@ func TestGenerator_GenerateSchemaRef_Array(t *testing.T) {
 }
 
 func TestGenerator_GenerateSchemaRef_Map(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	result := gen.generateSchemaRef("map[string]User", false, true, "User")
 
@@ -682,7 +682,7 @@ func TestGenerator_GenerateSchemaRef_Map(t *testing.T) {
 }
 
 func TestGenerator_GenerateSchemaRef_Primitive(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	result := gen.generateSchemaRef("int", false, false, "int")
 
@@ -744,25 +744,6 @@ func TestGenerator_RefField_Deprecated_31Siblings(t *testing.T) {
 	}
 	if !strings.Contains(got, "description: Home address") {
 		t.Errorf("missing description sibling, got:\n%s", got)
-	}
-}
-
-func TestGenerator_RefField_Deprecated_30AllOf(t *testing.T) {
-	field := &resolver.ResolvedField{
-		Name: "home_address", GoName: "HomeAddress", GoType: "Address",
-		Description: "Home address", Deprecated: true,
-	}
-	got := renderRefField(t, "3.0", field)
-
-	// 3.0: $ref cannot have siblings, must be wrapped in allOf.
-	if !strings.Contains(got, "allOf") {
-		t.Errorf("3.0 ref with siblings should be wrapped in allOf, got:\n%s", got)
-	}
-	if !strings.Contains(got, "$ref: '#/components/schemas/Address'") {
-		t.Errorf("missing $ref, got:\n%s", got)
-	}
-	if !strings.Contains(got, "deprecated: true") {
-		t.Errorf("missing deprecated, got:\n%s", got)
 	}
 }
 
@@ -832,7 +813,7 @@ func TestGoTypeToPrimitive(t *testing.T) {
 }
 
 func TestGenerator_GenerateInlineWrappedSchema(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	wrapperSchema := &resolver.ResolvedSchema{
 		Name: "DataResponse",
@@ -889,7 +870,7 @@ func TestGenerator_GenerateInlineWrappedSchema(t *testing.T) {
 }
 
 func TestGenerator_GenerateInlineWrappedSchema_NoBind(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	// Create an inline body without bind - should fall back to inline schema
 	inline := &resolver.ResolvedInlineBody{
@@ -922,7 +903,7 @@ func TestGenerator_GenerateInlineWrappedSchema_NoBind(t *testing.T) {
 }
 
 func TestGenerator_GenerateFieldSchema_ArrayEnum(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	field := &resolver.ResolvedField{
 		Name:        "tags",
@@ -967,7 +948,7 @@ func TestGenerator_GenerateFieldSchema_ArrayEnum(t *testing.T) {
 }
 
 func TestGenerator_GenerateFieldSchema_IntegerEnum(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	field := &resolver.ResolvedField{
 		Name:        "priority",
@@ -997,7 +978,7 @@ func TestGenerator_GenerateFieldSchema_IntegerEnum(t *testing.T) {
 }
 
 func TestGenerator_GenerateParameterFieldSchema_ArrayEnum(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	field := &resolver.ResolvedField{
 		Name:        "status",
@@ -1027,34 +1008,6 @@ func TestGenerator_GenerateParameterFieldSchema_ArrayEnum(t *testing.T) {
 
 	if len(itemsSchema.Enum) != 3 {
 		t.Errorf("enum has %d values, want 3", len(itemsSchema.Enum))
-	}
-}
-
-func TestGenerator_Version30Nullable(t *testing.T) {
-	gen := NewGenerator("3.0")
-
-	field := &resolver.ResolvedField{
-		Name:        "nickname",
-		GoName:      "Nickname",
-		OpenAPIType: "string",
-		Nullable:    true,
-	}
-
-	result := gen.generateFieldSchema(field)
-
-	schema, err := result.BuildSchema()
-	if err != nil {
-		t.Fatalf("BuildSchema() error = %v", err)
-	}
-
-	// In 3.0, nullable should be set to true
-	if schema.Nullable == nil || *schema.Nullable != true {
-		t.Error("nullable should be true for 3.0")
-	}
-
-	// Type should be just "string"
-	if len(schema.Type) != 1 || schema.Type[0] != "string" {
-		t.Errorf("type = %v, want [string]", schema.Type)
 	}
 }
 
@@ -1125,42 +1078,6 @@ func TestGenerator_Version32Nullable(t *testing.T) {
 	}
 }
 
-func TestGenerator_ExclusiveMinMax_30(t *testing.T) {
-	gen := NewGenerator("3.0")
-
-	exMin := 0.0
-	exMax := 100.0
-	field := &resolver.ResolvedField{
-		Name:             "score",
-		GoName:           "Score",
-		OpenAPIType:      "number",
-		ExclusiveMinimum: &exMin,
-		ExclusiveMaximum: &exMax,
-	}
-
-	result := gen.generateFieldSchema(field)
-
-	schema, err := result.BuildSchema()
-	if err != nil {
-		t.Fatalf("BuildSchema() error = %v", err)
-	}
-
-	// In 3.0, exclusive minimum is represented as minimum + exclusiveMinimum: true
-	if schema.Minimum == nil || *schema.Minimum != 0 {
-		t.Errorf("minimum = %v, want 0", schema.Minimum)
-	}
-	if schema.ExclusiveMinimum == nil || schema.ExclusiveMinimum.A != true {
-		t.Error("exclusiveMinimum should be true for 3.0")
-	}
-
-	if schema.Maximum == nil || *schema.Maximum != 100 {
-		t.Errorf("maximum = %v, want 100", schema.Maximum)
-	}
-	if schema.ExclusiveMaximum == nil || schema.ExclusiveMaximum.A != true {
-		t.Error("exclusiveMaximum should be true for 3.0")
-	}
-}
-
 func TestGenerator_ExclusiveMinMax_31(t *testing.T) {
 	gen := NewGenerator("3.1")
 
@@ -1199,7 +1116,7 @@ func TestGenerator_ExclusiveMinMax_31(t *testing.T) {
 }
 
 func TestGenerator_ReadOnly(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	field := &resolver.ResolvedField{
 		Name:        "id",
@@ -1221,7 +1138,7 @@ func TestGenerator_ReadOnly(t *testing.T) {
 }
 
 func TestGenerator_WriteOnly(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	field := &resolver.ResolvedField{
 		Name:        "password",
@@ -1239,43 +1156,6 @@ func TestGenerator_WriteOnly(t *testing.T) {
 
 	if schema.WriteOnly == nil || *schema.WriteOnly != true {
 		t.Error("writeOnly should be true")
-	}
-}
-
-func TestGenerator_NullableSchemaRef_30(t *testing.T) {
-	gen := NewGenerator("3.0")
-	schemas := map[string]*resolver.ResolvedSchema{
-		"Address": {
-			Name: "Address",
-			Fields: []*resolver.ResolvedField{
-				{Name: "street", GoName: "Street", OpenAPIType: "string"},
-			},
-		},
-	}
-
-	field := &resolver.ResolvedField{
-		Name:        "address",
-		GoName:      "Address",
-		GoType:      "Address",
-		OpenAPIType: "object",
-		Nullable:    true,
-	}
-
-	result := gen.generateFieldSchemaWithRefs(field, schemas)
-
-	schema, err := result.BuildSchema()
-	if err != nil {
-		t.Fatalf("BuildSchema() error = %v", err)
-	}
-
-	// Should have allOf wrapping the $ref
-	if len(schema.AllOf) != 1 {
-		t.Fatalf("allOf should have 1 entry, got %d", len(schema.AllOf))
-	}
-
-	// Should have nullable: true (3.0 style)
-	if schema.Nullable == nil || *schema.Nullable != true {
-		t.Error("nullable should be true for 3.0")
 	}
 }
 
@@ -1332,7 +1212,7 @@ func TestGenerator_NullableSchemaRef_31(t *testing.T) {
 }
 
 func TestGenerator_NonNullableSchemaRef(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	schemas := map[string]*resolver.ResolvedSchema{
 		"Address": {
 			Name: "Address",
@@ -1368,10 +1248,9 @@ func TestGenerator_OpenAPIVersions(t *testing.T) {
 		version string
 		want    string
 	}{
-		{"3.0", "3.0.3"},
 		{"3.1", "3.1.0"},
 		{"3.2", "3.2.0"},
-		{"unknown", "3.0.3"}, // defaults to 3.0
+		{"unknown", "3.1.0"}, // the CLI rejects these; 3.1 is the fallback
 	}
 
 	for _, tt := range tests {

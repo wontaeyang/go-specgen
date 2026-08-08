@@ -3,7 +3,6 @@ package generator
 import (
 	"fmt"
 	"maps"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -14,26 +13,44 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
-// Generator generates OpenAPI specifications using libopenapi's v3high models
+// Generator generates OpenAPI specifications using libopenapi's v3high models.
+//
+// OpenAPI 3.1 is the baseline. 3.2 is accepted and differs only in the version
+// string, so there is no version-conditional code anywhere in this package —
+// see newSchema, markNullable, and exclusiveBound for the 3.1 spellings that
+// used to be branches.
 type Generator struct {
-	version       string // "3.0", "3.1", "3.2"
-	schemaBuilder *SchemaBuilder
+	version string // "3.1" or "3.2"
 }
-
-// OutputFormat represents the output format
-type OutputFormat string
-
-const (
-	FormatJSON OutputFormat = "json"
-	FormatYAML OutputFormat = "yaml"
-)
 
 // NewGenerator creates a new generator
 func NewGenerator(version string) *Generator {
-	return &Generator{
-		version:       version,
-		schemaBuilder: NewSchemaBuilder(version),
+	return &Generator{version: version}
+}
+
+// newSchema returns a schema of the given type. OpenAPI models Type as an array
+// because 3.1 uses it to express nullability; see markNullable. Called with no
+// type it returns the empty schema, which renders as {} and accepts any value.
+func newSchema(types ...string) *base.Schema {
+	return &base.Schema{Type: types}
+}
+
+// markNullable widens a schema to accept null, which OpenAPI 3.1 spells by
+// adding "null" to the type array rather than with 3.0's nullable: true.
+//
+// A schema with no type is left alone: it already accepts anything, so there is
+// nothing to widen.
+func markNullable(schema *base.Schema) {
+	if len(schema.Type) > 0 {
+		schema.Type = append(schema.Type, "null")
 	}
+}
+
+// exclusiveBound builds an exclusiveMinimum or exclusiveMaximum value. In 3.1
+// the keyword carries the bound itself; 3.0 spelled it as a boolean sitting
+// next to minimum/maximum, which is why libopenapi models it as a DynamicValue.
+func exclusiveBound(value float64) *base.DynamicValue[bool, float64] {
+	return &base.DynamicValue[bool, float64]{N: 1, B: value}
 }
 
 // Generate generates an OpenAPI spec from a resolved package
@@ -61,30 +78,23 @@ func (g *Generator) Generate(pkg *resolver.ResolvedPackage) (*v3.Document, error
 	return doc, nil
 }
 
-// getOpenAPIVersion returns the OpenAPI version string
+// getOpenAPIVersion returns the version string written into the document.
+// Anything other than 3.2 is 3.1; the CLI rejects the rest before we get here.
 func (g *Generator) getOpenAPIVersion() string {
-	switch g.version {
-	case "3.0":
-		return "3.0.3"
-	case "3.1":
-		return "3.1.0"
-	case "3.2":
+	if g.version == "3.2" {
 		return "3.2.0"
-	default:
-		return "3.0.3"
 	}
+	return "3.1.0"
 }
 
-// Render renders the spec to the specified format
-func (g *Generator) Render(doc *v3.Document, format OutputFormat) ([]byte, error) {
-	switch format {
-	case FormatJSON:
-		return doc.RenderJSON("  ")
-	case FormatYAML:
-		return doc.Render()
-	default:
-		return nil, fmt.Errorf("unsupported format: %s", format)
-	}
+// RenderYAML renders the document as YAML.
+func (g *Generator) RenderYAML(doc *v3.Document) ([]byte, error) {
+	return doc.Render()
+}
+
+// RenderJSON renders the document as JSON, indented two spaces.
+func (g *Generator) RenderJSON(doc *v3.Document) ([]byte, error) {
+	return doc.RenderJSON("  ")
 }
 
 // generateInfo generates the info section
@@ -178,8 +188,7 @@ func (g *Generator) generateSchemas(schemas map[string]*resolver.ResolvedSchema)
 
 // generateSchema generates a single schema
 func (g *Generator) generateSchema(schema *resolver.ResolvedSchema, allSchemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
-	s := g.schemaBuilder.NewSchema()
-	g.schemaBuilder.SetType(s, "object")
+	s := newSchema("object")
 
 	if schema.Description != "" {
 		s.Description = schema.Description
@@ -221,8 +230,7 @@ func (g *Generator) generateFieldSchemaWithRefs(field *resolver.ResolvedField, s
 
 	// Handle arrays of anonymous structs
 	if len(field.ItemsInlineFields) > 0 {
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, "array")
+		schema := newSchema("array")
 		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
 			A: g.buildInlineObjectSchema(field.ItemsInlineFields, schemas),
 		}
@@ -232,8 +240,7 @@ func (g *Generator) generateFieldSchemaWithRefs(field *resolver.ResolvedField, s
 
 	// Handle maps of anonymous structs
 	if len(field.MapValueInlineFields) > 0 {
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, "object")
+		schema := newSchema("object")
 		schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{
 			A: g.buildInlineObjectSchema(field.MapValueInlineFields, schemas),
 		}
@@ -246,22 +253,19 @@ func (g *Generator) generateFieldSchemaWithRefs(field *resolver.ResolvedField, s
 	// Handle arrays: []User or []string
 	if strings.HasPrefix(goType, "[]") {
 		elemType := strings.TrimPrefix(goType, "[]")
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, "array")
+		schema := newSchema("array")
 
 		if isSchemaReference(elemType, schemas) {
 			schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
 				A: base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", extractTypeName(elemType))),
 			}
 		} else if isPrimitive(extractTypeName(elemType)) {
-			itemSchema := g.schemaBuilder.NewSchema()
-			g.schemaBuilder.SetType(itemSchema, goTypeToPrimitive(extractTypeName(elemType)))
+			itemSchema := newSchema(goTypeToPrimitive(extractTypeName(elemType)))
 			schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
 				A: base.CreateSchemaProxy(itemSchema),
 			}
 		} else {
-			itemSchema := g.schemaBuilder.NewSchema()
-			g.schemaBuilder.SetType(itemSchema, field.ItemsType)
+			itemSchema := newSchema(field.ItemsType)
 			schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
 				A: base.CreateSchemaProxy(itemSchema),
 			}
@@ -274,22 +278,19 @@ func (g *Generator) generateFieldSchemaWithRefs(field *resolver.ResolvedField, s
 	if strings.HasPrefix(goType, "map[") {
 		if idx := strings.LastIndex(goType, "]"); idx > 0 && idx < len(goType)-1 {
 			valueType := goType[idx+1:]
-			schema := g.schemaBuilder.NewSchema()
-			g.schemaBuilder.SetType(schema, "object")
+			schema := newSchema("object")
 
 			if isSchemaReference(valueType, schemas) {
 				schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{
 					A: base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", extractTypeName(valueType))),
 				}
 			} else if isPrimitive(extractTypeName(valueType)) {
-				propSchema := g.schemaBuilder.NewSchema()
-				g.schemaBuilder.SetType(propSchema, goTypeToPrimitive(extractTypeName(valueType)))
+				propSchema := newSchema(goTypeToPrimitive(extractTypeName(valueType)))
 				schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{
 					A: base.CreateSchemaProxy(propSchema),
 				}
 			} else {
-				propSchema := g.schemaBuilder.NewSchema()
-				g.schemaBuilder.SetType(propSchema, "string")
+				propSchema := newSchema("string")
 				schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{
 					A: base.CreateSchemaProxy(propSchema),
 				}
@@ -307,22 +308,21 @@ func (g *Generator) generateFieldSchemaWithRefs(field *resolver.ResolvedField, s
 
 	// Handle any value (empty schema)
 	if field.IsAnyValue {
-		schema := g.schemaBuilder.NewSchema()
+		schema := newSchema()
 		g.addFieldConstraints(schema, field)
 		return base.CreateSchemaProxy(schema)
 	}
 
 	// Handle primitives and other types
-	schema := g.schemaBuilder.NewSchema()
+	schema := newSchema()
 	if field.IsArray {
-		g.schemaBuilder.SetType(schema, "array")
-		itemSchema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(itemSchema, field.ItemsType)
+		schema.Type = []string{"array"}
+		itemSchema := newSchema(field.ItemsType)
 		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
 			A: base.CreateSchemaProxy(itemSchema),
 		}
 	} else {
-		g.schemaBuilder.SetType(schema, field.OpenAPIType)
+		schema.Type = []string{field.OpenAPIType}
 	}
 
 	g.addFieldConstraints(schema, field)
@@ -330,53 +330,33 @@ func (g *Generator) generateFieldSchemaWithRefs(field *resolver.ResolvedField, s
 }
 
 // generateRefSchema builds the schema for a field whose type is a named @schema.
-// A bare $ref is emitted when the field has no annotation keywords and is not nullable.
-// Otherwise sibling keywords (description, deprecated, ...) are attached: natively in
-// OpenAPI 3.1+ ($ref can carry siblings per JSON Schema 2020-12), or via an allOf
-// wrapper in 3.0 (where $ref siblings are forbidden). Nullable refs always need a
-// composition wrapper, since a $ref cannot also be typed "null".
+// A bare $ref is emitted when the field has no annotation keywords and is not
+// nullable; otherwise sibling keywords (description, deprecated, ...) are attached.
 func (g *Generator) generateRefSchema(refPath string, field *resolver.ResolvedField) *base.SchemaProxy {
-	// Nullable refs always need a composition wrapper; a $ref cannot also be typed "null".
+	// A $ref cannot also be typed "null", so nullability becomes a union. oneOf
+	// rather than siblings: siblings would intersect the two, not unite them.
 	if field.Nullable {
-		wrapper := g.schemaBuilder.NewSchema()
-		if g.schemaBuilder.Is31Plus() {
-			// OpenAPI 3.1+: express null via oneOf (siblings would intersect, not union).
-			wrapper.OneOf = []*base.SchemaProxy{
-				base.CreateSchemaProxyRef(refPath),
-				base.CreateSchemaProxy(&base.Schema{Type: []string{"null"}}),
-			}
-		} else {
-			// OpenAPI 3.0: $ref cannot have siblings; wrap in allOf and mark nullable.
-			wrapper.AllOf = []*base.SchemaProxy{base.CreateSchemaProxyRef(refPath)}
+		wrapper := newSchema()
+		wrapper.OneOf = []*base.SchemaProxy{
+			base.CreateSchemaProxyRef(refPath),
+			base.CreateSchemaProxy(newSchema("null")),
 		}
 		g.addFieldConstraints(wrapper, field)
 		return base.CreateSchemaProxy(wrapper)
 	}
 
-	// Non-nullable: build the sibling keywords; addFieldConstraints is the single source
-	// of truth for which keywords exist.
-	siblings := g.schemaBuilder.NewSchema()
+	// JSON Schema 2020-12 lets $ref carry sibling keywords directly, so there is
+	// nothing to wrap. An empty siblings schema renders as a bare $ref on its own,
+	// which is why this needs no special case for unannotated fields.
+	// addFieldConstraints is the single source of truth for which keywords exist.
+	siblings := newSchema()
 	g.addFieldConstraints(siblings, field)
-
-	if g.schemaBuilder.Is31Plus() {
-		// OpenAPI 3.1+: $ref carries siblings directly (JSON Schema 2020-12). An empty
-		// siblings schema renders as a bare $ref, so no special-casing is needed.
-		return base.CreateSchemaProxyRefWithSchema(refPath, siblings)
-	}
-
-	// OpenAPI 3.0: $ref cannot have siblings. Wrap in allOf only when there is something
-	// to carry; an unannotated ref stays a bare $ref rather than a noisy allOf wrapper.
-	if reflect.DeepEqual(siblings, g.schemaBuilder.NewSchema()) {
-		return base.CreateSchemaProxyRef(refPath)
-	}
-	siblings.AllOf = []*base.SchemaProxy{base.CreateSchemaProxyRef(refPath)}
-	return base.CreateSchemaProxy(siblings)
+	return base.CreateSchemaProxyRefWithSchema(refPath, siblings)
 }
 
 // buildInlineObjectSchema builds an object schema from inline fields
 func (g *Generator) buildInlineObjectSchema(fields []*resolver.ResolvedField, schemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
-	schema := g.schemaBuilder.NewSchema()
-	g.schemaBuilder.SetType(schema, "object")
+	schema := newSchema("object")
 
 	props := orderedmap.New[string, *base.SchemaProxy]()
 	var required []string
@@ -453,13 +433,13 @@ func (g *Generator) addFieldConstraints(schema *base.Schema, field *resolver.Res
 		schema.Maximum = field.Maximum
 	}
 	if field.ExclusiveMinimum != nil {
-		g.schemaBuilder.SetExclusiveMinimum(schema, *field.ExclusiveMinimum)
+		schema.ExclusiveMinimum = exclusiveBound(*field.ExclusiveMinimum)
 	}
 	if field.ExclusiveMaximum != nil {
-		g.schemaBuilder.SetExclusiveMaximum(schema, *field.ExclusiveMaximum)
+		schema.ExclusiveMaximum = exclusiveBound(*field.ExclusiveMaximum)
 	}
 	if field.Nullable {
-		g.schemaBuilder.SetNullable(schema, true)
+		markNullable(schema)
 	}
 	if field.Deprecated {
 		schema.Deprecated = &field.Deprecated
@@ -492,7 +472,7 @@ func convertEnumToYAMLNodes(values []string, openAPIType string) []*yaml.Node {
 func (g *Generator) generateFieldSchema(field *resolver.ResolvedField) *base.SchemaProxy {
 	// Handle any value (empty schema)
 	if field.IsAnyValue {
-		schema := g.schemaBuilder.NewSchema()
+		schema := newSchema()
 		if field.Description != "" {
 			schema.Description = field.Description
 		}
@@ -508,8 +488,7 @@ func (g *Generator) generateFieldSchema(field *resolver.ResolvedField) *base.Sch
 
 	// Handle arrays of anonymous structs
 	if len(field.ItemsInlineFields) > 0 {
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, "array")
+		schema := newSchema("array")
 		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
 			A: g.buildInlineObjectSchemaSimple(field.ItemsInlineFields),
 		}
@@ -519,8 +498,7 @@ func (g *Generator) generateFieldSchema(field *resolver.ResolvedField) *base.Sch
 
 	// Handle maps of anonymous structs
 	if len(field.MapValueInlineFields) > 0 {
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, "object")
+		schema := newSchema("object")
 		schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{
 			A: g.buildInlineObjectSchemaSimple(field.MapValueInlineFields),
 		}
@@ -529,16 +507,15 @@ func (g *Generator) generateFieldSchema(field *resolver.ResolvedField) *base.Sch
 	}
 
 	// Handle arrays
-	schema := g.schemaBuilder.NewSchema()
+	schema := newSchema()
 	if field.IsArray {
-		g.schemaBuilder.SetType(schema, "array")
-		itemSchema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(itemSchema, field.ItemsType)
+		schema.Type = []string{"array"}
+		itemSchema := newSchema(field.ItemsType)
 		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
 			A: base.CreateSchemaProxy(itemSchema),
 		}
 	} else {
-		g.schemaBuilder.SetType(schema, field.OpenAPIType)
+		schema.Type = []string{field.OpenAPIType}
 	}
 
 	g.addFieldConstraints(schema, field)
@@ -547,8 +524,7 @@ func (g *Generator) generateFieldSchema(field *resolver.ResolvedField) *base.Sch
 
 // buildInlineObjectSchemaSimple builds an object schema from inline fields without schema refs
 func (g *Generator) buildInlineObjectSchemaSimple(fields []*resolver.ResolvedField) *base.SchemaProxy {
-	schema := g.schemaBuilder.NewSchema()
-	g.schemaBuilder.SetType(schema, "object")
+	schema := newSchema("object")
 
 	props := orderedmap.New[string, *base.SchemaProxy]()
 	var required []string
@@ -570,13 +546,12 @@ func (g *Generator) buildInlineObjectSchemaSimple(fields []*resolver.ResolvedFie
 
 // generateParameterFieldSchema generates a schema for a parameter field (excludes description)
 func (g *Generator) generateParameterFieldSchema(field *resolver.ResolvedField) *base.SchemaProxy {
-	schema := g.schemaBuilder.NewSchema()
+	schema := newSchema()
 
 	// Handle arrays
 	if field.IsArray {
-		g.schemaBuilder.SetType(schema, "array")
-		itemSchema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(itemSchema, field.ItemsType)
+		schema.Type = []string{"array"}
+		itemSchema := newSchema(field.ItemsType)
 		// Add enum to items if present
 		if len(field.Enum) > 0 {
 			itemSchema.Enum = convertEnumToYAMLNodes(field.Enum, field.ItemsType)
@@ -585,7 +560,7 @@ func (g *Generator) generateParameterFieldSchema(field *resolver.ResolvedField) 
 			A: base.CreateSchemaProxy(itemSchema),
 		}
 	} else {
-		g.schemaBuilder.SetType(schema, field.OpenAPIType)
+		schema.Type = []string{field.OpenAPIType}
 		// Add enum directly
 		if len(field.Enum) > 0 {
 			schema.Enum = convertEnumToYAMLNodes(field.Enum, field.OpenAPIType)
@@ -630,13 +605,13 @@ func (g *Generator) generateParameterFieldSchema(field *resolver.ResolvedField) 
 		schema.Maximum = field.Maximum
 	}
 	if field.ExclusiveMinimum != nil {
-		g.schemaBuilder.SetExclusiveMinimum(schema, *field.ExclusiveMinimum)
+		schema.ExclusiveMinimum = exclusiveBound(*field.ExclusiveMinimum)
 	}
 	if field.ExclusiveMaximum != nil {
-		g.schemaBuilder.SetExclusiveMaximum(schema, *field.ExclusiveMaximum)
+		schema.ExclusiveMaximum = exclusiveBound(*field.ExclusiveMaximum)
 	}
 	if field.Nullable {
-		g.schemaBuilder.SetNullable(schema, true)
+		markNullable(schema)
 	}
 	if field.Deprecated {
 		schema.Deprecated = &field.Deprecated
@@ -952,8 +927,7 @@ func (g *Generator) generateResponsesWithInline(responses map[string]*resolver.R
 			headers := orderedmap.New[string, *v3.Header]()
 			for _, headerParam := range response.Headers {
 				for _, field := range headerParam.Fields {
-					headerSchema := g.schemaBuilder.NewSchema()
-					g.schemaBuilder.SetType(headerSchema, field.OpenAPIType)
+					headerSchema := newSchema(field.OpenAPIType)
 					if field.Format != "" {
 						headerSchema.Format = field.Format
 					}
@@ -1000,8 +974,7 @@ func (g *Generator) generateResponsesWithInline(responses map[string]*resolver.R
 			headers := orderedmap.New[string, *v3.Header]()
 			for _, headerParam := range inline.Headers {
 				for _, field := range headerParam.Fields {
-					headerSchema := g.schemaBuilder.NewSchema()
-					g.schemaBuilder.SetType(headerSchema, field.OpenAPIType)
+					headerSchema := newSchema(field.OpenAPIType)
 					if field.Format != "" {
 						headerSchema.Format = field.Format
 					}
@@ -1055,8 +1028,7 @@ func (g *Generator) generateWrappedSchema(body *resolver.ResolvedBody, schemas m
 		return g.generateSchemaRef(body.Schema, body.IsArray, body.IsMap, body.ElementType)
 	}
 
-	schema := g.schemaBuilder.NewSchema()
-	g.schemaBuilder.SetType(schema, "object")
+	schema := newSchema("object")
 
 	if wrapperSchema.Description != "" {
 		schema.Description = wrapperSchema.Description
@@ -1093,8 +1065,7 @@ func (g *Generator) generateInlineWrappedSchema(inline *resolver.ResolvedInlineB
 
 	wrapperSchema := inline.Bind.WrapperSchema
 
-	schema := g.schemaBuilder.NewSchema()
-	g.schemaBuilder.SetType(schema, "object")
+	schema := newSchema("object")
 
 	if wrapperSchema.Description != "" {
 		schema.Description = wrapperSchema.Description
@@ -1125,8 +1096,7 @@ func (g *Generator) generateInlineWrappedSchema(inline *resolver.ResolvedInlineB
 
 // generateInlineSchema generates an object schema from inline struct fields
 func (g *Generator) generateInlineSchema(fields []*resolver.ResolvedField) *base.SchemaProxy {
-	schema := g.schemaBuilder.NewSchema()
-	g.schemaBuilder.SetType(schema, "object")
+	schema := newSchema("object")
 
 	if len(fields) == 0 {
 		return base.CreateSchemaProxy(schema)
@@ -1153,13 +1123,11 @@ func (g *Generator) generateInlineSchema(fields []*resolver.ResolvedField) *base
 // generateSchemaRef generates a schema reference (handles arrays, maps, and simple refs)
 func (g *Generator) generateSchemaRef(schemaName string, isArray bool, isMap bool, elementType string) *base.SchemaProxy {
 	if isArray {
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, "array")
+		schema := newSchema("array")
 
 		var itemsProxy *base.SchemaProxy
 		if isPrimitive(elementType) {
-			itemSchema := g.schemaBuilder.NewSchema()
-			g.schemaBuilder.SetType(itemSchema, goTypeToPrimitive(elementType))
+			itemSchema := newSchema(goTypeToPrimitive(elementType))
 			itemsProxy = base.CreateSchemaProxy(itemSchema)
 		} else {
 			itemsProxy = base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", elementType))
@@ -1169,13 +1137,11 @@ func (g *Generator) generateSchemaRef(schemaName string, isArray bool, isMap boo
 	}
 
 	if isMap {
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, "object")
+		schema := newSchema("object")
 
 		var propsProxy *base.SchemaProxy
 		if isPrimitive(elementType) {
-			propSchema := g.schemaBuilder.NewSchema()
-			g.schemaBuilder.SetType(propSchema, goTypeToPrimitive(elementType))
+			propSchema := newSchema(goTypeToPrimitive(elementType))
 			propsProxy = base.CreateSchemaProxy(propSchema)
 		} else {
 			propsProxy = base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", elementType))
@@ -1186,8 +1152,7 @@ func (g *Generator) generateSchemaRef(schemaName string, isArray bool, isMap boo
 
 	// Simple type or schema reference
 	if isPrimitive(elementType) {
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, goTypeToPrimitive(elementType))
+		schema := newSchema(goTypeToPrimitive(elementType))
 		return base.CreateSchemaProxy(schema)
 	}
 
