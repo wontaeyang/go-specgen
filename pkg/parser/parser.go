@@ -2,75 +2,72 @@ package parser
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/wontaeyang/go-specgen/pkg/annotation"
 )
 
-// Parser orchestrates the parsing of a Go package into a ParsedPackage
-type Parser struct {
-	packagePath string
-	comments    *PackageComments
-}
-
-// NewParser creates a new parser for the given package path
-func NewParser(packagePath string) *Parser {
-	return &Parser{
-		packagePath: packagePath,
-	}
-}
-
-// Comments returns the extracted package comments
-// This should be called after Parse() to access inline declarations and the loaded package
-func (p *Parser) Comments() *PackageComments {
-	return p.comments
-}
-
-// Parse parses the package and returns a ParsedPackage
-func (p *Parser) Parse() (*ParsedPackage, error) {
-	// Step 1: Extract comments from AST
-	comments, err := ExtractComments(p.packagePath)
+// Parse reads every annotation in a Go package and returns the result.
+//
+// The returned *Package is the parser's entire output: no comment side channel,
+// no second pass. It carries the loaded *packages.Package too, so the resolver
+// works from the same type identities the parser saw rather than loading the
+// package a second time.
+func Parse(packagePath string) (*Package, error) {
+	comments, err := ExtractComments(packagePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract comments: %w", err)
 	}
-	p.comments = comments
 
-	result := &ParsedPackage{
+	p := &parser{comments: comments}
+	return p.parse()
+}
+
+// parser holds the comment scan while the annotation passes run over it.
+type parser struct {
+	comments *PackageComments
+}
+
+func (p *parser) parse() (*Package, error) {
+	comments := p.comments
+
+	result := &Package{
 		PackageName: comments.Name,
+		Pkg:         comments.Pkg,
+		FuncInlines: comments.FuncInlines,
 		Schemas:     make(map[string]*Schema),
 		Parameters:  make(map[string]*Parameter),
 		Endpoints:   make([]*Endpoint, 0),
 	}
 
-	// Step 2: Parse @api annotation
 	if err := p.parseAPI(result); err != nil {
 		return nil, fmt.Errorf("failed to parse @api: %w", err)
 	}
 
-	// Step 3: Parse @schema annotations
 	if err := p.parseSchemas(result); err != nil {
 		return nil, fmt.Errorf("failed to parse schemas: %w", err)
 	}
 
-	// Step 4: Parse parameter structs (@path, @query, @header, @cookie)
+	// Parameter structs: @path, @query, @header, @cookie
 	if err := p.parseParameters(result); err != nil {
 		return nil, fmt.Errorf("failed to parse parameters: %w", err)
 	}
 
-	// Step 5: Parse @endpoint annotations
 	if err := p.parseEndpoints(result); err != nil {
 		return nil, fmt.Errorf("failed to parse endpoints: %w", err)
 	}
 
-	// Step 6: Parse @field annotations on every struct that has them —
-	// @schema structs and inline var structs both, via one shared path.
+	// @field annotations on every struct that has them. Runs after the passes
+	// that discover those structs.
 	if err := p.parseStructFields(result); err != nil {
 		return nil, fmt.Errorf("failed to parse struct fields: %w", err)
 	}
 
-	// Step 7: Resolve type-alias schemas (generic instantiations). Runs after
-	// parseStructFields so aliases copy already-populated Fields from their base.
+	// Type-alias schemas (generic instantiations). Runs after parseStructFields
+	// so aliases copy already-populated Fields from their base.
 	if err := p.resolveSchemaAliases(result); err != nil {
 		return nil, fmt.Errorf("failed to resolve schema aliases: %w", err)
 	}
@@ -78,14 +75,17 @@ func (p *Parser) Parse() (*ParsedPackage, error) {
 	return result, nil
 }
 
-// parseStructFields is the single entry point for @field parsing. It iterates
-// every source of struct field comments — @schema structs and inline var structs
-// declared in handler bodies — and populates their Fields via parseFieldComments.
-// There is no separate "inline field parsing"; discovery differs by source, but
-// the parsing itself is identical for both.
-func (p *Parser) parseStructFields(result *ParsedPackage) error {
+// parseStructFields is the single entry point for @field parsing. It visits
+// every source of struct field comments — @schema structs, parameter structs,
+// and inline var structs declared in handler bodies — and populates their
+// Fields via parseFieldComments. There is no separate "inline field parsing";
+// discovery differs by source, but the parsing itself is identical for all.
+//
+// Maps are visited in sorted order so that when several structs have bad
+// annotations, the same one is reported every run.
+func (p *parser) parseStructFields(result *Package) error {
 	// @schema structs
-	for structName, s := range result.Schemas {
+	for _, structName := range slices.Sorted(maps.Keys(result.Schemas)) {
 		fieldComments, ok := p.comments.FieldComments[structName]
 		if !ok {
 			continue
@@ -94,14 +94,16 @@ func (p *Parser) parseStructFields(result *ParsedPackage) error {
 		if err != nil {
 			return err
 		}
-		s.Fields = fields
+		result.Schemas[structName].Fields = fields
 	}
 
 	// Inline var structs declared in function bodies
-	for funcName, inlines := range p.comments.FuncInlines {
+	for _, funcName := range slices.Sorted(maps.Keys(p.comments.FuncInlines)) {
+		inlines := p.comments.FuncInlines[funcName]
 		if inlines == nil {
 			continue
 		}
+
 		var structs []*InlineStructInfo
 		structs = append(structs, inlines.Query...)
 		structs = append(structs, inlines.Path...)
@@ -110,9 +112,10 @@ func (p *Parser) parseStructFields(result *ParsedPackage) error {
 		if inlines.Request != nil {
 			structs = append(structs, inlines.Request)
 		}
-		for _, resp := range inlines.Responses {
-			structs = append(structs, resp)
+		for _, status := range slices.Sorted(maps.Keys(inlines.Responses)) {
+			structs = append(structs, inlines.Responses[status])
 		}
+
 		for _, info := range structs {
 			fields, err := p.parseFieldComments(info.FieldComments, funcName+"."+info.VarName)
 			if err != nil {
@@ -126,12 +129,19 @@ func (p *Parser) parseStructFields(result *ParsedPackage) error {
 }
 
 // parseFieldComments parses @field annotations from a map of per-field comment
-// blocks into *Field values. Single source of truth for @field parsing.
-func (p *Parser) parseFieldComments(fieldComments map[string]*CommentBlock, context string) ([]*Field, error) {
+// blocks into *Field values. Single source of truth for @field parsing, used by
+// @schema structs, parameter structs, and in-function var structs alike.
+//
+// Field order here does not reach the output — the resolver walks the Go struct
+// in declaration order and looks each field's annotation up by name. Sorting is
+// for the error path: without it, which of several bad fields gets reported
+// would vary run to run.
+func (p *parser) parseFieldComments(fieldComments map[string]*CommentBlock, context string) ([]*Field, error) {
 	var fields []*Field
 	fieldNode := annotation.Schema.GetChild("@field")
 
-	for fieldName, fieldComment := range fieldComments {
+	for _, fieldName := range slices.Sorted(maps.Keys(fieldComments)) {
+		fieldComment := fieldComments[fieldName]
 		if fieldComment == nil || !fieldComment.HasAnnotation("@field") {
 			continue
 		}
@@ -151,7 +161,7 @@ func (p *Parser) parseFieldComments(fieldComments map[string]*CommentBlock, cont
 			}
 		}
 
-		field, err := p.convertParsedField(fieldName, parsedField)
+		field, err := convertParsedField(fieldName, parsedField)
 		if err != nil {
 			return nil, fmt.Errorf("invalid @field for %s.%s: %w", context, fieldName, err)
 		}
@@ -161,7 +171,7 @@ func (p *Parser) parseFieldComments(fieldComments map[string]*CommentBlock, cont
 }
 
 // parseAPI parses the @api annotation from package-level comments
-func (p *Parser) parseAPI(result *ParsedPackage) error {
+func (p *parser) parseAPI(result *Package) error {
 	if p.comments.PackageComments == nil {
 		return fmt.Errorf("no package-level comments found (missing @api annotation)")
 	}
@@ -282,7 +292,7 @@ func (p *Parser) parseAPI(result *ParsedPackage) error {
 }
 
 // parseSchemas parses all @schema annotated structs
-func (p *Parser) parseSchemas(result *ParsedPackage) error {
+func (p *parser) parseSchemas(result *Package) error {
 	// First pass: parse @schema annotated structs
 	for structName, commentBlock := range p.comments.StructComments {
 		if !commentBlock.HasAnnotation("@schema") {
@@ -329,7 +339,7 @@ func (p *Parser) parseSchemas(result *ParsedPackage) error {
 // (e.g. `type UserResponse = DataResponse[User]`) and creates derived Schema
 // entries by copying fields from the base. Runs after parseStructFields so the
 // base schema's Fields are already populated.
-func (p *Parser) resolveSchemaAliases(result *ParsedPackage) error {
+func (p *parser) resolveSchemaAliases(result *Package) error {
 	for typeName, typeInfo := range p.comments.TypeInfo {
 		if _, exists := result.Schemas[typeName]; exists {
 			continue
@@ -371,7 +381,7 @@ func extractBaseType(typeName string) string {
 }
 
 // parseParameters parses all parameter structs (@path, @query, @header, @cookie)
-func (p *Parser) parseParameters(result *ParsedPackage) error {
+func (p *parser) parseParameters(result *Package) error {
 	for structName, commentBlock := range p.comments.StructComments {
 		var paramType ParameterType
 
@@ -388,58 +398,24 @@ func (p *Parser) parseParameters(result *ParsedPackage) error {
 			continue
 		}
 
-		param := &Parameter{
+		fields, err := p.parseFieldComments(p.comments.FieldComments[structName], structName)
+		if err != nil {
+			return err
+		}
+
+		result.Parameters[structName] = &Parameter{
 			Name:       structName,
 			Type:       paramType,
 			GoTypeName: structName,
-			Fields:     make([]*Field, 0),
+			Fields:     fields,
 		}
-
-		// Parse fields
-		if fieldComments, ok := p.comments.FieldComments[structName]; ok {
-			for fieldName, fieldComment := range fieldComments {
-				if !fieldComment.HasAnnotation("@field") {
-					continue
-				}
-
-				fieldLines := fieldComment.GetAnnotationLines()
-				fieldNode := annotation.Schema.GetChild("@field")
-
-				// Check if inline format
-				if IsInlineFormat(fieldLines) {
-					parsedField, err := ParseInlineAnnotation(fieldLines[0], "@field", fieldNode)
-					if err != nil {
-						return fmt.Errorf("failed to parse inline @field for %s.%s: %w", structName, fieldName, err)
-					}
-
-					field, err := p.convertParsedField(fieldName, parsedField)
-					if err != nil {
-						return fmt.Errorf("invalid @field for %s.%s: %w", structName, fieldName, err)
-					}
-					param.Fields = append(param.Fields, field)
-				} else {
-					parsedField, err := ParseAnnotationBlock(fieldLines, "@field", fieldNode)
-					if err != nil {
-						return fmt.Errorf("failed to parse @field for %s.%s: %w", structName, fieldName, err)
-					}
-
-					field, err := p.convertParsedField(fieldName, parsedField)
-					if err != nil {
-						return fmt.Errorf("invalid @field for %s.%s: %w", structName, fieldName, err)
-					}
-					param.Fields = append(param.Fields, field)
-				}
-			}
-		}
-
-		result.Parameters[structName] = param
 	}
 
 	return nil
 }
 
 // parseEndpoints parses all @endpoint annotated functions
-func (p *Parser) parseEndpoints(result *ParsedPackage) error {
+func (p *parser) parseEndpoints(result *Package) error {
 	for funcName, commentBlock := range p.comments.FunctionComments {
 		if !commentBlock.HasAnnotation("@endpoint") {
 			continue
@@ -511,7 +487,9 @@ func (p *Parser) parseEndpoints(result *ParsedPackage) error {
 }
 
 // convertParsedField converts a ParsedAnnotation to a Field
-func (p *Parser) convertParsedField(fieldName string, parsed *ParsedAnnotation) (*Field, error) {
+// convertParsedField needs no parser state; it is a pure translation from a
+// parsed annotation tree to a Field.
+func convertParsedField(fieldName string, parsed *ParsedAnnotation) (*Field, error) {
 	field := &Field{
 		GoName:      fieldName,
 		Name:        fieldName, // Will be resolved from struct tags later

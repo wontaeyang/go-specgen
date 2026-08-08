@@ -9,9 +9,7 @@ import (
 
 func TestParser_Parse(t *testing.T) {
 	// Test full parse of testdata/sample.go
-	parser := NewParser("./testdata")
-
-	parsed, err := parser.Parse()
+	parsed, err := Parse("./testdata")
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -64,23 +62,22 @@ func TestParser_Parse(t *testing.T) {
 }
 
 func TestParser_ParseAPI(t *testing.T) {
-	parser := NewParser("./testdata")
 
 	// Extract comments first
 	comments, err := ExtractComments("./testdata")
 	if err != nil {
 		t.Fatalf("ExtractComments() error = %v", err)
 	}
-	parser.comments = comments
+	p := &parser{comments: comments}
 
-	result := &ParsedPackage{
+	result := &Package{
 		PackageName: "testdata",
 		Schemas:     make(map[string]*Schema),
 		Parameters:  make(map[string]*Parameter),
 		Endpoints:   make([]*Endpoint, 0),
 	}
 
-	err = parser.parseAPI(result)
+	err = p.parseAPI(result)
 	if err != nil {
 		t.Fatalf("parseAPI() error = %v", err)
 	}
@@ -101,42 +98,40 @@ func TestParser_ParseAPI(t *testing.T) {
 
 func TestParser_ParseAPI_MissingRequired(t *testing.T) {
 	// Create a parser with no package comments
-	parser := &Parser{
-		packagePath: "./testdata",
+	p := &parser{
 		comments: &PackageComments{
 			PackageComments: nil, // No package-level comments
 		},
 	}
 
-	result := &ParsedPackage{
+	result := &Package{
 		Schemas:    make(map[string]*Schema),
 		Parameters: make(map[string]*Parameter),
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := parser.parseAPI(result)
+	err := p.parseAPI(result)
 	if err == nil {
 		t.Error("parseAPI() should error when @api is missing")
 	}
 }
 
 func TestParser_ParseSchemas(t *testing.T) {
-	parser := NewParser("./testdata")
 
 	// Extract comments first
 	comments, err := ExtractComments("./testdata")
 	if err != nil {
 		t.Fatalf("ExtractComments() error = %v", err)
 	}
-	parser.comments = comments
+	p := &parser{comments: comments}
 
-	result := &ParsedPackage{
+	result := &Package{
 		Schemas:    make(map[string]*Schema),
 		Parameters: make(map[string]*Parameter),
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err = parser.parseSchemas(result)
+	err = p.parseSchemas(result)
 	if err != nil {
 		t.Fatalf("parseSchemas() error = %v", err)
 	}
@@ -144,7 +139,7 @@ func TestParser_ParseSchemas(t *testing.T) {
 	// parseStructFields is the single place that parses @field annotations, so
 	// it must be invoked to populate Schema.Fields — identical path to inline
 	// var structs.
-	if err := parser.parseStructFields(result); err != nil {
+	if err := p.parseStructFields(result); err != nil {
 		t.Fatalf("parseStructFields() error = %v", err)
 	}
 
@@ -161,22 +156,21 @@ func TestParser_ParseSchemas(t *testing.T) {
 }
 
 func TestParser_ParseParameters(t *testing.T) {
-	parser := NewParser("./testdata")
 
 	// Extract comments first
 	comments, err := ExtractComments("./testdata")
 	if err != nil {
 		t.Fatalf("ExtractComments() error = %v", err)
 	}
-	parser.comments = comments
+	p := &parser{comments: comments}
 
-	result := &ParsedPackage{
+	result := &Package{
 		Schemas:    make(map[string]*Schema),
 		Parameters: make(map[string]*Parameter),
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err = parser.parseParameters(result)
+	err = p.parseParameters(result)
 	if err != nil {
 		t.Fatalf("parseParameters() error = %v", err)
 	}
@@ -197,16 +191,12 @@ func TestParser_ParseParameters(t *testing.T) {
 func TestParser_ParseStructFields_InlineStructs(t *testing.T) {
 	// Verifies that parseStructFields populates Fields for inline var structs
 	// declared inside handler bodies via the same path as @schema structs.
-	parser := NewParser("../../examples/inline")
-	parsed, err := parser.Parse()
+	result, err := Parse("../../examples/inline")
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
 
-	listUsers := parsed.Endpoints
-	_ = listUsers
-
-	inlines := parser.comments.FuncInlines["ListUsers"]
+	inlines := result.FuncInlines["ListUsers"]
 	if inlines == nil || len(inlines.Query) == 0 {
 		t.Fatal("ListUsers should have an inline @query struct")
 	}
@@ -249,22 +239,21 @@ func TestParser_ParseStructFields_InlineStructs(t *testing.T) {
 }
 
 func TestParser_ParseEndpoints(t *testing.T) {
-	parser := NewParser("./testdata")
 
 	// Extract comments first
 	comments, err := ExtractComments("./testdata")
 	if err != nil {
 		t.Fatalf("ExtractComments() error = %v", err)
 	}
-	parser.comments = comments
+	p := &parser{comments: comments}
 
-	result := &ParsedPackage{
+	result := &Package{
 		Schemas:    make(map[string]*Schema),
 		Parameters: make(map[string]*Parameter),
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err = parser.parseEndpoints(result)
+	err = p.parseEndpoints(result)
 	if err != nil {
 		t.Fatalf("parseEndpoints() error = %v", err)
 	}
@@ -291,7 +280,6 @@ func TestParser_ParseEndpoints(t *testing.T) {
 }
 
 func TestParser_ConvertParsedField(t *testing.T) {
-	parser := &Parser{}
 
 	tests := []struct {
 		name       string
@@ -328,7 +316,7 @@ func TestParser_ConvertParsedField(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			field, err := parser.convertParsedField(tt.fieldName, tt.annotation)
+			field, err := convertParsedField(tt.fieldName, tt.annotation)
 			if err != nil {
 				t.Fatalf("convertParsedField() error = %v", err)
 			}
@@ -349,8 +337,6 @@ func TestParser_ConvertParsedField(t *testing.T) {
 }
 
 func TestParser_ConvertParsedField_Numeric(t *testing.T) {
-	parser := &Parser{}
-
 	annotation := &ParsedAnnotation{
 		Children: map[string]*ParsedAnnotation{
 			"@minimum":   {Value: "0"},
@@ -360,7 +346,7 @@ func TestParser_ConvertParsedField_Numeric(t *testing.T) {
 		},
 	}
 
-	field, err := parser.convertParsedField("Age", annotation)
+	field, err := convertParsedField("Age", annotation)
 	if err != nil {
 		t.Fatalf("convertParsedField() error = %v", err)
 	}
@@ -383,15 +369,13 @@ func TestParser_ConvertParsedField_Numeric(t *testing.T) {
 }
 
 func TestParser_ConvertParsedField_Enum(t *testing.T) {
-	parser := &Parser{}
-
 	annotation := &ParsedAnnotation{
 		Children: map[string]*ParsedAnnotation{
 			"@enum": {Value: "active, inactive, pending"},
 		},
 	}
 
-	field, err := parser.convertParsedField("Status", annotation)
+	field, err := convertParsedField("Status", annotation)
 	if err != nil {
 		t.Fatalf("convertParsedField() error = %v", err)
 	}
@@ -409,15 +393,13 @@ func TestParser_ConvertParsedField_Enum(t *testing.T) {
 }
 
 func TestParser_ConvertParsedField_Deprecated(t *testing.T) {
-	parser := &Parser{}
-
 	annotation := &ParsedAnnotation{
 		Children: map[string]*ParsedAnnotation{
 			"@deprecated": {IsFlag: true},
 		},
 	}
 
-	field, err := parser.convertParsedField("OldField", annotation)
+	field, err := convertParsedField("OldField", annotation)
 	if err != nil {
 		t.Fatalf("convertParsedField() error = %v", err)
 	}
@@ -428,15 +410,13 @@ func TestParser_ConvertParsedField_Deprecated(t *testing.T) {
 }
 
 func TestParser_ConvertParsedField_InvalidFloat(t *testing.T) {
-	parser := &Parser{}
-
 	annotation := &ParsedAnnotation{
 		Children: map[string]*ParsedAnnotation{
 			"@minimum": {Value: "abc"},
 		},
 	}
 
-	_, err := parser.convertParsedField("BadField", annotation)
+	_, err := convertParsedField("BadField", annotation)
 	if err == nil {
 		t.Fatal("expected error for invalid @minimum value")
 	}
@@ -447,15 +427,13 @@ func TestParser_ConvertParsedField_InvalidFloat(t *testing.T) {
 }
 
 func TestParser_ConvertParsedField_InvalidInt(t *testing.T) {
-	parser := &Parser{}
-
 	annotation := &ParsedAnnotation{
 		Children: map[string]*ParsedAnnotation{
 			"@minLength": {Value: "1.5"},
 		},
 	}
 
-	_, err := parser.convertParsedField("BadField", annotation)
+	_, err := convertParsedField("BadField", annotation)
 	if err == nil {
 		t.Fatal("expected error for invalid @minLength value")
 	}
@@ -466,8 +444,6 @@ func TestParser_ConvertParsedField_InvalidInt(t *testing.T) {
 }
 
 func TestParser_ConvertParsedField_ValidNumeric(t *testing.T) {
-	parser := &Parser{}
-
 	annotation := &ParsedAnnotation{
 		Children: map[string]*ParsedAnnotation{
 			"@minimum":   {Value: "1.5"},
@@ -477,7 +453,7 @@ func TestParser_ConvertParsedField_ValidNumeric(t *testing.T) {
 		},
 	}
 
-	field, err := parser.convertParsedField("GoodField", annotation)
+	field, err := convertParsedField("GoodField", annotation)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -497,8 +473,6 @@ func TestParser_ConvertParsedField_ValidNumeric(t *testing.T) {
 }
 
 func TestParser_ConvertParsedField_RequiredNullableOverrides(t *testing.T) {
-	parser := &Parser{}
-
 	tests := []struct {
 		name         string
 		annotation   *ParsedAnnotation
@@ -562,7 +536,7 @@ func TestParser_ConvertParsedField_RequiredNullableOverrides(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			field, err := parser.convertParsedField("F", tt.annotation)
+			field, err := convertParsedField("F", tt.annotation)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -577,15 +551,13 @@ func TestParser_ConvertParsedField_RequiredNullableOverrides(t *testing.T) {
 }
 
 func TestParser_ConvertParsedField_InvalidBool(t *testing.T) {
-	parser := &Parser{}
-
 	annotation := &ParsedAnnotation{
 		Children: map[string]*ParsedAnnotation{
 			"@required": {Value: "maybe"},
 		},
 	}
 
-	_, err := parser.convertParsedField("BadField", annotation)
+	_, err := convertParsedField("BadField", annotation)
 	if err == nil {
 		t.Fatal("expected error for invalid @required value")
 	}
@@ -615,7 +587,7 @@ func boolPtrStr(b *bool) string {
 
 func TestParser_ParseEndpoint_Metadata(t *testing.T) {
 	// Test that endpoint metadata (method and path) is parsed correctly
-	parser := &Parser{
+	p := &parser{
 		comments: &PackageComments{
 			FunctionComments: map[string]*CommentBlock{
 				"GetUser": {
@@ -629,13 +601,13 @@ func TestParser_ParseEndpoint_Metadata(t *testing.T) {
 		},
 	}
 
-	result := &ParsedPackage{
+	result := &Package{
 		Schemas:    make(map[string]*Schema),
 		Parameters: make(map[string]*Parameter),
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := parser.parseEndpoints(result)
+	err := p.parseEndpoints(result)
 	if err != nil {
 		t.Fatalf("parseEndpoints() error = %v", err)
 	}
@@ -661,7 +633,7 @@ func TestParser_ParseEndpoint_Metadata(t *testing.T) {
 
 func TestParser_ParseEndpoint_Tags(t *testing.T) {
 	// Test that tags are parsed from multiple annotations
-	parser := &Parser{
+	p := &parser{
 		comments: &PackageComments{
 			FunctionComments: map[string]*CommentBlock{
 				"GetUser": {
@@ -677,13 +649,13 @@ func TestParser_ParseEndpoint_Tags(t *testing.T) {
 		},
 	}
 
-	result := &ParsedPackage{
+	result := &Package{
 		Schemas:    make(map[string]*Schema),
 		Parameters: make(map[string]*Parameter),
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := parser.parseEndpoints(result)
+	err := p.parseEndpoints(result)
 	if err != nil {
 		t.Fatalf("parseEndpoints() error = %v", err)
 	}
@@ -704,7 +676,7 @@ func TestParser_ParseEndpoint_Tags(t *testing.T) {
 
 func TestParser_ParseEndpoint_Request(t *testing.T) {
 	// Test that request body is parsed
-	parser := &Parser{
+	p := &parser{
 		comments: &PackageComments{
 			FunctionComments: map[string]*CommentBlock{
 				"CreateUser": {
@@ -721,13 +693,13 @@ func TestParser_ParseEndpoint_Request(t *testing.T) {
 		},
 	}
 
-	result := &ParsedPackage{
+	result := &Package{
 		Schemas:    make(map[string]*Schema),
 		Parameters: make(map[string]*Parameter),
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := parser.parseEndpoints(result)
+	err := p.parseEndpoints(result)
 	if err != nil {
 		t.Fatalf("parseEndpoints() error = %v", err)
 	}
@@ -753,7 +725,7 @@ func TestParser_ParseEndpoint_Request(t *testing.T) {
 
 func TestParser_ParseEndpoint_Responses(t *testing.T) {
 	// Test that multiple responses are parsed
-	parser := &Parser{
+	p := &parser{
 		comments: &PackageComments{
 			FunctionComments: map[string]*CommentBlock{
 				"CreateUser": {
@@ -774,13 +746,13 @@ func TestParser_ParseEndpoint_Responses(t *testing.T) {
 		},
 	}
 
-	result := &ParsedPackage{
+	result := &Package{
 		Schemas:    make(map[string]*Schema),
 		Parameters: make(map[string]*Parameter),
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := parser.parseEndpoints(result)
+	err := p.parseEndpoints(result)
 	if err != nil {
 		t.Fatalf("parseEndpoints() error = %v", err)
 	}
@@ -825,7 +797,7 @@ func TestParser_ParseEndpoint_Responses(t *testing.T) {
 }
 
 func TestParser_ParseAPI_Contact(t *testing.T) {
-	parser := &Parser{
+	p := &parser{
 		comments: &PackageComments{
 			PackageComments: &CommentBlock{
 				Lines: []string{
@@ -843,13 +815,13 @@ func TestParser_ParseAPI_Contact(t *testing.T) {
 		},
 	}
 
-	result := &ParsedPackage{
+	result := &Package{
 		Schemas:    make(map[string]*Schema),
 		Parameters: make(map[string]*Parameter),
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := parser.parseAPI(result)
+	err := p.parseAPI(result)
 	if err != nil {
 		t.Fatalf("parseAPI() error = %v", err)
 	}
@@ -872,7 +844,7 @@ func TestParser_ParseAPI_Contact(t *testing.T) {
 }
 
 func TestParser_ParseAPI_Servers(t *testing.T) {
-	parser := &Parser{
+	p := &parser{
 		comments: &PackageComments{
 			PackageComments: &CommentBlock{
 				Lines: []string{
@@ -891,13 +863,13 @@ func TestParser_ParseAPI_Servers(t *testing.T) {
 		},
 	}
 
-	result := &ParsedPackage{
+	result := &Package{
 		Schemas:    make(map[string]*Schema),
 		Parameters: make(map[string]*Parameter),
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := parser.parseAPI(result)
+	err := p.parseAPI(result)
 	if err != nil {
 		t.Fatalf("parseAPI() error = %v", err)
 	}
@@ -916,7 +888,7 @@ func TestParser_ParseAPI_Servers(t *testing.T) {
 }
 
 func TestParser_ParseAPI_SecuritySchemes(t *testing.T) {
-	parser := &Parser{
+	p := &parser{
 		comments: &PackageComments{
 			PackageComments: &CommentBlock{
 				Lines: []string{
@@ -935,13 +907,13 @@ func TestParser_ParseAPI_SecuritySchemes(t *testing.T) {
 		},
 	}
 
-	result := &ParsedPackage{
+	result := &Package{
 		Schemas:    make(map[string]*Schema),
 		Parameters: make(map[string]*Parameter),
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := parser.parseAPI(result)
+	err := p.parseAPI(result)
 	if err != nil {
 		t.Fatalf("parseAPI() error = %v", err)
 	}
@@ -1010,8 +982,7 @@ func TestParser_ParseAPI_DefaultContentType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			parser := &Parser{
-				packagePath: "./testdata",
+			p := &parser{
 				comments: &PackageComments{
 					PackageComments: &CommentBlock{
 						Lines: tt.lines,
@@ -1019,13 +990,13 @@ func TestParser_ParseAPI_DefaultContentType(t *testing.T) {
 				},
 			}
 
-			result := &ParsedPackage{
+			result := &Package{
 				Schemas:    make(map[string]*Schema),
 				Parameters: make(map[string]*Parameter),
 				Endpoints:  make([]*Endpoint, 0),
 			}
 
-			err := parser.parseAPI(result)
+			err := p.parseAPI(result)
 			if err != nil {
 				t.Fatalf("parseAPI() error = %v", err)
 			}
@@ -1039,7 +1010,7 @@ func TestParser_ParseAPI_DefaultContentType(t *testing.T) {
 
 func TestParser_ParseBody_Simple(t *testing.T) {
 	// Test @body without binding
-	parser := &Parser{
+	p := &parser{
 		comments: &PackageComments{
 			FunctionComments: map[string]*CommentBlock{
 				"GetUser": {
@@ -1056,11 +1027,11 @@ func TestParser_ParseBody_Simple(t *testing.T) {
 		},
 	}
 
-	result := &ParsedPackage{
+	result := &Package{
 		Endpoints: make([]*Endpoint, 0),
 	}
 
-	err := parser.parseEndpoints(result)
+	err := p.parseEndpoints(result)
 	if err != nil {
 		t.Fatalf("parseEndpoints failed: %v", err)
 	}
@@ -1090,7 +1061,7 @@ func TestParser_ParseBody_Simple(t *testing.T) {
 
 func TestParser_ParseBody_WithBind(t *testing.T) {
 	// Test @body with @bind using new syntax: @body User @bind DataResponse.Data
-	parser := &Parser{
+	p := &parser{
 		comments: &PackageComments{
 			FunctionComments: map[string]*CommentBlock{
 				"GetUser": {
@@ -1108,11 +1079,11 @@ func TestParser_ParseBody_WithBind(t *testing.T) {
 		},
 	}
 
-	result := &ParsedPackage{
+	result := &Package{
 		Endpoints: make([]*Endpoint, 0),
 	}
 
-	err := parser.parseEndpoints(result)
+	err := p.parseEndpoints(result)
 	if err != nil {
 		t.Fatalf("parseEndpoints failed: %v", err)
 	}
@@ -1149,7 +1120,7 @@ func TestParser_ParseBody_WithBind(t *testing.T) {
 
 func TestParser_ParseBody_WithArrayBind(t *testing.T) {
 	// Test @body with array schema: @body []User @bind DataResponse.Data
-	parser := &Parser{
+	p := &parser{
 		comments: &PackageComments{
 			FunctionComments: map[string]*CommentBlock{
 				"ListUsers": {
@@ -1167,11 +1138,11 @@ func TestParser_ParseBody_WithArrayBind(t *testing.T) {
 		},
 	}
 
-	result := &ParsedPackage{
+	result := &Package{
 		Endpoints: make([]*Endpoint, 0),
 	}
 
-	err := parser.parseEndpoints(result)
+	err := p.parseEndpoints(result)
 	if err != nil {
 		t.Fatalf("parseEndpoints failed: %v", err)
 	}
@@ -1194,7 +1165,7 @@ func TestParser_ParseBody_WithArrayBind(t *testing.T) {
 
 func TestParser_ParseBody_Request(t *testing.T) {
 	// Test @body in request with @bind
-	parser := &Parser{
+	p := &parser{
 		comments: &PackageComments{
 			FunctionComments: map[string]*CommentBlock{
 				"CreateUser": {
@@ -1215,11 +1186,11 @@ func TestParser_ParseBody_Request(t *testing.T) {
 		},
 	}
 
-	result := &ParsedPackage{
+	result := &Package{
 		Endpoints: make([]*Endpoint, 0),
 	}
 
-	err := parser.parseEndpoints(result)
+	err := p.parseEndpoints(result)
 	if err != nil {
 		t.Fatalf("parseEndpoints failed: %v", err)
 	}

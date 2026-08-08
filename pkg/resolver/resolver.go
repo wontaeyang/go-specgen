@@ -58,10 +58,9 @@ func isSpecialType(pkgPath, typeName string) bool {
 
 // Resolver resolves Go types to OpenAPI types
 type Resolver struct {
-	packagePath string
-	pkg         *packages.Package
-	typeCache   map[string]*TypeInfo
-	comments    *parser.PackageComments // For inline type resolution
+	parsed    *parser.Package
+	pkg       *packages.Package
+	typeCache map[string]*TypeInfo
 }
 
 // TypeInfo contains resolved type information
@@ -74,50 +73,24 @@ type TypeInfo struct {
 	IsAnyValue  bool // true for any/interface{} types
 }
 
-// NewResolver creates a new resolver for the given package
-// If comments is provided, it uses the package from comments for type resolution,
-// which enables inline struct resolution. Otherwise, it loads the package itself.
-func NewResolver(packagePath string, comments *parser.PackageComments) (*Resolver, error) {
-	var pkg *packages.Package
-
-	// Use the package from comments if available (enables inline type resolution)
-	if comments != nil && comments.Pkg != nil {
-		pkg = comments.Pkg
-	} else {
-		// Load the package ourselves
-		cfg := &packages.Config{
-			Mode: packages.NeedName |
-				packages.NeedFiles |
-				packages.NeedSyntax |
-				packages.NeedTypes |
-				packages.NeedTypesInfo,
-		}
-
-		pkgs, err := packages.Load(cfg, packagePath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load package: %w", err)
-		}
-
-		if len(pkgs) == 0 {
-			return nil, fmt.Errorf("no packages found")
-		}
-
-		pkg = pkgs[0]
-		if len(pkg.Errors) > 0 {
-			return nil, fmt.Errorf("package has errors: %v", pkg.Errors)
-		}
-	}
-
+// NewResolver creates a resolver for an already-parsed package.
+//
+// The Go package comes from the parser, which loaded it to read comments in the
+// first place. Loading it again here would produce a second set of *types.Type
+// values that compare unequal to the parser's, and would double the cost of the
+// most expensive step in the pipeline.
+func NewResolver(parsed *parser.Package) *Resolver {
 	return &Resolver{
-		packagePath: packagePath,
-		pkg:         pkg,
-		typeCache:   make(map[string]*TypeInfo),
-		comments:    comments,
-	}, nil
+		parsed:    parsed,
+		pkg:       parsed.Pkg,
+		typeCache: make(map[string]*TypeInfo),
+	}
 }
 
 // Resolve resolves all types in the parsed package
-func (r *Resolver) Resolve(parsed *parser.ParsedPackage) (*ResolvedPackage, error) {
+func (r *Resolver) Resolve() (*ResolvedPackage, error) {
+	parsed := r.parsed
+
 	resolved := &ResolvedPackage{
 		PackageName: parsed.PackageName,
 		Schemas:     make(map[string]*ResolvedSchema),
@@ -1092,8 +1065,8 @@ func (r *Resolver) resolveEndpoint(endpoint *parser.Endpoint, parameters map[str
 	}
 
 	// Resolve inline declarations from function body
-	if r.comments != nil && r.comments.FuncInlines != nil {
-		if inlines := r.comments.FuncInlines[endpoint.FuncName]; inlines != nil {
+	if r.parsed.FuncInlines != nil {
+		if inlines := r.parsed.FuncInlines[endpoint.FuncName]; inlines != nil {
 			if err := r.resolveInlineDeclarations(resolved, inlines, parameters, schemas, defaultContentType); err != nil {
 				return nil, fmt.Errorf("failed to resolve inline declarations: %w", err)
 			}

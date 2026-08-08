@@ -1,9 +1,17 @@
 package parser
 
-// ParsedPackage represents a complete parsed Go package with all annotations
-type ParsedPackage struct {
+import "golang.org/x/tools/go/packages"
+
+// Package is everything the parser found: one value carrying both the
+// annotations and the loaded Go package they were written against.
+type Package struct {
 	// PackageName is the Go package name
 	PackageName string
+
+	// Pkg is the loaded Go package, with types and type info. Handed to the
+	// resolver so it works from the same type identities the parser saw
+	// instead of loading the package a second time.
+	Pkg *packages.Package
 
 	// API contains the @api annotation data
 	API *APIInfo
@@ -16,6 +24,10 @@ type ParsedPackage struct {
 
 	// Endpoints contains all @endpoint annotated functions
 	Endpoints []*Endpoint
+
+	// FuncInlines are the declarations found inside handler bodies, keyed by
+	// function name. Their @field annotations are already parsed.
+	FuncInlines map[string]*FuncInlineInfo
 }
 
 // APIInfo represents the @api annotation

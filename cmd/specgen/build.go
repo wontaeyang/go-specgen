@@ -22,18 +22,12 @@ type Spec struct {
 // the fixture tests all go through it, so none of them can drift from the
 // others or from each other's notion of what specgen does.
 func buildSpec(packagePath, openapiVersion string) (*Spec, error) {
-	p := parser.NewParser(packagePath)
-	parsed, err := p.Parse()
+	parsed, err := parser.Parse(packagePath)
 	if err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
 	}
 
-	r, err := resolver.NewResolver(packagePath, p.Comments())
-	if err != nil {
-		return nil, fmt.Errorf("resolve: %w", err)
-	}
-
-	resolved, err := r.Resolve(parsed)
+	resolved, err := resolver.NewResolver(parsed).Resolve()
 	if err != nil {
 		return nil, fmt.Errorf("resolve: %w", err)
 	}

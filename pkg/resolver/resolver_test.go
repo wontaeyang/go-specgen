@@ -7,11 +7,20 @@ import (
 	"github.com/wontaeyang/go-specgen/pkg/parser"
 )
 
-func TestNewResolver(t *testing.T) {
-	resolver, err := NewResolver("../parser/testdata", nil)
+// newTestResolver parses a package and returns a resolver over it, which is
+// the only way to build one now that the parser owns package loading.
+func newTestResolver(t *testing.T, packagePath string) *Resolver {
+	t.Helper()
+
+	parsed, err := parser.Parse(packagePath)
 	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
+		t.Fatalf("parse %s: %v", packagePath, err)
 	}
+	return NewResolver(parsed)
+}
+
+func TestNewResolver(t *testing.T) {
+	resolver := newTestResolver(t, "../parser/testdata")
 
 	if resolver == nil {
 		t.Fatal("NewResolver() returned nil")
@@ -26,29 +35,13 @@ func TestNewResolver(t *testing.T) {
 	}
 }
 
-func TestNewResolver_InvalidPath(t *testing.T) {
-	_, err := NewResolver("./nonexistent", nil)
-	if err == nil {
-		t.Error("NewResolver() should error for invalid path")
-	}
-}
-
 func TestResolver_Resolve(t *testing.T) {
 	// Parse the test package first
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
 	// Create resolver
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
+	resolver := newTestResolver(t, "../parser/testdata")
 
 	// Resolve
-	resolved, err := resolver.Resolve(parsed)
+	resolved, err := resolver.Resolve()
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -80,27 +73,18 @@ func TestResolver_Resolve(t *testing.T) {
 
 func TestResolver_ResolveSchema(t *testing.T) {
 	// Parse the test package first
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
 	// Create resolver
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
+	resolver := newTestResolver(t, "../parser/testdata")
 
 	// Get User schema
-	userSchema, ok := parsed.Schemas["User"]
+	userSchema, ok := resolver.parsed.Schemas["User"]
 	if !ok {
 		t.Fatal("User schema not found in parsed package")
 	}
 
 	// Build schema names map
 	schemaNames := make(map[string]bool)
-	for name := range parsed.Schemas {
+	for name := range resolver.parsed.Schemas {
 		schemaNames[name] = true
 	}
 
@@ -160,10 +144,7 @@ func TestResolver_ResolveSchema(t *testing.T) {
 }
 
 func TestResolver_ResolveType(t *testing.T) {
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
+	resolver := newTestResolver(t, "../parser/testdata")
 
 	// Get User struct type
 	obj := resolver.pkg.Types.Scope().Lookup("User")
@@ -184,10 +165,7 @@ func TestResolver_ResolveType(t *testing.T) {
 }
 
 func TestResolver_ResolveAPI(t *testing.T) {
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
+	resolver := newTestResolver(t, "../parser/testdata")
 
 	api := &parser.APIInfo{
 		Title:   "Test API",
@@ -230,21 +208,12 @@ func TestResolver_ResolveAPI(t *testing.T) {
 
 func TestResolver_ResolveParameter(t *testing.T) {
 	// Parse the test package first
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
 	// Create resolver
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
+	resolver := newTestResolver(t, "../parser/testdata")
 
 	// Find a parameter (UserIDPath)
 	var param *parser.Parameter
-	for _, p := range parsed.Parameters {
+	for _, p := range resolver.parsed.Parameters {
 		if p.GoTypeName == "UserIDPath" {
 			param = p
 			break
@@ -346,27 +315,18 @@ func TestOmitsWhenEmpty(t *testing.T) {
 
 func TestResolver_ResolveEndpoint(t *testing.T) {
 	// Parse the test package first
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
 	// Create resolver
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
+	resolver := newTestResolver(t, "../parser/testdata")
 
 	// Build schema names map
 	schemaNames := make(map[string]bool)
-	for name := range parsed.Schemas {
+	for name := range resolver.parsed.Schemas {
 		schemaNames[name] = true
 	}
 
 	// Resolve schemas first
 	schemas := make(map[string]*ResolvedSchema)
-	for name, schema := range parsed.Schemas {
+	for name, schema := range resolver.parsed.Schemas {
 		resolved, err := resolver.resolveSchema(schema, schemaNames)
 		if err != nil {
 			t.Fatalf("Failed to resolve schema %s: %v", name, err)
@@ -376,7 +336,7 @@ func TestResolver_ResolveEndpoint(t *testing.T) {
 
 	// Resolve parameters
 	parameters := make(map[string]*ResolvedParameter)
-	for name, param := range parsed.Parameters {
+	for name, param := range resolver.parsed.Parameters {
 		resolved, err := resolver.resolveParameter(param)
 		if err != nil {
 			t.Fatalf("Failed to resolve parameter %s: %v", name, err)
@@ -385,11 +345,11 @@ func TestResolver_ResolveEndpoint(t *testing.T) {
 	}
 
 	// Get first endpoint
-	if len(parsed.Endpoints) == 0 {
+	if len(resolver.parsed.Endpoints) == 0 {
 		t.Skip("No endpoints in testdata")
 	}
 
-	endpoint := parsed.Endpoints[0]
+	endpoint := resolver.parsed.Endpoints[0]
 
 	// Resolve it
 	resolved, err := resolver.resolveEndpoint(endpoint, parameters, schemas, "")
@@ -416,10 +376,7 @@ func TestResolver_ResolveEndpoint(t *testing.T) {
 }
 
 func TestTypeInfo_BasicTypes(t *testing.T) {
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
+	resolver := newTestResolver(t, "../parser/testdata")
 
 	// We would need to construct Go types for testing
 	// For now, just verify resolver was created
@@ -429,10 +386,7 @@ func TestTypeInfo_BasicTypes(t *testing.T) {
 }
 
 func TestResolver_ByteSliceResolvesToStringByte(t *testing.T) {
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
+	resolver := newTestResolver(t, "../parser/testdata")
 
 	// Construct a []byte type using go/types
 	byteSlice := types.NewSlice(types.Typ[types.Byte])
@@ -455,20 +409,11 @@ func TestResolver_ByteSliceResolvesToStringByte(t *testing.T) {
 
 func TestResolver_InlineDeclarations(t *testing.T) {
 	// Parse the inline example package
-	p := parser.NewParser("../../examples/inline")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
 	// Create resolver with comments (for inline resolution)
-	resolver, err := NewResolver("../../examples/inline", p.Comments())
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
+	resolver := newTestResolver(t, "../../examples/inline")
 
 	// Resolve
-	resolved, err := resolver.Resolve(parsed)
+	resolved, err := resolver.Resolve()
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -755,10 +700,7 @@ func TestContentTypePrecedence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resolver, err := NewResolver("../parser/testdata", nil)
-			if err != nil {
-				t.Fatalf("NewResolver() error = %v", err)
-			}
+			resolver := newTestResolver(t, "../parser/testdata")
 
 			endpoint := &parser.Endpoint{
 				Method: "POST",
@@ -800,27 +742,18 @@ func TestContentTypePrecedence(t *testing.T) {
 
 func TestResolver_PointerImpliesNotRequired(t *testing.T) {
 	// Parse the test package
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
 	// Create resolver
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
+	resolver := newTestResolver(t, "../parser/testdata")
 
 	// Get FieldRequiredTest schema
-	schema, ok := parsed.Schemas["FieldRequiredTest"]
+	schema, ok := resolver.parsed.Schemas["FieldRequiredTest"]
 	if !ok {
 		t.Fatal("FieldRequiredTest schema not found in parsed package")
 	}
 
 	// Build schema names map
 	schemaNames := make(map[string]bool)
-	for name := range parsed.Schemas {
+	for name := range resolver.parsed.Schemas {
 		schemaNames[name] = true
 	}
 
@@ -879,27 +812,18 @@ func TestResolver_PointerImpliesNotRequired(t *testing.T) {
 
 func TestResolver_EmbeddedStructFlattening(t *testing.T) {
 	// Parse the test package
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
 	// Create resolver
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
+	resolver := newTestResolver(t, "../parser/testdata")
 
 	// Get EmbeddedTest schema
-	schema, ok := parsed.Schemas["EmbeddedTest"]
+	schema, ok := resolver.parsed.Schemas["EmbeddedTest"]
 	if !ok {
 		t.Fatal("EmbeddedTest schema not found in parsed package")
 	}
 
 	// Build schema names map
 	schemaNames := make(map[string]bool)
-	for name := range parsed.Schemas {
+	for name := range resolver.parsed.Schemas {
 		schemaNames[name] = true
 	}
 
@@ -939,24 +863,15 @@ func TestResolver_EmbeddedStructFlattening(t *testing.T) {
 }
 
 func TestResolver_EmbeddedPtrFlattening(t *testing.T) {
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
+	resolver := newTestResolver(t, "../parser/testdata")
 
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	schema, ok := parsed.Schemas["EmbeddedPtrTest"]
+	schema, ok := resolver.parsed.Schemas["EmbeddedPtrTest"]
 	if !ok {
 		t.Fatal("EmbeddedPtrTest schema not found in parsed package")
 	}
 
 	schemaNames := make(map[string]bool)
-	for name := range parsed.Schemas {
+	for name := range resolver.parsed.Schemas {
 		schemaNames[name] = true
 	}
 
@@ -987,24 +902,15 @@ func TestResolver_EmbeddedPtrFlattening(t *testing.T) {
 }
 
 func TestResolver_NestedEmbedFlattening(t *testing.T) {
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
+	resolver := newTestResolver(t, "../parser/testdata")
 
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
-
-	schema, ok := parsed.Schemas["NestedEmbedTest"]
+	schema, ok := resolver.parsed.Schemas["NestedEmbedTest"]
 	if !ok {
 		t.Fatal("NestedEmbedTest schema not found in parsed package")
 	}
 
 	schemaNames := make(map[string]bool)
-	for name := range parsed.Schemas {
+	for name := range resolver.parsed.Schemas {
 		schemaNames[name] = true
 	}
 
@@ -1046,20 +952,11 @@ func TestResolver_NestedEmbedFlattening(t *testing.T) {
 }
 
 func TestResolver_EmbeddedParameterFlattening(t *testing.T) {
-	p := parser.NewParser("../parser/testdata")
-	parsed, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Failed to parse package: %v", err)
-	}
-
-	resolver, err := NewResolver("../parser/testdata", nil)
-	if err != nil {
-		t.Fatalf("NewResolver() error = %v", err)
-	}
+	resolver := newTestResolver(t, "../parser/testdata")
 
 	// Find EmbeddedQueryParams parameter
 	var param *parser.Parameter
-	for _, p := range parsed.Parameters {
+	for _, p := range resolver.parsed.Parameters {
 		if p.GoTypeName == "EmbeddedQueryParams" {
 			param = p
 			break
