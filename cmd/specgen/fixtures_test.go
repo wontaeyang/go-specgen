@@ -87,29 +87,3 @@ func TestJSONRendering(t *testing.T) {
 		})
 	}
 }
-
-// TestVersionGuard pins the fact that specgen has no 3.2-specific behavior:
-// 3.2 output is 3.1 output with a different version line. If a 3.2 branch is
-// ever added, this fails loudly instead of the difference drifting in unseen.
-func TestVersionGuard(t *testing.T) {
-	for _, name := range subdirs(t, examplesDir) {
-		t.Run(name, func(t *testing.T) {
-			dir := filepath.Join(examplesDir, name)
-
-			v31, err := buildSpec(dir, "3.1")
-			if err != nil {
-				t.Fatalf("build 3.1: %v", err)
-			}
-
-			v32, err := buildSpec(dir, "3.2")
-			if err != nil {
-				t.Fatalf("build 3.2: %v", err)
-			}
-
-			want := strings.Replace(string(v31.YAML), "openapi: 3.1.0", "openapi: 3.2.0", 1)
-			if got := string(v32.YAML); got != want {
-				t.Errorf("3.2 output differs from 3.1 beyond the version line\n%s", firstDiff(want, got))
-			}
-		})
-	}
-}

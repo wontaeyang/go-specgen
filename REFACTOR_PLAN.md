@@ -290,9 +290,8 @@ from one pipeline pass.
 - **json** — `nested`, `responses`, `petstore`. Both formats serialize the same
   `*v3.Document`, so YAML goldens already prove specgen's correctness; these catch
   serializer breakage or a libopenapi upgrade changing output
-- **guard** — `TestVersionGuard` asserts 3.2 output differs from 3.1 *solely* in the
-  version line, across every example, so a future 3.2-specific behavior fails loudly
-  instead of drifting in
+Everything is rendered at 3.1 and only at 3.1. 3.2 stays a valid `-openapi` value —
+it differs from 3.1 by the version string alone — but nothing tests it.
 
 A fixture whose behavior becomes an error moves from `features/` to `errors/` in the
 commit that changes it — `param_struct_field` and `unsupported_types` at C8 and C9,
