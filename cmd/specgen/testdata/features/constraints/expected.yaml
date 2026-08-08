@@ -1,0 +1,76 @@
+openapi: 3.1.0
+info:
+    title: Constraints Fixture
+    description: Exercises every field constraint annotation.
+    version: 1.0.0
+paths:
+    /measurements:
+        get:
+            summary: List measurements
+            responses:
+                "200":
+                    description: ""
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/Measurement'
+components:
+    schemas:
+        Measurement:
+            type: object
+            properties:
+                id:
+                    type: string
+                    description: Server-assigned identifier
+                    readOnly: true
+                reading:
+                    exclusiveMinimum: 0
+                    type: number
+                    format: double
+                    description: Strictly positive reading
+                ratio:
+                    exclusiveMaximum: 1
+                    type: number
+                    format: double
+                    description: Ratio strictly below one
+                percent:
+                    exclusiveMaximum: 100
+                    exclusiveMinimum: 0
+                    type: number
+                    format: double
+                    description: Open on both sides
+                score:
+                    type: integer
+                    maximum: 100
+                    minimum: 0
+                    description: Inclusive bounds, for contrast
+                labels:
+                    type: array
+                    items:
+                        type: string
+                    maxItems: 10
+                    minItems: 1
+                    uniqueItems: true
+                    description: Distinct labels
+                samples:
+                    type: array
+                    items:
+                        type: integer
+                    maxItems: 4
+                    minItems: 2
+                    description: Bounded list without the uniqueness flag
+                calibration_key:
+                    type: string
+                    description: Calibration secret, accepted but never returned
+                    writeOnly: true
+            required:
+                - id
+                - reading
+                - ratio
+                - percent
+                - score
+                - labels
+                - samples
+                - calibration_key

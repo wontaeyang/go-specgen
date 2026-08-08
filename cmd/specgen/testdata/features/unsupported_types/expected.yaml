@@ -1,0 +1,42 @@
+openapi: 3.1.0
+info:
+    title: Unsupported Types Fixture
+    description: Go types that have no OpenAPI representation.
+    version: 1.0.0
+paths:
+    /jobs:
+        get:
+            summary: Get a job
+            responses:
+                "200":
+                    description: ""
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Job'
+components:
+    schemas:
+        Job:
+            type: object
+            properties:
+                id:
+                    type: string
+                    description: Job identifier
+                done:
+                    type: string
+                    description: Completion signal
+                cancel:
+                    type: string
+                    description: Cancellation hook
+                phase:
+                    type: string
+                    description: Phase angle
+                handle:
+                    type: string
+                    description: Raw memory address
+            required:
+                - id
+                - done
+                - cancel
+                - phase
+                - handle

@@ -1,0 +1,1 @@
+validate: @endpoint[GET /items/{id}]: parameter name conflict: id appears in both path and query parameters

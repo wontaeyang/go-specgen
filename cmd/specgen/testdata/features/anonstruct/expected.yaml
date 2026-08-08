@@ -1,0 +1,76 @@
+openapi: 3.1.0
+info:
+    title: Anonymous Struct Fixture
+    description: Nested field annotations inside anonymous structs.
+    version: 1.0.0
+paths:
+    /envelopes:
+        put:
+            summary: Replace an envelope
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/Envelope'
+                required: true
+            responses:
+                "200":
+                    description: Response for status 200
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    applied:
+                                        type: boolean
+                                        description: Whether the write was applied
+                                    results:
+                                        type: array
+                                        items:
+                                            type: object
+                                            properties:
+                                                name:
+                                                    type: string
+                                                code:
+                                                    type: string
+                                            required:
+                                                - name
+                                                - code
+                                        description: Per-entry results
+                                required:
+                                    - applied
+                                    - results
+components:
+    schemas:
+        Envelope:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: Envelope identifier
+                payload:
+                    type: object
+                    properties:
+                        kind:
+                            type: string
+                        entries:
+                            type: array
+                            items:
+                                type: object
+                                properties:
+                                    name:
+                                        type: string
+                                    weight:
+                                        type: number
+                                        format: double
+                                required:
+                                    - name
+                                    - weight
+                    required:
+                        - kind
+                        - entries
+                    description: Nested payload
+            required:
+                - id
+                - payload

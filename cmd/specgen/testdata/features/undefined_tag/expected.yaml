@@ -1,0 +1,21 @@
+openapi: 3.1.0
+info:
+    title: Undefined Tag Fixture
+    description: An endpoint tag with no API-level definition.
+    version: 1.0.0
+paths:
+    /widgets:
+        get:
+            tags:
+                - inventory
+            summary: List widgets
+            responses:
+                "200":
+                    description: ""
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    type: string
+components: {}

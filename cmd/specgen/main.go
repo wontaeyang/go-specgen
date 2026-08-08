@@ -5,11 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/wontaeyang/go-specgen/pkg/generator"
-	"github.com/wontaeyang/go-specgen/pkg/parser"
-	"github.com/wontaeyang/go-specgen/pkg/resolver"
-	"github.com/wontaeyang/go-specgen/pkg/validator"
 )
 
 const (
@@ -40,12 +35,8 @@ func main() {
 	}
 
 	// Validate format
-	var outputFormat generator.OutputFormat
 	switch *format {
-	case "json":
-		outputFormat = generator.FormatJSON
-	case "yaml", "yml":
-		outputFormat = generator.FormatYAML
+	case "json", "yaml", "yml":
 	default:
 		fmt.Fprintf(os.Stderr, "Error: invalid format '%s'. Must be 'json' or 'yaml'\n", *format)
 		os.Exit(1)
@@ -57,8 +48,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Run the generation
-	if err := generate(*packagePath, *outputPath, outputFormat, *openapiVersion); err != nil {
+	spec, err := buildSpec(*packagePath, *openapiVersion)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	data := spec.YAML
+	if *format == "json" {
+		data = spec.JSON
+	}
+
+	if err := writeFile(*outputPath, data); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -66,61 +67,15 @@ func main() {
 	fmt.Printf("Successfully generated OpenAPI spec: %s\n", *outputPath)
 }
 
-func generate(packagePath, outputPath string, format generator.OutputFormat, openapiVersion string) error {
-	// Step 1: Parse the package
-	fmt.Println("Parsing package...")
-	p := parser.NewParser(packagePath)
-	parsed, err := p.Parse()
-	if err != nil {
-		return fmt.Errorf("failed to parse package: %w", err)
-	}
-
-	// Step 2: Resolve types
-	fmt.Println("Resolving types...")
-	r, err := resolver.NewResolver(packagePath, p.Comments())
-	if err != nil {
-		return fmt.Errorf("failed to create resolver: %w", err)
-	}
-
-	resolved, err := r.Resolve(parsed)
-	if err != nil {
-		return fmt.Errorf("failed to resolve types: %w", err)
-	}
-
-	// Step 3: Validate
-	fmt.Println("Validating...")
-	v := validator.NewValidator()
-	if err := v.Validate(resolved); err != nil {
-		return fmt.Errorf("validation failed: %w", err)
-	}
-
-	// Step 4: Generate OpenAPI spec
-	fmt.Println("Generating OpenAPI spec...")
-	gen := generator.NewGenerator(openapiVersion)
-	spec, err := gen.Generate(resolved)
-	if err != nil {
-		return fmt.Errorf("failed to generate spec: %w", err)
-	}
-
-	// Step 5: Render to output format
-	fmt.Println("Rendering output...")
-	data, err := gen.Render(spec, format)
-	if err != nil {
-		return fmt.Errorf("failed to render spec: %w", err)
-	}
-
-	// Step 6: Write to file
-	fmt.Printf("Writing to %s...\n", outputPath)
-
-	// Create output directory if it doesn't exist
-	outputDir := filepath.Dir(outputPath)
-	if outputDir != "." && outputDir != "" {
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
+// writeFile writes data to path, creating the parent directory if needed.
+func writeFile(path string, data []byte) error {
+	if dir := filepath.Dir(path); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("failed to create output directory: %w", err)
 		}
 	}
 
-	if err := os.WriteFile(outputPath, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("failed to write output file: %w", err)
 	}
 

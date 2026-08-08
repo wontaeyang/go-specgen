@@ -1,0 +1,8 @@
+validate: 6 validation errors:
+  1. @schema[Bounds].Count: minimum cannot be greater than maximum
+  2. @schema[Bounds].Name: minLength cannot be greater than maxLength
+  3. @schema[Bounds].Weight: minLength/maxLength only valid for string types
+  4. @schema[Bounds].Label: uniqueItems only valid for array types
+  5. @schema[Bounds].Token: readOnly and writeOnly cannot both be true
+  6. @schema[Bounds].Code: invalid pattern regex: error parsing regexp: missing closing ): `^(`
+

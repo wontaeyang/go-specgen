@@ -1,0 +1,4 @@
+validate: 2 validation errors:
+  1. @endpoint[POST /widgets].@request: references unknown schema: WidgetInput
+  2. @endpoint[POST /widgets].@response[201]: references unknown schema: Widget
+
