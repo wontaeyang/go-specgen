@@ -379,34 +379,20 @@ func (v *Validator) validateEndpoint(endpoint *resolver.Endpoint, pkg *resolver.
 	// Extract path variables from path
 	pathVars := extractPathVariables(endpoint.Path)
 
-	// Validate path parameters match path variables (including inline params)
-	v.validatePathParametersWithInline(path, pathVars, endpoint.PathParams, endpoint.InlinePathParams)
+	// Validate path parameters match path variables
+	v.validatePathParameters(path, pathVars, endpoint.Parameters)
 
 	// Validate request body
 	if endpoint.Request != nil {
 		v.validateRequestBody(path, endpoint.Request, pkg.Schemas)
 	}
 
-	// Validate inline request bind target
-	if endpoint.InlineRequest != nil && endpoint.InlineRequest.Bind != nil {
-		v.validateBindTarget(path+".@request", endpoint.InlineRequest.Bind, pkg.Schemas)
-	}
-
-	// Validate responses (including inline responses)
-	hasResponses := len(endpoint.Responses) > 0 || len(endpoint.InlineResponses) > 0
-	if !hasResponses {
+	if len(endpoint.Responses) == 0 {
 		v.addError(path, "endpoint must have at least one response")
 	}
 
-	for statusCode, response := range endpoint.Responses {
-		v.validateResponse(path, statusCode, response, pkg.Schemas)
-	}
-
-	// Validate inline response bind targets
-	for statusCode, inlineResp := range endpoint.InlineResponses {
-		if inlineResp.Bind != nil {
-			v.validateBindTarget(fmt.Sprintf("%s.@response[%s]", path, statusCode), inlineResp.Bind, pkg.Schemas)
-		}
+	for _, response := range endpoint.Responses {
+		v.validateResponse(path, response, pkg.Schemas)
 	}
 
 	// Validate no parameter name conflicts
@@ -450,37 +436,35 @@ func extractPathVariables(path string) []string {
 	return vars
 }
 
-// validatePathParametersWithInline validates path parameters including inline declarations
-func (v *Validator) validatePathParametersWithInline(path string, pathVars []string, params []*resolver.ParameterStruct, inlineParams *resolver.InlineParams) {
+// validatePathParameters checks that the path template and the declared path
+// parameters describe the same set of names.
+func (v *Validator) validatePathParameters(path string, pathVars []string, params []*resolver.Parameter) {
 	// Create map of path variables
 	pathVarMap := make(map[string]bool)
 	for _, varName := range pathVars {
 		pathVarMap[varName] = true
 	}
 
-	// Collect all parameter field names from both regular and inline params
-	paramFieldMap := make(map[string]bool)
+	// Named and in-function declarations are one list now, so there is one
+	// place to collect from. Ordered rather than a map so that when several
+	// declared parameters are unused, they are reported the same way each run.
+	var declared []string
+	seen := make(map[string]bool)
 	for _, param := range params {
-		for _, field := range param.Fields {
-			paramFieldMap[field.Name] = true
+		if param.In != "path" || seen[param.Field.Name] {
+			continue
 		}
-	}
-	// Also collect from inline params
-	if inlineParams != nil {
-		for _, field := range inlineParams.Fields {
-			paramFieldMap[field.Name] = true
-		}
+		seen[param.Field.Name] = true
+		declared = append(declared, param.Field.Name)
 	}
 
-	// Check that all path variables have corresponding parameters
 	for _, varName := range pathVars {
-		if !paramFieldMap[varName] {
+		if !seen[varName] {
 			v.addError(path, fmt.Sprintf("path variable {%s} has no corresponding @path parameter", varName))
 		}
 	}
 
-	// Check that all path parameters are used in the path
-	for paramName := range paramFieldMap {
+	for _, paramName := range declared {
 		if !pathVarMap[paramName] {
 			v.addError(path, fmt.Sprintf("@path parameter %s not used in path", paramName))
 		}
@@ -493,6 +477,15 @@ func (v *Validator) validateRequestBody(path string, request *resolver.RequestBo
 		v.addError(path+".@request", "missing @contentType")
 	}
 
+	// An in-function @request is its own body, so only the named form can be
+	// missing one.
+	if request.Inline != nil {
+		if request.Inline.Bind != nil {
+			v.validateBindTarget(path+".@request", request.Inline.Bind, schemas)
+		}
+		return
+	}
+
 	if request.Body == nil || request.Body.Schema == "" {
 		v.addError(path+".@request", "missing @body")
 		return
@@ -500,7 +493,6 @@ func (v *Validator) validateRequestBody(path string, request *resolver.RequestBo
 
 	v.validateBodySchemaExists(path+".@request", request.Body, schemas)
 
-	// Validate bind target
 	if request.Body.Bind != nil {
 		v.validateBindTarget(path+".@request", request.Body.Bind, schemas)
 	}
@@ -525,7 +517,8 @@ func (v *Validator) validateBodySchemaExists(path string, body *resolver.Body, s
 }
 
 // validateResponse validates a response
-func (v *Validator) validateResponse(path, statusCode string, response *resolver.Response, schemas map[string]*resolver.Schema) {
+func (v *Validator) validateResponse(path string, response *resolver.Response, schemas map[string]*resolver.Schema) {
+	statusCode := response.StatusCode
 	responsePath := fmt.Sprintf("%s.@response[%s]", path, statusCode)
 
 	// Validate status code: 3-digit (200), range (2XX), or "default"
@@ -533,66 +526,40 @@ func (v *Validator) validateResponse(path, statusCode string, response *resolver
 		v.addError(responsePath, fmt.Sprintf("invalid status code: %s", statusCode))
 	}
 
-	// Schema is optional for responses (e.g., 204 No Content)
+	// An in-function @response is its own body, so there is no schema name to
+	// check — only the envelope it may be bound into.
+	if response.Inline != nil {
+		if response.Inline.Bind != nil {
+			v.validateBindTarget(responsePath, response.Inline.Bind, schemas)
+		}
+		return
+	}
+
+	// A named body is optional: 204 No Content has none.
 	if response.Body != nil && response.Body.Schema != "" {
 		v.validateBodySchemaExists(responsePath, response.Body, schemas)
 
-		// Validate bind target
 		if response.Body.Bind != nil {
 			v.validateBindTarget(responsePath, response.Body.Bind, schemas)
 		}
 	}
 }
 
-// isPrimitiveType checks if a type name is a Go primitive (no schema lookup needed)
-func isPrimitiveType(typeName string) bool {
-	primitives := map[string]bool{
-		"string": true, "int": true, "int8": true, "int16": true, "int32": true, "int64": true,
-		"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
-		"float32": true, "float64": true, "bool": true, "byte": true,
-	}
-	return primitives[typeName]
-}
-
-// validateParameterConflicts checks for parameter name conflicts across different parameter types
+// validateParameterConflicts checks for parameter name conflicts.
+//
+// Walking the merged list means in-function parameters are checked too. The
+// four-way version this replaces read only the named declarations, so a handler
+// could declare an inline @query x alongside a named @path x and hear nothing.
 func (v *Validator) validateParameterConflicts(path string, endpoint *resolver.Endpoint) {
-	allParams := make(map[string]string) // name -> type
+	seen := make(map[string]string) // name -> location it was first seen in
 
-	// Collect all parameter names with their types
-	for _, param := range endpoint.PathParams {
-		for _, field := range param.Fields {
-			if prevType, exists := allParams[field.Name]; exists {
-				v.addError(path, fmt.Sprintf("parameter name conflict: %s appears in both %s and path parameters", field.Name, prevType))
-			}
-			allParams[field.Name] = "path"
+	for _, param := range endpoint.Parameters {
+		name := param.Field.Name
+		if previous, exists := seen[name]; exists {
+			v.addError(path, fmt.Sprintf(
+				"parameter name conflict: %s appears in both %s and %s parameters", name, previous, param.In))
 		}
-	}
-
-	for _, param := range endpoint.QueryParams {
-		for _, field := range param.Fields {
-			if prevType, exists := allParams[field.Name]; exists {
-				v.addError(path, fmt.Sprintf("parameter name conflict: %s appears in both %s and query parameters", field.Name, prevType))
-			}
-			allParams[field.Name] = "query"
-		}
-	}
-
-	for _, param := range endpoint.HeaderParams {
-		for _, field := range param.Fields {
-			if prevType, exists := allParams[field.Name]; exists {
-				v.addError(path, fmt.Sprintf("parameter name conflict: %s appears in both %s and header parameters", field.Name, prevType))
-			}
-			allParams[field.Name] = "header"
-		}
-	}
-
-	for _, param := range endpoint.CookieParams {
-		for _, field := range param.Fields {
-			if prevType, exists := allParams[field.Name]; exists {
-				v.addError(path, fmt.Sprintf("parameter name conflict: %s appears in both %s and cookie parameters", field.Name, prevType))
-			}
-			allParams[field.Name] = "cookie"
-		}
+		seen[name] = param.In
 	}
 }
 

@@ -43,11 +43,9 @@ func TestValidator_Validate_ValidPackage(t *testing.T) {
 			{
 				Method: "GET",
 				Path:   "/users",
-				Responses: map[string]*resolver.Response{
-					"200": {
-						StatusCode:  "200",
-						Description: "Success",
-					},
+				Responses: []*resolver.Response{
+					{StatusCode: "200",
+						Description: "Success"},
 				},
 			},
 		},
@@ -645,8 +643,8 @@ func TestValidator_ValidateEndpoint(t *testing.T) {
 			endpoint: &resolver.Endpoint{
 				Method: "GET",
 				Path:   "/users",
-				Responses: map[string]*resolver.Response{
-					"200": {StatusCode: "200"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200"},
 				},
 			},
 			wantErr: false,
@@ -656,8 +654,8 @@ func TestValidator_ValidateEndpoint(t *testing.T) {
 			endpoint: &resolver.Endpoint{
 				Method: "INVALID",
 				Path:   "/users",
-				Responses: map[string]*resolver.Response{
-					"200": {StatusCode: "200"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200"},
 				},
 			},
 			wantErr: true,
@@ -668,8 +666,8 @@ func TestValidator_ValidateEndpoint(t *testing.T) {
 			endpoint: &resolver.Endpoint{
 				Method: "GET",
 				Path:   "",
-				Responses: map[string]*resolver.Response{
-					"200": {StatusCode: "200"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200"},
 				},
 			},
 			wantErr: true,
@@ -680,8 +678,8 @@ func TestValidator_ValidateEndpoint(t *testing.T) {
 			endpoint: &resolver.Endpoint{
 				Method: "GET",
 				Path:   "users",
-				Responses: map[string]*resolver.Response{
-					"200": {StatusCode: "200"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200"},
 				},
 			},
 			wantErr: true,
@@ -692,7 +690,7 @@ func TestValidator_ValidateEndpoint(t *testing.T) {
 			endpoint: &resolver.Endpoint{
 				Method:    "GET",
 				Path:      "/users",
-				Responses: map[string]*resolver.Response{},
+				Responses: []*resolver.Response{},
 			},
 			wantErr: true,
 			errMsg:  "at least one response",
@@ -773,41 +771,41 @@ func TestValidator_ValidatePathParameters(t *testing.T) {
 	tests := []struct {
 		name    string
 		path    string
-		params  []*resolver.ParameterStruct
+		params  []*resolver.Parameter
 		wantErr bool
 		errMsg  string
 	}{
 		{
 			name: "matching path variable and parameter",
 			path: "/users/{id}",
-			params: []*resolver.ParameterStruct{
-				{
-					Fields: []*resolver.Field{
-						{Name: "id", GoName: "ID"},
-					},
-				},
+			params: []*resolver.Parameter{
+				{In: "path", Field: &resolver.Field{Name: "id", GoName: "ID"}},
 			},
 			wantErr: false,
 		},
 		{
 			name:    "path variable without parameter",
 			path:    "/users/{id}",
-			params:  []*resolver.ParameterStruct{},
+			params:  []*resolver.Parameter{},
 			wantErr: true,
 			errMsg:  "has no corresponding @path parameter",
 		},
 		{
 			name: "parameter not used in path",
 			path: "/users",
-			params: []*resolver.ParameterStruct{
-				{
-					Fields: []*resolver.Field{
-						{Name: "id", GoName: "ID"},
-					},
-				},
+			params: []*resolver.Parameter{
+				{In: "path", Field: &resolver.Field{Name: "id", GoName: "ID"}},
 			},
 			wantErr: true,
 			errMsg:  "not used in path",
+		},
+		{
+			name: "query parameter is not a path parameter",
+			path: "/users",
+			params: []*resolver.Parameter{
+				{In: "query", Field: &resolver.Field{Name: "id", GoName: "ID"}},
+			},
+			wantErr: false,
 		},
 	}
 
@@ -824,9 +822,9 @@ func TestValidator_ValidatePathParameters(t *testing.T) {
 					{
 						Method:     "GET",
 						Path:       tt.path,
-						PathParams: tt.params,
-						Responses: map[string]*resolver.Response{
-							"200": {StatusCode: "200"},
+						Parameters: tt.params,
+						Responses: []*resolver.Response{
+							{StatusCode: "200"},
 						},
 					},
 				},
@@ -911,8 +909,8 @@ func TestValidator_ValidateRequestBody(t *testing.T) {
 						Method:  "POST",
 						Path:    "/users",
 						Request: tt.request,
-						Responses: map[string]*resolver.Response{
-							"200": {StatusCode: "200"},
+						Responses: []*resolver.Response{
+							{StatusCode: "200"},
 						},
 					},
 				},
@@ -970,8 +968,8 @@ func TestValidator_ValidateResponseStatusCode(t *testing.T) {
 					{
 						Method: "GET",
 						Path:   "/test",
-						Responses: map[string]*resolver.Response{
-							tt.statusCode: {StatusCode: tt.statusCode},
+						Responses: []*resolver.Response{
+							{StatusCode: tt.statusCode},
 						},
 					},
 				},
@@ -1118,8 +1116,8 @@ func TestValidator_ValidateEndpointWithTags(t *testing.T) {
 				Method: "GET",
 				Path:   "/pets",
 				Tags:   []string{"pets"},
-				Responses: map[string]*resolver.Response{
-					"200": {StatusCode: "200", Description: "Success"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200", Description: "Success"},
 				},
 			},
 			pkg: &resolver.Package{
@@ -1141,8 +1139,8 @@ func TestValidator_ValidateEndpointWithTags(t *testing.T) {
 				Method: "GET",
 				Path:   "/users",
 				Tags:   []string{"users"},
-				Responses: map[string]*resolver.Response{
-					"200": {StatusCode: "200", Description: "Success"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200", Description: "Success"},
 				},
 			},
 			pkg: &resolver.Package{
@@ -1165,8 +1163,8 @@ func TestValidator_ValidateEndpointWithTags(t *testing.T) {
 				Method: "GET",
 				Path:   "/health",
 				Tags:   []string{},
-				Responses: map[string]*resolver.Response{
-					"200": {StatusCode: "200", Description: "Success"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200", Description: "Success"},
 				},
 			},
 			pkg: &resolver.Package{
@@ -1320,8 +1318,8 @@ func TestValidator_ValidateBindTarget_RequestBody(t *testing.T) {
 						},
 					},
 				},
-				Responses: map[string]*resolver.Response{
-					"200": {StatusCode: "200"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200"},
 				},
 			},
 		},
@@ -1360,9 +1358,8 @@ func TestValidator_ValidateBindTarget_Response(t *testing.T) {
 			{
 				Method: "GET",
 				Path:   "/users",
-				Responses: map[string]*resolver.Response{
-					"200": {
-						StatusCode:  "200",
+				Responses: []*resolver.Response{
+					{StatusCode: "200",
 						ContentType: "application/json",
 						Body: &resolver.Body{
 							Schema: "User",
@@ -1372,8 +1369,7 @@ func TestValidator_ValidateBindTarget_Response(t *testing.T) {
 								Field:         "NonExistent",
 								WrapperSchema: wrapperSchema,
 							},
-						},
-					},
+						}},
 				},
 			},
 		},
@@ -1401,16 +1397,18 @@ func TestValidator_ValidateBindTarget_InlineResponse(t *testing.T) {
 			{
 				Method: "GET",
 				Path:   "/users",
-				Responses: map[string]*resolver.Response{
-					"200": {StatusCode: "200"},
-				},
-				InlineResponses: map[string]*resolver.InlineBody{
-					"201": {
+				Responses: []*resolver.Response{
+					{StatusCode: "200"},
+					{
+						StatusCode:  "201",
 						ContentType: "application/json",
-						Bind: &resolver.BindTarget{
-							Wrapper:       "UnknownWrapper",
-							Field:         "Data",
-							WrapperSchema: nil,
+						Inline: &resolver.InlineBody{
+							ContentType: "application/json",
+							Bind: &resolver.BindTarget{
+								Wrapper:       "UnknownWrapper",
+								Field:         "Data",
+								WrapperSchema: nil,
+							},
 						},
 					},
 				},

@@ -237,36 +237,44 @@ type Field struct {
 	ExclusiveMaximum *float64
 }
 
-// Endpoint contains an endpoint with resolved types
+// Endpoint contains an endpoint with resolved types.
+//
+// Parameters and Responses are emission-ready: merged across named and
+// in-function declarations, ordered, and with conflicts already settled. Doing
+// that here rather than in the generator makes both rules testable without
+// rendering a document, and keeps the generator from being the only place that
+// knows what happens when two declarations claim the same status code.
 type Endpoint struct {
-	FuncName     string
-	Method       string
-	Path         string
-	OperationID  string
-	Summary      string
-	Description  string
-	Tags         []string
-	Deprecated   bool
-	Auth         string
-	Request      *RequestBody
-	Responses    map[string]*Response
-	PathParams   []*ParameterStruct
-	QueryParams  []*ParameterStruct
-	HeaderParams []*ParameterStruct
-	CookieParams []*ParameterStruct
+	FuncName    string
+	Method      string
+	Path        string
+	OperationID string
+	Summary     string
+	Description string
+	Tags        []string
+	Deprecated  bool
+	Auth        string
 
-	// Inline declarations (resolved from function body annotations)
-	InlinePathParams   *InlineParams
-	InlineQueryParams  *InlineParams
-	InlineHeaderParams *InlineParams
-	InlineCookieParams *InlineParams
-	InlineRequest      *InlineBody
-	InlineResponses    map[string]*InlineBody // Key is status code
+	// Request is the request body, from either @request form.
+	Request *RequestBody
+
+	// Parameters are every parameter the operation accepts, in emission order.
+	Parameters []*Parameter
+
+	// Responses are every response, sorted by status code.
+	Responses []*Response
 }
 
-// InlineParams contains resolved inline parameter fields
-type InlineParams struct {
-	Fields []*Field
+// Parameter is one OpenAPI parameter: a resolved field plus where it goes.
+//
+// The field itself is the same shape whether it came from a named @query struct
+// or an in-function one, so only the location has to be attached here.
+type Parameter struct {
+	// In is the location: "path", "query", "header", or "cookie".
+	In string
+
+	// Field is the parameter's name, type, and constraints.
+	Field *Field
 }
 
 // InlineBody contains resolved inline body fields with optional binding
@@ -281,8 +289,15 @@ type InlineBody struct {
 // RequestBody contains a request body with resolved schema
 type RequestBody struct {
 	ContentType string
-	Body        *Body
-	Required    bool
+
+	// Body is a named body: @request { @body User }.
+	Body *Body
+
+	// Inline is an in-function body: the struct declared under @request.
+	// Exactly one of Body and Inline is set.
+	Inline *InlineBody
+
+	Required bool
 }
 
 // Response contains a response with resolved schema
@@ -290,8 +305,15 @@ type Response struct {
 	StatusCode  string
 	Description string
 	ContentType string
-	Body        *Body
-	Headers     []*ParameterStruct
+
+	// Body is a named body: @response 200 { @body User }.
+	Body *Body
+
+	// Inline is an in-function body: the struct declared under @response.
+	// At most one of Body and Inline is set.
+	Inline *InlineBody
+
+	Headers []*ParameterStruct
 }
 
 // Body contains the resolved body with optional binding

@@ -477,51 +477,47 @@ func TestResolver_InlineDeclarations(t *testing.T) {
 		t.Fatal("GetUser endpoint not found")
 	}
 
-	// Check inline path params
-	if getUserEndpoint.InlinePathParams == nil {
-		t.Error("GetUser should have inline path params")
-	} else {
-		if len(getUserEndpoint.InlinePathParams.Fields) == 0 {
-			t.Error("GetUser inline path should have fields")
-		} else {
-			idField := getUserEndpoint.InlinePathParams.Fields[0]
-			if idField.Name != "id" {
-				t.Errorf("Path field name = %q, want %q", idField.Name, "id")
-			}
-			if idField.Type.ScalarName() != "string" {
-				t.Errorf("Path field type = %q, want %q", idField.Type.ScalarName(), "string")
-			}
-			if idField.Description != "User ID" {
-				t.Errorf("Path field description = %q, want %q", idField.Description, "User ID")
-			}
+	// Inline path parameters land in the merged list, tagged with their location.
+	var idField *Field
+	for _, param := range getUserEndpoint.Parameters {
+		if param.In == "path" && param.Field.Name == "id" {
+			idField = param.Field
+			break
 		}
 	}
 
-	// Check inline responses
-	if getUserEndpoint.InlineResponses == nil {
-		t.Error("GetUser should have inline responses")
-	} else {
-		resp200 := getUserEndpoint.InlineResponses["200"]
-		if resp200 == nil {
-			t.Error("GetUser should have 200 response")
-		} else {
-			if len(resp200.Fields) != 3 {
-				t.Errorf("Response 200 has %d fields, want 3", len(resp200.Fields))
-			}
-			// Check field names
-			fieldNames := make(map[string]bool)
-			for _, f := range resp200.Fields {
-				fieldNames[f.Name] = true
-			}
-			if !fieldNames["id"] {
-				t.Error("Response 200 should have 'id' field")
-			}
-			if !fieldNames["email"] {
-				t.Error("Response 200 should have 'email' field")
-			}
-			if !fieldNames["name"] {
-				t.Error("Response 200 should have 'name' field")
-			}
+	if idField == nil {
+		t.Fatal("GetUser should have an inline path parameter named id")
+	}
+	if idField.Type.ScalarName() != "string" {
+		t.Errorf("Path field type = %q, want %q", idField.Type.ScalarName(), "string")
+	}
+	if idField.Description != "User ID" {
+		t.Errorf("Path field description = %q, want %q", idField.Description, "User ID")
+	}
+
+	// Inline responses land in the merged, sorted response list.
+	var resp200 *InlineBody
+	for _, resp := range getUserEndpoint.Responses {
+		if resp.StatusCode == "200" {
+			resp200 = resp.Inline
+			break
+		}
+	}
+
+	if resp200 == nil {
+		t.Fatal("GetUser should have an inline 200 response")
+	}
+	if len(resp200.Fields) != 3 {
+		t.Errorf("Response 200 has %d fields, want 3", len(resp200.Fields))
+	}
+	fieldNames := make(map[string]bool)
+	for _, f := range resp200.Fields {
+		fieldNames[f.Name] = true
+	}
+	for _, want := range []string{"id", "email", "name"} {
+		if !fieldNames[want] {
+			t.Errorf("Response 200 should have %q field", want)
 		}
 	}
 
@@ -538,26 +534,29 @@ func TestResolver_InlineDeclarations(t *testing.T) {
 		t.Fatal("ListUsers endpoint not found")
 	}
 
-	// Check inline query params
-	if listUsersEndpoint.InlineQueryParams == nil {
-		t.Error("ListUsers should have inline query params")
-	} else {
-		if len(listUsersEndpoint.InlineQueryParams.Fields) != 3 {
-			t.Errorf("ListUsers inline query has %d fields, want 3", len(listUsersEndpoint.InlineQueryParams.Fields))
+	// Inline query parameters, likewise.
+	var queryFields []*Field
+	for _, param := range listUsersEndpoint.Parameters {
+		if param.In == "query" {
+			queryFields = append(queryFields, param.Field)
 		}
-		// Find limit field and check annotations
-		for _, f := range listUsersEndpoint.InlineQueryParams.Fields {
-			if f.Name == "limit" {
-				if f.Type.ScalarName() != "integer" {
-					t.Errorf("limit field type = %q, want %q", f.Type.ScalarName(), "integer")
-				}
-				if f.Minimum == nil || *f.Minimum != 1 {
-					t.Error("limit field should have minimum=1")
-				}
-				if f.Maximum == nil || *f.Maximum != 100 {
-					t.Error("limit field should have maximum=100")
-				}
-			}
+	}
+
+	if len(queryFields) != 3 {
+		t.Errorf("ListUsers has %d query parameters, want 3", len(queryFields))
+	}
+	for _, f := range queryFields {
+		if f.Name != "limit" {
+			continue
+		}
+		if f.Type.ScalarName() != "integer" {
+			t.Errorf("limit field type = %q, want %q", f.Type.ScalarName(), "integer")
+		}
+		if f.Minimum == nil || *f.Minimum != 1 {
+			t.Error("limit field should have minimum=1")
+		}
+		if f.Maximum == nil || *f.Maximum != 100 {
+			t.Error("limit field should have maximum=100")
 		}
 	}
 }
@@ -777,8 +776,8 @@ func TestContentTypePrecedence(t *testing.T) {
 				t.Errorf("Request.ContentType = %q, want %q", resolved.Request.ContentType, tt.expectedRequest)
 			}
 
-			if resp, ok := resolved.Responses["200"]; ok {
-				if resp.ContentType != tt.expectedResponse {
+			for _, resp := range resolved.Responses {
+				if resp.StatusCode == "200" && resp.ContentType != tt.expectedResponse {
 					t.Errorf("Response.ContentType = %q, want %q", resp.ContentType, tt.expectedResponse)
 				}
 			}

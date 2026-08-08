@@ -1,7 +1,6 @@
 package generator
 
 import (
-	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -68,7 +67,7 @@ func (g *Generator) Generate(pkg *resolver.Package) (*v3.Document, error) {
 		doc.Tags = g.generateTags(pkg.API.Tags)
 	}
 
-	doc.Paths = g.generatePaths(pkg.Endpoints, pkg.Parameters, pkg.Schemas)
+	doc.Paths = g.generatePaths(pkg.Endpoints, pkg.Schemas)
 	doc.Components = g.generateComponents(pkg)
 
 	if len(pkg.API.Security) > 0 {
@@ -463,7 +462,7 @@ func (g *Generator) generateSecurity(security [][]*resolver.SecurityRequirement)
 }
 
 // generatePaths generates the paths section
-func (g *Generator) generatePaths(endpoints []*resolver.Endpoint, parameters map[string]*resolver.ParameterStruct, schemas map[string]*resolver.Schema) *v3.Paths {
+func (g *Generator) generatePaths(endpoints []*resolver.Endpoint, schemas map[string]*resolver.Schema) *v3.Paths {
 	paths := &v3.Paths{
 		PathItems: orderedmap.New[string, *v3.PathItem](),
 	}
@@ -476,7 +475,7 @@ func (g *Generator) generatePaths(endpoints []*resolver.Endpoint, parameters map
 			pathMap[endpoint.Path] = &v3.PathItem{}
 		}
 
-		operation := g.generateOperation(endpoint, parameters, schemas)
+		operation := g.generateOperation(endpoint, schemas)
 
 		// Set operation on the appropriate method
 		switch strings.ToLower(endpoint.Method) {
@@ -508,7 +507,7 @@ func (g *Generator) generatePaths(endpoints []*resolver.Endpoint, parameters map
 }
 
 // generateOperation generates an operation
-func (g *Generator) generateOperation(endpoint *resolver.Endpoint, parameterMap map[string]*resolver.ParameterStruct, schemas map[string]*resolver.Schema) *v3.Operation {
+func (g *Generator) generateOperation(endpoint *resolver.Endpoint, schemas map[string]*resolver.Schema) *v3.Operation {
 	op := &v3.Operation{}
 
 	if endpoint.Summary != "" {
@@ -527,56 +526,15 @@ func (g *Generator) generateOperation(endpoint *resolver.Endpoint, parameterMap 
 		op.Tags = endpoint.Tags
 	}
 
-	// Parameters: all named structs of each location, then all inline ones.
-	// This two-pass shape is what C6 replaces with a single ordered list on the
-	// endpoint; until then the emission order is defined here.
-	var params []*v3.Parameter
+	// The resolver already merged and ordered these, so emission is a
+	// straight walk.
+	op.Parameters = g.generateParameters(endpoint.Parameters)
 
-	named := []struct {
-		refs []*resolver.ParameterStruct
-		in   string
-	}{
-		{endpoint.PathParams, "path"},
-		{endpoint.QueryParams, "query"},
-		{endpoint.HeaderParams, "header"},
-		{endpoint.CookieParams, "cookie"},
-	}
-	for _, group := range named {
-		for _, ref := range group.refs {
-			if p, ok := parameterMap[ref.Name]; ok {
-				params = append(params, g.generateParameters(p.Fields, group.in)...)
-			}
-		}
-	}
-
-	inline := []struct {
-		decl *resolver.InlineParams
-		in   string
-	}{
-		{endpoint.InlinePathParams, "path"},
-		{endpoint.InlineQueryParams, "query"},
-		{endpoint.InlineHeaderParams, "header"},
-		{endpoint.InlineCookieParams, "cookie"},
-	}
-	for _, group := range inline {
-		if group.decl != nil {
-			params = append(params, g.generateParameters(group.decl.Fields, group.in)...)
-		}
-	}
-
-	if len(params) > 0 {
-		op.Parameters = params
-	}
-
-	// Add request body
 	if endpoint.Request != nil {
 		op.RequestBody = g.generateRequestBody(endpoint.Request, schemas)
-	} else if endpoint.InlineRequest != nil {
-		op.RequestBody = g.generateInlineRequestBody(endpoint.InlineRequest, schemas)
 	}
 
-	// Add responses
-	op.Responses = g.generateResponsesWithInline(endpoint.Responses, endpoint.InlineResponses, schemas)
+	op.Responses = g.generateResponses(endpoint.Responses, schemas)
 
 	// Add security
 	if endpoint.Auth != "" {
@@ -595,16 +553,21 @@ func (g *Generator) generateOperation(endpoint *resolver.Endpoint, parameterMap 
 	return op
 }
 
-// generateParameters generates parameters from resolved fields. A named
-// parameter struct and an in-function one produce identical output; only where
-// the fields came from differs, and that is settled before this point.
-func (g *Generator) generateParameters(fields []*resolver.Field, in string) []*v3.Parameter {
-	params := make([]*v3.Parameter, 0, len(fields))
+// generateParameters renders the operation's parameters in the order the
+// resolver put them in. Returns nil when there are none, so the key stays out
+// of the document.
+func (g *Generator) generateParameters(parameters []*resolver.Parameter) []*v3.Parameter {
+	if len(parameters) == 0 {
+		return nil
+	}
 
-	for _, field := range fields {
+	params := make([]*v3.Parameter, 0, len(parameters))
+	for _, param := range parameters {
+		field := param.Field
+
 		p := &v3.Parameter{
 			Name:        field.Name,
-			In:          in,
+			In:          param.In,
 			Description: field.Description,
 			Required:    &field.Required,
 			Schema:      g.generateParameterFieldSchema(field),
@@ -620,79 +583,52 @@ func (g *Generator) generateParameters(fields []*resolver.Field, in string) []*v
 	return params
 }
 
-// generateRequestBody generates a request body
+// generateRequestBody generates a request body, from either @request form.
 func (g *Generator) generateRequestBody(request *resolver.RequestBody, schemas map[string]*resolver.Schema) *v3.RequestBody {
-	if request.Body == nil {
+	schema := g.bodySchema(request.Body, request.Inline, schemas)
+	if schema == nil {
 		return &v3.RequestBody{}
 	}
 
 	return &v3.RequestBody{
-		Content:  mediaContent(request.ContentType, g.generateBodySchema(request.Body, schemas)),
+		Content:  mediaContent(request.ContentType, schema),
 		Required: &request.Required,
 	}
 }
 
-// generateInlineRequestBody generates a request body from an inline struct
-func (g *Generator) generateInlineRequestBody(inline *resolver.InlineBody, schemas map[string]*resolver.Schema) *v3.RequestBody {
-	if inline == nil || len(inline.Fields) == 0 {
-		return &v3.RequestBody{}
-	}
-
-	required := true
-	return &v3.RequestBody{
-		Content:  mediaContent(inlineContentType(inline), g.generateInlineBodySchema(inline, schemas)),
-		Required: &required,
-	}
-}
-
-// generateResponsesWithInline generates responses merging explicit and inline definitions
-func (g *Generator) generateResponsesWithInline(responses map[string]*resolver.Response, inlineResponses map[string]*resolver.InlineBody, schemas map[string]*resolver.Schema) *v3.Responses {
+// generateResponses renders the operation's responses in the order the resolver
+// put them in.
+func (g *Generator) generateResponses(responses []*resolver.Response, schemas map[string]*resolver.Schema) *v3.Responses {
 	result := &v3.Responses{
 		Codes: orderedmap.New[string, *v3.Response](),
 	}
 
-	// Add explicit responses
-	for _, statusCode := range slices.Sorted(maps.Keys(responses)) {
-		response := responses[statusCode]
+	for _, response := range responses {
 		resp := &v3.Response{
 			Description: response.Description,
+			Headers:     generateResponseHeaders(response.Headers),
 		}
 
-		resp.Headers = generateResponseHeaders(response.Headers)
-
-		if response.Body != nil && response.Body.Schema != "" && response.ContentType != "" {
-			resp.Content = mediaContent(response.ContentType, g.generateBodySchema(response.Body, schemas))
+		if schema := g.bodySchema(response.Body, response.Inline, schemas); schema != nil && response.ContentType != "" {
+			resp.Content = mediaContent(response.ContentType, schema)
 		}
 
-		result.Codes.Set(statusCode, resp)
-	}
-
-	// Add inline responses (don't override explicit ones)
-	for _, statusCode := range slices.Sorted(maps.Keys(inlineResponses)) {
-		inline := inlineResponses[statusCode]
-		if result.Codes.GetOrZero(statusCode) != nil {
-			continue // Skip if explicit response already exists
-		}
-
-		description := inline.Description
-		if description == "" {
-			description = fmt.Sprintf("Response for status %s", statusCode)
-		}
-
-		resp := &v3.Response{
-			Description: description,
-		}
-
-		resp.Headers = generateResponseHeaders(inline.Headers)
-
-		if len(inline.Fields) > 0 {
-			resp.Content = mediaContent(inlineContentType(inline), g.generateInlineBodySchema(inline, schemas))
-		}
-
-		result.Codes.Set(statusCode, resp)
+		result.Codes.Set(response.StatusCode, resp)
 	}
 
 	return result
+}
+
+// bodySchema renders whichever of the two body forms is present, or nil when a
+// message carries no body at all — a 204, or an @endpoint with no @request.
+func (g *Generator) bodySchema(named *resolver.Body, inline *resolver.InlineBody, schemas map[string]*resolver.Schema) *base.SchemaProxy {
+	switch {
+	case named != nil && named.Schema != "":
+		return g.generateBodySchema(named, schemas)
+	case inline != nil && len(inline.Fields) > 0:
+		return g.generateInlineBodySchema(inline, schemas)
+	}
+	return nil
 }
 
 // generateResponseHeaders renders a response's header parameters. Returns nil

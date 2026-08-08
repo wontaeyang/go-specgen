@@ -44,8 +44,8 @@ func TestGenerator_Generate(t *testing.T) {
 			{
 				Method: "GET",
 				Path:   "/users",
-				Responses: map[string]*resolver.Response{
-					"200": {StatusCode: "200", Description: "Success"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200", Description: "Success"},
 				},
 			},
 		},
@@ -201,8 +201,8 @@ func TestGenerator_RenderJSON(t *testing.T) {
 			{
 				Method: "GET",
 				Path:   "/test",
-				Responses: map[string]*resolver.Response{
-					"200": {StatusCode: "200", Description: "OK"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200", Description: "OK"},
 				},
 			},
 		},
@@ -261,8 +261,8 @@ func TestGenerator_RenderYAML(t *testing.T) {
 			{
 				Method: "GET",
 				Path:   "/test",
-				Responses: map[string]*resolver.Response{
-					"200": {StatusCode: "200", Description: "OK"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200", Description: "OK"},
 				},
 			},
 		},
@@ -306,22 +306,22 @@ func TestGenerator_GeneratePaths(t *testing.T) {
 			Method:  "GET",
 			Path:    "/users",
 			Summary: "List users",
-			Responses: map[string]*resolver.Response{
-				"200": {StatusCode: "200", Description: "Success"},
+			Responses: []*resolver.Response{
+				{StatusCode: "200", Description: "Success"},
 			},
 		},
 		{
 			Method:  "POST",
 			Path:    "/users",
 			Summary: "Create user",
-			Responses: map[string]*resolver.Response{
-				"201": {StatusCode: "201", Description: "Created"},
+			Responses: []*resolver.Response{
+				{StatusCode: "201", Description: "Created"},
 			},
 		},
 	}
 
 	gen := NewGenerator("3.1")
-	paths := gen.generatePaths(endpoints, map[string]*resolver.ParameterStruct{}, map[string]*resolver.Schema{})
+	paths := gen.generatePaths(endpoints, map[string]*resolver.Schema{})
 
 	if paths.PathItems.Len() != 1 {
 		t.Fatalf("Expected 1 path item, got %d", paths.PathItems.Len())
@@ -349,31 +349,23 @@ func TestGenerator_GenerateOperation(t *testing.T) {
 		Description: "Get user by ID",
 		OperationID: "getUser",
 		Tags:        []string{"users"},
-		PathParams: []*resolver.ParameterStruct{
+		Parameters: []*resolver.Parameter{
 			{
-				Name: "UserIDPath",
-				Fields: []*resolver.Field{
-					{
-						Name:     "id",
-						GoName:   "ID",
-						Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
-						Required: true,
-					},
+				In: "path",
+				Field: &resolver.Field{
+					Name:     "id",
+					GoName:   "ID",
+					Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+					Required: true,
 				},
 			},
 		},
-		Responses: map[string]*resolver.Response{
-			"200": {
-				StatusCode:  "200",
+		Responses: []*resolver.Response{
+			{StatusCode: "200",
 				Description: "Success",
 				ContentType: "application/json",
-				Body:        &resolver.Body{Schema: "User", Type: &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"}},
-			},
+				Body:        &resolver.Body{Schema: "User", Type: &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"}}},
 		},
-	}
-
-	paramMap := map[string]*resolver.ParameterStruct{
-		"UserIDPath": endpoint.PathParams[0],
 	}
 
 	schemas := map[string]*resolver.Schema{
@@ -381,7 +373,7 @@ func TestGenerator_GenerateOperation(t *testing.T) {
 	}
 
 	gen := NewGenerator("3.1")
-	op := gen.generateOperation(endpoint, paramMap, schemas)
+	op := gen.generateOperation(endpoint, schemas)
 
 	if op.Summary != "Get user" {
 		t.Errorf("Summary = %v, want Get user", op.Summary)
@@ -409,21 +401,21 @@ func TestGenerator_HTTPMethodsLowercase(t *testing.T) {
 		{
 			Method: "GET",
 			Path:   "/test",
-			Responses: map[string]*resolver.Response{
-				"200": {StatusCode: "200", Description: "OK"},
+			Responses: []*resolver.Response{
+				{StatusCode: "200", Description: "OK"},
 			},
 		},
 		{
 			Method: "POST",
 			Path:   "/test",
-			Responses: map[string]*resolver.Response{
-				"201": {StatusCode: "201", Description: "Created"},
+			Responses: []*resolver.Response{
+				{StatusCode: "201", Description: "Created"},
 			},
 		},
 	}
 
 	gen := NewGenerator("3.1")
-	paths := gen.generatePaths(endpoints, map[string]*resolver.ParameterStruct{}, map[string]*resolver.Schema{})
+	paths := gen.generatePaths(endpoints, map[string]*resolver.Schema{})
 
 	testPath := paths.PathItems.GetOrZero("/test")
 	if testPath == nil {
@@ -518,8 +510,8 @@ func TestGenerator_GenerateWithTags(t *testing.T) {
 				Method: "GET",
 				Path:   "/pets",
 				Tags:   []string{"pets"},
-				Responses: map[string]*resolver.Response{
-					"200": {StatusCode: "200", Description: "Success"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200", Description: "Success"},
 				},
 			},
 		},

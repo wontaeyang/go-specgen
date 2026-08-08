@@ -3,7 +3,9 @@ package resolver
 import (
 	"fmt"
 	"go/types"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/wontaeyang/go-specgen/pkg/parser"
@@ -681,102 +683,115 @@ func applyAnnotationOverrides(resolved *Field, annotation *parser.Field) {
 // resolveEndpoint resolves an endpoint
 func (r *Resolver) resolveEndpoint(endpoint *parser.Endpoint, parameters map[string]*ParameterStruct, schemas map[string]*Schema, defaultContentType string) (*Endpoint, error) {
 	resolved := &Endpoint{
-		FuncName:        endpoint.FuncName,
-		Method:          endpoint.Method,
-		Path:            endpoint.Path,
-		OperationID:     endpoint.OperationID,
-		Summary:         endpoint.Summary,
-		Description:     endpoint.Description,
-		Tags:            endpoint.Tags,
-		Deprecated:      endpoint.Deprecated,
-		Auth:            endpoint.Auth,
-		Responses:       make(map[string]*Response),
-		PathParams:      make([]*ParameterStruct, 0),
-		QueryParams:     make([]*ParameterStruct, 0),
-		HeaderParams:    make([]*ParameterStruct, 0),
-		CookieParams:    make([]*ParameterStruct, 0),
-		InlineResponses: make(map[string]*InlineBody),
+		FuncName:    endpoint.FuncName,
+		Method:      endpoint.Method,
+		Path:        endpoint.Path,
+		OperationID: endpoint.OperationID,
+		Summary:     endpoint.Summary,
+		Description: endpoint.Description,
+		Tags:        endpoint.Tags,
+		Deprecated:  endpoint.Deprecated,
+		Auth:        endpoint.Auth,
 	}
 
-	// Resolve request body
+	// Named request body
 	if endpoint.Request != nil && endpoint.Request.Body != nil {
-		contentType := endpoint.Request.ContentType
-		if contentType == "" {
-			contentType = defaultContentType
-		}
-		if contentType == "" {
-			contentType = "application/json" // Fallback
-		}
 		resolved.Request = &RequestBody{
-			ContentType: contentType,
+			ContentType: r.contentType(endpoint.Request.ContentType, defaultContentType),
 			Body:        r.resolveBody(endpoint.Request.Body, schemas),
 			Required:    true, // Default to required
 		}
 	}
 
-	// Resolve responses
+	// Named responses, keyed by status so inline ones can be merged in below.
+	responses := make(map[string]*Response, len(endpoint.Responses))
 	for statusCode, response := range endpoint.Responses {
-		contentType := response.ContentType
-		// Only apply default if response has a body
-		if contentType == "" && response.Body != nil {
-			contentType = defaultContentType
-		}
-		if contentType == "" && response.Body != nil {
-			contentType = "application/json" // Fallback
-		}
-
 		resolvedResponse := &Response{
 			StatusCode:  response.StatusCode,
 			Description: response.Description,
-			ContentType: contentType,
 			Body:        r.resolveBody(response.Body, schemas),
 		}
 
-		// Resolve response header references
+		// A response with no body needs no content type, and emitting one
+		// would claim content that is never sent (204, say).
+		if response.Body != nil {
+			resolvedResponse.ContentType = r.contentType(response.ContentType, defaultContentType)
+		}
+
 		for _, ref := range response.HeaderParams {
 			if param, ok := parameters[ref]; ok {
 				resolvedResponse.Headers = append(resolvedResponse.Headers, param)
 			}
 		}
 
-		resolved.Responses[statusCode] = resolvedResponse
+		responses[statusCode] = resolvedResponse
 	}
 
-	// Resolve parameter references
-	for _, ref := range endpoint.PathParams {
-		if param, ok := parameters[ref]; ok {
-			resolved.PathParams = append(resolved.PathParams, param)
-		}
+	// Named parameters, in declaration order within each location.
+	named := []struct {
+		refs []string
+		in   string
+	}{
+		{endpoint.PathParams, "path"},
+		{endpoint.QueryParams, "query"},
+		{endpoint.HeaderParams, "header"},
+		{endpoint.CookieParams, "cookie"},
 	}
-
-	for _, ref := range endpoint.QueryParams {
-		if param, ok := parameters[ref]; ok {
-			resolved.QueryParams = append(resolved.QueryParams, param)
-		}
-	}
-
-	for _, ref := range endpoint.HeaderParams {
-		if param, ok := parameters[ref]; ok {
-			resolved.HeaderParams = append(resolved.HeaderParams, param)
-		}
-	}
-
-	for _, ref := range endpoint.CookieParams {
-		if param, ok := parameters[ref]; ok {
-			resolved.CookieParams = append(resolved.CookieParams, param)
-		}
-	}
-
-	// Resolve inline declarations from function body
-	if r.parsed.FuncInlines != nil {
-		if inlines := r.parsed.FuncInlines[endpoint.FuncName]; inlines != nil {
-			if err := r.resolveInlineDeclarations(resolved, inlines, parameters, schemas, defaultContentType); err != nil {
-				return nil, fmt.Errorf("failed to resolve inline declarations: %w", err)
+	for _, group := range named {
+		for _, ref := range group.refs {
+			if param, ok := parameters[ref]; ok {
+				resolved.Parameters = append(resolved.Parameters, parametersFrom(param.Fields, group.in)...)
 			}
 		}
 	}
 
+	// In-function declarations, appended after the named ones of every
+	// location. See the ordering note on sortResponses for why responses are
+	// merged rather than concatenated.
+	if inlines := r.parsed.FuncInlines[endpoint.FuncName]; inlines != nil {
+		if err := r.resolveInlineDeclarations(resolved, responses, inlines, parameters, schemas, defaultContentType); err != nil {
+			return nil, fmt.Errorf("failed to resolve inline declarations: %w", err)
+		}
+	}
+
+	resolved.Responses = sortResponses(responses)
+
 	return resolved, nil
+}
+
+// contentType applies the fallback chain for a declared content type: the
+// annotation's own value, then the API default, then JSON.
+func (r *Resolver) contentType(declared, apiDefault string) string {
+	if declared != "" {
+		return declared
+	}
+	if apiDefault != "" {
+		return apiDefault
+	}
+	return "application/json"
+}
+
+// parametersFrom attaches a location to each of a parameter struct's fields.
+func parametersFrom(fields []*Field, in string) []*Parameter {
+	params := make([]*Parameter, 0, len(fields))
+	for _, field := range fields {
+		params = append(params, &Parameter{In: in, Field: field})
+	}
+	return params
+}
+
+// sortResponses puts responses in emission order: by status code as a string.
+//
+// That is not numeric order, and deliberately so — the set includes wildcard
+// ranges and "default", which have no number. String order puts 200 before 4XX
+// before 5XX before default, which is the order a reader expects and the one
+// examples/responses has always produced.
+func sortResponses(byStatus map[string]*Response) []*Response {
+	responses := make([]*Response, 0, len(byStatus))
+	for _, status := range slices.Sorted(maps.Keys(byStatus)) {
+		responses = append(responses, byStatus[status])
+	}
+	return responses
 }
 
 // extractTagName extracts a field name from a specific struct tag key
@@ -907,61 +922,79 @@ func (r *Resolver) resolveBindTarget(bind *parser.BindTarget, schemas map[string
 // @query/@path/@header/@cookie are repeatable per schema — every inline struct in
 // each category is resolved and its fields concatenated into one *InlineParams
 // (the downstream generator/validator consume a flat Fields list).
-func (r *Resolver) resolveInlineDeclarations(endpoint *Endpoint, inlines *parser.FuncInlineInfo, parameters map[string]*ParameterStruct, schemas map[string]*Schema, defaultContentType string) error {
-	mergedPath, err := r.mergeInlineParams(inlines.Path, "path")
-	if err != nil {
-		return err
+func (r *Resolver) resolveInlineDeclarations(endpoint *Endpoint, responses map[string]*Response, inlines *parser.FuncInlineInfo, parameters map[string]*ParameterStruct, schemas map[string]*Schema, defaultContentType string) error {
+	// In-function parameters follow the named ones, grouped by location in the
+	// same order, so a handler mixing both styles still emits path parameters
+	// before query parameters.
+	inlineGroups := []struct {
+		infos []*parser.InlineStructInfo
+		in    string
+	}{
+		{inlines.Path, "path"},
+		{inlines.Query, "query"},
+		{inlines.Header, "header"},
+		{inlines.Cookie, "cookie"},
 	}
-	endpoint.InlinePathParams = mergedPath
-
-	mergedQuery, err := r.mergeInlineParams(inlines.Query, "query")
-	if err != nil {
-		return err
+	for _, group := range inlineGroups {
+		fields, err := r.mergeInlineParams(group.infos, group.in)
+		if err != nil {
+			return err
+		}
+		endpoint.Parameters = append(endpoint.Parameters, parametersFrom(fields, group.in)...)
 	}
-	endpoint.InlineQueryParams = mergedQuery
 
-	mergedHeader, err := r.mergeInlineParams(inlines.Header, "header")
-	if err != nil {
-		return err
-	}
-	endpoint.InlineHeaderParams = mergedHeader
-
-	mergedCookie, err := r.mergeInlineParams(inlines.Cookie, "cookie")
-	if err != nil {
-		return err
-	}
-	endpoint.InlineCookieParams = mergedCookie
-
-	// Resolve inline request body
 	if inlines.Request != nil {
-		// Step 1: Parse inline annotation using InlineAnnotationSchema
 		parsed, err := ParseInlineDeclaration(inlines.Request.Comment, "request")
 		if err != nil {
 			return fmt.Errorf("failed to parse inline request: %w", err)
 		}
 
-		// Step 2: Resolve inline body using parsed annotation
 		body, err := r.resolveInlineBody(inlines.Request, parsed, nil, schemas, defaultContentType)
 		if err != nil {
 			return fmt.Errorf("failed to resolve inline request body: %w", err)
 		}
-		endpoint.InlineRequest = body
+
+		// A named @request wins: it names a schema, which is more specific than
+		// a struct declared in the handler.
+		if endpoint.Request == nil {
+			endpoint.Request = &RequestBody{
+				ContentType: body.ContentType,
+				Inline:      body,
+				Required:    true,
+			}
+		}
 	}
 
-	// Resolve inline responses
-	for statusCode, respInfo := range inlines.Responses {
-		// Step 1: Parse inline annotation using InlineAnnotationSchema
+	for _, statusCode := range slices.Sorted(maps.Keys(inlines.Responses)) {
+		respInfo := inlines.Responses[statusCode]
+
 		parsed, err := ParseInlineDeclaration(respInfo.Comment, "response")
 		if err != nil {
 			return fmt.Errorf("failed to parse inline response %s: %w", statusCode, err)
 		}
 
-		// Step 2: Resolve inline body using parsed annotation (with parameters for header resolution)
 		body, err := r.resolveInlineBody(respInfo, parsed, parameters, schemas, defaultContentType)
 		if err != nil {
 			return fmt.Errorf("failed to resolve inline response %s: %w", statusCode, err)
 		}
-		endpoint.InlineResponses[statusCode] = body
+
+		// A named @response for the same status wins, for the same reason.
+		if _, taken := responses[statusCode]; taken {
+			continue
+		}
+
+		description := body.Description
+		if description == "" {
+			description = fmt.Sprintf("Response for status %s", statusCode)
+		}
+
+		responses[statusCode] = &Response{
+			StatusCode:  statusCode,
+			Description: description,
+			ContentType: body.ContentType,
+			Inline:      body,
+			Headers:     body.Headers,
+		}
 	}
 
 	return nil
@@ -989,54 +1022,30 @@ func (r *Resolver) inlineStructType(info *parser.InlineStructInfo) (*types.Struc
 	return st, nil
 }
 
-// mergeInlineParams resolves every inline struct in a repeatable category (e.g.
-// all inline @query structs declared in one handler) and concatenates their fields
-// into a single *InlineParams. Returns nil when no inline structs exist
-// for the category — preserving the "nil means none" contract downstream code relies on.
-// OpenAPI emits one flat parameters array per operation regardless of how many
-// inline structs the handler declared, so the merge happens here.
-func (r *Resolver) mergeInlineParams(infos []*parser.InlineStructInfo, paramType string) (*InlineParams, error) {
-	if len(infos) == 0 {
-		return nil, nil
-	}
-	merged := &InlineParams{}
+// mergeInlineParams resolves every inline struct of one location (all the
+// inline @query structs in a handler, say) into one flat field list.
+//
+// OpenAPI emits a single parameters array per operation no matter how many
+// structs the handler declared, so the merge belongs here rather than at
+// emission time.
+func (r *Resolver) mergeInlineParams(infos []*parser.InlineStructInfo, paramType string) ([]*Field, error) {
+	var merged []*Field
+
 	for _, info := range infos {
-		params, err := r.resolveInlineParams(info, paramType)
+		structType, err := r.inlineStructType(info)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve inline %s params %q: %w", paramType, info.VarName, err)
 		}
-		if params == nil {
-			continue
+
+		fields, err := r.resolveParameterFields(structType, info.Fields, paramType, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve inline %s params %q: %w", paramType, info.VarName, err)
 		}
-		merged.Fields = append(merged.Fields, params.Fields...)
+
+		merged = append(merged, fields...)
 	}
-	if len(merged.Fields) == 0 {
-		return nil, nil
-	}
+
 	return merged, nil
-}
-
-// resolveInlineParams resolves an inline parameter struct via the same
-// *types.Struct + parsed *Field path as named parameter structs — no AST walk,
-// no resolver-side @field parsing.
-func (r *Resolver) resolveInlineParams(info *parser.InlineStructInfo, paramType string) (*InlineParams, error) {
-	if info == nil {
-		return nil, nil
-	}
-	structType, err := r.inlineStructType(info)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parameters don't support anonymous struct fields, so pass nil for schemaNames.
-	fields, err := r.resolveParameterFields(structType, info.Fields, paramType, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return &InlineParams{
-		Fields: fields,
-	}, nil
 }
 
 // resolveInlineBody resolves an inline request/response body struct using parsed annotation.
