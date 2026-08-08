@@ -27,27 +27,37 @@ components:
                 groups:
                     type: object
                     additionalProperties:
-                        $ref: '#/components/schemas/Item'
+                        type: array
+                        items:
+                            $ref: '#/components/schemas/Item'
                     description: Item lists keyed by group name
                 tags:
                     type: object
                     additionalProperties:
-                        type: string
+                        type: array
+                        items:
+                            type: string
                     description: String lists keyed by name
                 buckets:
                     type: array
                     items:
-                        type: string
+                        type: object
+                        additionalProperties:
+                            type: string
                     description: List of string maps
                 nested:
                     type: object
                     additionalProperties:
-                        type: string
+                        type: object
+                        additionalProperties:
+                            type: string
                     description: Nested maps
                 matrix:
                     type: array
                     items:
                         type: array
+                        items:
+                            type: integer
                     description: List of lists
                 items:
                     type: array
@@ -58,21 +68,25 @@ components:
                     type: array
                     items:
                         type: integer
+                        format: int64
                     description: Identifiers
                 times:
                     type: array
                     items:
                         type: string
+                        format: date-time
                     description: Event times
                 sizes:
                     type: object
                     additionalProperties:
                         type: integer
+                        format: int64
                     description: Sizes keyed by name
                 ratios:
                     type: array
                     items:
                         type: number
+                        format: float
                     description: Ratios
             required:
                 - by_id

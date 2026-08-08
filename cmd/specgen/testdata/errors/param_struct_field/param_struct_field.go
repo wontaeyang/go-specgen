@@ -1,11 +1,9 @@
 // Package param_struct_field covers struct-typed parameter fields (bug #2).
 //
 // net/http exposes parameters as map[string][]string, so there is no
-// standard-library model for a structured parameter and deepObject is out of
-// scope. Today these silently render as "type: string" whether or not the
-// struct is a @schema; they are meant to be an error.
-//
-// This fixture moves to testdata/errors when that lands.
+// standard-library model for a structured parameter, and deepObject is out of
+// scope. A parameter is a scalar or a list of scalars; anything else is an
+// error, whether or not the struct carries @schema.
 //
 //	@api {
 //	  @title Struct Parameter Field Fixture

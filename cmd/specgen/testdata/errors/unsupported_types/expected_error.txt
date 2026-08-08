@@ -1,0 +1,6 @@
+validate: 4 validation errors:
+  1. @schema[Job].Done: chan struct{} has no OpenAPI representation
+  2. @schema[Job].Cancel: func() has no OpenAPI representation
+  3. @schema[Job].Phase: complex128 has no OpenAPI representation
+  4. @schema[Job].Handle: uintptr has no OpenAPI representation
+

@@ -30,8 +30,8 @@ func TestNewResolver(t *testing.T) {
 		t.Error("Resolver.pkg is nil")
 	}
 
-	if resolver.typeCache == nil {
-		t.Error("Resolver.typeCache is nil")
+	if resolver.schemaNames == nil {
+		t.Error("Resolver.schemaNames is nil")
 	}
 }
 
@@ -82,14 +82,8 @@ func TestResolver_ResolveSchema(t *testing.T) {
 		t.Fatal("User schema not found in parsed package")
 	}
 
-	// Build schema names map
-	schemaNames := make(map[string]bool)
-	for name := range resolver.parsed.Schemas {
-		schemaNames[name] = true
-	}
-
 	// Resolve it
-	resolved, err := resolver.resolveSchema(userSchema, schemaNames)
+	resolved, err := resolver.resolveSchema(userSchema)
 	if err != nil {
 		t.Fatalf("resolveSchema() error = %v", err)
 	}
@@ -122,8 +116,8 @@ func TestResolver_ResolveSchema(t *testing.T) {
 		t.Fatal("ID field not found")
 	}
 
-	if idField.OpenAPIType != "string" {
-		t.Errorf("ID field OpenAPIType = %q, want %q", idField.OpenAPIType, "string")
+	if idField.Type.ScalarName() != "string" {
+		t.Errorf("ID field OpenAPIType = %q, want %q", idField.Type.ScalarName(), "string")
 	}
 
 	if idField.Format != "uuid" {
@@ -134,8 +128,8 @@ func TestResolver_ResolveSchema(t *testing.T) {
 		t.Fatal("Email field not found")
 	}
 
-	if emailField.OpenAPIType != "string" {
-		t.Errorf("Email field OpenAPIType = %q, want %q", emailField.OpenAPIType, "string")
+	if emailField.Type.ScalarName() != "string" {
+		t.Errorf("Email field OpenAPIType = %q, want %q", emailField.Type.ScalarName(), "string")
 	}
 
 	if emailField.Format != "email" {
@@ -143,24 +137,22 @@ func TestResolver_ResolveSchema(t *testing.T) {
 	}
 }
 
-func TestResolver_ResolveType(t *testing.T) {
+func TestResolver_ResolveTypeRef(t *testing.T) {
 	resolver := newTestResolver(t, "../parser/testdata")
 
-	// Get User struct type
+	// User is a @schema, so a field of that type is a reference rather than a
+	// repeat of the definition.
 	obj := resolver.pkg.Types.Scope().Lookup("User")
 	if obj == nil {
 		t.Fatal("User type not found")
 	}
 
-	// Test resolving the struct type itself (should examine underlying fields)
-	typeInfo := resolver.resolveType(obj.Type())
-	if typeInfo == nil {
-		t.Fatal("resolveType() returned nil")
+	ref := resolver.resolveTypeRef(obj.Type())
+	if ref.Shape != ShapeRef {
+		t.Fatalf("Shape = %v, want ShapeRef", ref.Shape)
 	}
-
-	// The type system should resolve string fields
-	if typeInfo.OpenAPIType == "" {
-		t.Error("OpenAPIType is empty")
+	if ref.Ref != "User" {
+		t.Errorf("Ref = %q, want %q", ref.Ref, "User")
 	}
 }
 
@@ -318,16 +310,10 @@ func TestResolver_ResolveEndpoint(t *testing.T) {
 	// Create resolver
 	resolver := newTestResolver(t, "../parser/testdata")
 
-	// Build schema names map
-	schemaNames := make(map[string]bool)
-	for name := range resolver.parsed.Schemas {
-		schemaNames[name] = true
-	}
-
 	// Resolve schemas first
 	schemas := make(map[string]*ResolvedSchema)
 	for name, schema := range resolver.parsed.Schemas {
-		resolved, err := resolver.resolveSchema(schema, schemaNames)
+		resolved, err := resolver.resolveSchema(schema)
 		if err != nil {
 			t.Fatalf("Failed to resolve schema %s: %v", name, err)
 		}
@@ -375,13 +361,76 @@ func TestResolver_ResolveEndpoint(t *testing.T) {
 	}
 }
 
-func TestTypeInfo_BasicTypes(t *testing.T) {
+func TestResolver_BasicTypeRefs(t *testing.T) {
 	resolver := newTestResolver(t, "../parser/testdata")
 
-	// We would need to construct Go types for testing
-	// For now, just verify resolver was created
-	if resolver.typeCache == nil {
-		t.Error("typeCache not initialized")
+	tests := []struct {
+		kind       types.BasicKind
+		wantType   string
+		wantFormat string
+	}{
+		{types.String, "string", ""},
+		{types.Bool, "boolean", ""},
+		{types.Int, "integer", ""},
+		{types.Int32, "integer", "int32"},
+		{types.Int64, "integer", "int64"},
+		{types.Uint64, "integer", ""},
+		{types.Float32, "number", "float"},
+		{types.Float64, "number", "double"},
+	}
+
+	for _, tt := range tests {
+		t.Run(types.Typ[tt.kind].Name(), func(t *testing.T) {
+			ref := resolver.resolveTypeRef(types.Typ[tt.kind])
+			if ref.Shape != ShapeScalar {
+				t.Fatalf("Shape = %v, want ShapeScalar", ref.Shape)
+			}
+			if ref.Type != tt.wantType {
+				t.Errorf("Type = %q, want %q", ref.Type, tt.wantType)
+			}
+			if ref.Format != tt.wantFormat {
+				t.Errorf("Format = %q, want %q", ref.Format, tt.wantFormat)
+			}
+		})
+	}
+}
+
+// TestResolver_UnsupportedTypeRefs pins that types encoding/json refuses to
+// marshal are marked rather than substituted for something plausible.
+func TestResolver_UnsupportedTypeRefs(t *testing.T) {
+	resolver := newTestResolver(t, "../parser/testdata")
+
+	for _, kind := range []types.BasicKind{types.Complex64, types.Complex128, types.Uintptr} {
+		t.Run(types.Typ[kind].Name(), func(t *testing.T) {
+			if ref := resolver.resolveTypeRef(types.Typ[kind]); ref.Shape != ShapeUnsupported {
+				t.Errorf("Shape = %v, want ShapeUnsupported", ref.Shape)
+			}
+		})
+	}
+
+	chanType := types.NewChan(types.SendRecv, types.Typ[types.Int])
+	if ref := resolver.resolveTypeRef(chanType); ref.Shape != ShapeUnsupported {
+		t.Errorf("chan Shape = %v, want ShapeUnsupported", ref.Shape)
+	}
+}
+
+// TestResolver_NestedContainerTypeRefs pins that nesting survives, which the
+// flat IsArray/ItemsType pair could not express.
+func TestResolver_NestedContainerTypeRefs(t *testing.T) {
+	resolver := newTestResolver(t, "../parser/testdata")
+
+	// map[string][]int64
+	nested := types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.Int64]))
+
+	ref := resolver.resolveTypeRef(nested)
+	if ref.Shape != ShapeMap {
+		t.Fatalf("Shape = %v, want ShapeMap", ref.Shape)
+	}
+	if ref.Elem.Shape != ShapeArray {
+		t.Fatalf("Elem.Shape = %v, want ShapeArray", ref.Elem.Shape)
+	}
+	if ref.Elem.Elem.Type != "integer" || ref.Elem.Elem.Format != "int64" {
+		t.Errorf("innermost = %q/%q, want integer/int64", ref.Elem.Elem.Type, ref.Elem.Elem.Format)
 	}
 }
 
@@ -391,19 +440,16 @@ func TestResolver_ByteSliceResolvesToStringByte(t *testing.T) {
 	// Construct a []byte type using go/types
 	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	typeInfo := resolver.resolveType(byteSlice)
-	if typeInfo == nil {
-		t.Fatal("resolveType([]byte) returned nil")
-	}
+	typeInfo := resolver.resolveTypeRef(byteSlice)
 
-	if typeInfo.OpenAPIType != "string" {
-		t.Errorf("[]byte OpenAPIType = %q, want %q", typeInfo.OpenAPIType, "string")
+	if typeInfo.ScalarName() != "string" {
+		t.Errorf("[]byte OpenAPIType = %q, want %q", typeInfo.ScalarName(), "string")
 	}
 	if typeInfo.Format != "byte" {
 		t.Errorf("[]byte Format = %q, want %q", typeInfo.Format, "byte")
 	}
-	if typeInfo.IsArray {
-		t.Error("[]byte should not be marked as IsArray")
+	if typeInfo.IsArray() {
+		t.Error("[]byte should not be an array")
 	}
 }
 
@@ -442,8 +488,8 @@ func TestResolver_InlineDeclarations(t *testing.T) {
 			if idField.Name != "id" {
 				t.Errorf("Path field name = %q, want %q", idField.Name, "id")
 			}
-			if idField.OpenAPIType != "string" {
-				t.Errorf("Path field type = %q, want %q", idField.OpenAPIType, "string")
+			if idField.Type.ScalarName() != "string" {
+				t.Errorf("Path field type = %q, want %q", idField.Type.ScalarName(), "string")
 			}
 			if idField.Description != "User ID" {
 				t.Errorf("Path field description = %q, want %q", idField.Description, "User ID")
@@ -502,8 +548,8 @@ func TestResolver_InlineDeclarations(t *testing.T) {
 		// Find limit field and check annotations
 		for _, f := range listUsersEndpoint.InlineQueryParams.Fields {
 			if f.Name == "limit" {
-				if f.OpenAPIType != "integer" {
-					t.Errorf("limit field type = %q, want %q", f.OpenAPIType, "integer")
+				if f.Type.ScalarName() != "integer" {
+					t.Errorf("limit field type = %q, want %q", f.Type.ScalarName(), "integer")
 				}
 				if f.Minimum == nil || *f.Minimum != 1 {
 					t.Error("limit field should have minimum=1")
@@ -751,14 +797,8 @@ func TestResolver_PointerImpliesNotRequired(t *testing.T) {
 		t.Fatal("FieldRequiredTest schema not found in parsed package")
 	}
 
-	// Build schema names map
-	schemaNames := make(map[string]bool)
-	for name := range resolver.parsed.Schemas {
-		schemaNames[name] = true
-	}
-
 	// Resolve it
-	resolved, err := resolver.resolveSchema(schema, schemaNames)
+	resolved, err := resolver.resolveSchema(schema)
 	if err != nil {
 		t.Fatalf("resolveSchema() error = %v", err)
 	}
@@ -821,14 +861,8 @@ func TestResolver_EmbeddedStructFlattening(t *testing.T) {
 		t.Fatal("EmbeddedTest schema not found in parsed package")
 	}
 
-	// Build schema names map
-	schemaNames := make(map[string]bool)
-	for name := range resolver.parsed.Schemas {
-		schemaNames[name] = true
-	}
-
 	// Resolve it
-	resolved, err := resolver.resolveSchema(schema, schemaNames)
+	resolved, err := resolver.resolveSchema(schema)
 	if err != nil {
 		t.Fatalf("resolveSchema() error = %v", err)
 	}
@@ -856,8 +890,8 @@ func TestResolver_EmbeddedStructFlattening(t *testing.T) {
 
 	// Verify embedded fields have correct types
 	if f, ok := fields["id"]; ok {
-		if f.OpenAPIType != "string" {
-			t.Errorf("id field OpenAPIType = %q, want %q", f.OpenAPIType, "string")
+		if f.Type.ScalarName() != "string" {
+			t.Errorf("id field OpenAPIType = %q, want %q", f.Type.ScalarName(), "string")
 		}
 	}
 }
@@ -870,12 +904,7 @@ func TestResolver_EmbeddedPtrFlattening(t *testing.T) {
 		t.Fatal("EmbeddedPtrTest schema not found in parsed package")
 	}
 
-	schemaNames := make(map[string]bool)
-	for name := range resolver.parsed.Schemas {
-		schemaNames[name] = true
-	}
-
-	resolved, err := resolver.resolveSchema(schema, schemaNames)
+	resolved, err := resolver.resolveSchema(schema)
 	if err != nil {
 		t.Fatalf("resolveSchema() error = %v", err)
 	}
@@ -909,12 +938,7 @@ func TestResolver_NestedEmbedFlattening(t *testing.T) {
 		t.Fatal("NestedEmbedTest schema not found in parsed package")
 	}
 
-	schemaNames := make(map[string]bool)
-	for name := range resolver.parsed.Schemas {
-		schemaNames[name] = true
-	}
-
-	resolved, err := resolver.resolveSchema(schema, schemaNames)
+	resolved, err := resolver.resolveSchema(schema)
 	if err != nil {
 		t.Fatalf("resolveSchema() error = %v", err)
 	}
@@ -997,8 +1021,8 @@ func TestResolver_EmbeddedParameterFlattening(t *testing.T) {
 		if f.Required {
 			t.Error("limit should not be required (omitempty)")
 		}
-		if f.OpenAPIType != "integer" {
-			t.Errorf("limit OpenAPIType = %q, want %q", f.OpenAPIType, "integer")
+		if f.Type.ScalarName() != "integer" {
+			t.Errorf("limit OpenAPIType = %q, want %q", f.Type.ScalarName(), "integer")
 		}
 	}
 }

@@ -31,9 +31,9 @@ func TestValidator_Validate_ValidPackage(t *testing.T) {
 				GoTypeName: "User",
 				Fields: []*resolver.ResolvedField{
 					{
-						Name:        "id",
-						GoName:      "ID",
-						OpenAPIType: "string",
+						Name:   "id",
+						GoName: "ID",
+						Type:   &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
 					},
 				},
 			},
@@ -213,7 +213,7 @@ func TestValidator_ValidateSchema(t *testing.T) {
 			schema: &resolver.ResolvedSchema{
 				Name: "User",
 				Fields: []*resolver.ResolvedField{
-					{Name: "id", GoName: "ID", OpenAPIType: "string"},
+					{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 				},
 			},
 			wantErr: false,
@@ -232,8 +232,8 @@ func TestValidator_ValidateSchema(t *testing.T) {
 			schema: &resolver.ResolvedSchema{
 				Name: "User",
 				Fields: []*resolver.ResolvedField{
-					{Name: "id", GoName: "ID", OpenAPIType: "string"},
-					{Name: "id", GoName: "Id", OpenAPIType: "string"},
+					{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+					{Name: "id", GoName: "Id", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 				},
 			},
 			wantErr: true,
@@ -288,53 +288,51 @@ func TestValidator_ValidateField(t *testing.T) {
 		{
 			name: "valid field",
 			field: &resolver.ResolvedField{
-				Name:        "age",
-				GoName:      "Age",
-				OpenAPIType: "integer",
+				Name:   "age",
+				GoName: "Age",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "integer"},
 			},
 			wantErr: false,
 		},
 		{
 			name: "enum on integer",
 			field: &resolver.ResolvedField{
-				Name:        "age",
-				GoName:      "Age",
-				OpenAPIType: "integer",
-				Enum:        []string{"1", "2", "3"},
+				Name:   "age",
+				GoName: "Age",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "integer"},
+				Enum:   []string{"1", "2", "3"},
 			},
 			wantErr: false,
 		},
 		{
 			name: "enum on array of strings",
 			field: &resolver.ResolvedField{
-				Name:        "tags",
-				GoName:      "Tags",
-				OpenAPIType: "array",
-				IsArray:     true,
-				ItemsType:   "string",
-				Enum:        []string{"red", "green", "blue"},
+				Name:   "tags",
+				GoName: "Tags",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+
+				Enum: []string{"red", "green", "blue"},
 			},
 			wantErr: false,
 		},
 		{
 			name: "enum on array of integers",
 			field: &resolver.ResolvedField{
-				Name:        "levels",
-				GoName:      "Levels",
-				OpenAPIType: "array",
-				IsArray:     true,
-				ItemsType:   "integer",
-				Enum:        []string{"1", "2", "3"},
+				Name:   "levels",
+				GoName: "Levels",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+
+				Enum: []string{"1", "2", "3"},
 			},
 			wantErr: false,
 		},
 		{
 			name: "enum on boolean",
 			field: &resolver.ResolvedField{
-				Name:        "active",
-				GoName:      "Active",
-				OpenAPIType: "boolean",
-				Enum:        []string{"true", "false"},
+				Name:   "active",
+				GoName: "Active",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "boolean"},
+				Enum:   []string{"true", "false"},
 			},
 			wantErr: true,
 			errMsg:  "enum only supported for string, integer, or array types",
@@ -342,12 +340,10 @@ func TestValidator_ValidateField(t *testing.T) {
 		{
 			name: "enum on array of objects",
 			field: &resolver.ResolvedField{
-				Name:        "items",
-				GoName:      "Items",
-				OpenAPIType: "array",
-				IsArray:     true,
-				ItemsType:   "object",
-				Enum:        []string{"a", "b"},
+				Name:   "items",
+				GoName: "Items",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeObject}},
+				Enum:   []string{"a", "b"},
 			},
 			wantErr: true,
 			errMsg:  "enum for arrays only supported with string or integer items",
@@ -355,11 +351,11 @@ func TestValidator_ValidateField(t *testing.T) {
 		{
 			name: "min > max",
 			field: &resolver.ResolvedField{
-				Name:        "value",
-				GoName:      "Value",
-				OpenAPIType: "number",
-				Minimum:     &maxVal,
-				Maximum:     &minVal,
+				Name:    "value",
+				GoName:  "Value",
+				Type:    &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "number"},
+				Minimum: &maxVal,
+				Maximum: &minVal,
 			},
 			wantErr: true,
 			errMsg:  "minimum cannot be greater than maximum",
@@ -367,11 +363,11 @@ func TestValidator_ValidateField(t *testing.T) {
 		{
 			name: "minLength > maxLength",
 			field: &resolver.ResolvedField{
-				Name:        "text",
-				GoName:      "Text",
-				OpenAPIType: "string",
-				MinLength:   &maxLen,
-				MaxLength:   &minLen,
+				Name:      "text",
+				GoName:    "Text",
+				Type:      &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+				MinLength: &maxLen,
+				MaxLength: &minLen,
 			},
 			wantErr: true,
 			errMsg:  "minLength cannot be greater than maxLength",
@@ -379,10 +375,10 @@ func TestValidator_ValidateField(t *testing.T) {
 		{
 			name: "length constraints on non-string",
 			field: &resolver.ResolvedField{
-				Name:        "count",
-				GoName:      "Count",
-				OpenAPIType: "integer",
-				MinLength:   &minLen,
+				Name:      "count",
+				GoName:    "Count",
+				Type:      &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "integer"},
+				MinLength: &minLen,
 			},
 			wantErr: true,
 			errMsg:  "only valid for string",
@@ -390,10 +386,10 @@ func TestValidator_ValidateField(t *testing.T) {
 		{
 			name: "pattern on non-string",
 			field: &resolver.ResolvedField{
-				Name:        "count",
-				GoName:      "Count",
-				OpenAPIType: "integer",
-				Pattern:     "^[0-9]+$",
+				Name:    "count",
+				GoName:  "Count",
+				Type:    &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "integer"},
+				Pattern: "^[0-9]+$",
 			},
 			wantErr: true,
 			errMsg:  "only valid for string",
@@ -401,10 +397,10 @@ func TestValidator_ValidateField(t *testing.T) {
 		{
 			name: "invalid pattern regex",
 			field: &resolver.ResolvedField{
-				Name:        "text",
-				GoName:      "Text",
-				OpenAPIType: "string",
-				Pattern:     "[invalid",
+				Name:    "text",
+				GoName:  "Text",
+				Type:    &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+				Pattern: "[invalid",
 			},
 			wantErr: true,
 			errMsg:  "invalid pattern",
@@ -412,12 +408,12 @@ func TestValidator_ValidateField(t *testing.T) {
 		{
 			name: "minItems > maxItems",
 			field: &resolver.ResolvedField{
-				Name:        "tags",
-				GoName:      "Tags",
-				OpenAPIType: "array",
-				IsArray:     true,
-				MinItems:    &maxLen,
-				MaxItems:    &minLen,
+				Name:   "tags",
+				GoName: "Tags",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+
+				MinItems: &maxLen,
+				MaxItems: &minLen,
 			},
 			wantErr: true,
 			errMsg:  "minItems cannot be greater than maxItems",
@@ -425,10 +421,10 @@ func TestValidator_ValidateField(t *testing.T) {
 		{
 			name: "items constraints on non-array",
 			field: &resolver.ResolvedField{
-				Name:        "name",
-				GoName:      "Name",
-				OpenAPIType: "string",
-				MinItems:    &minLen,
+				Name:     "name",
+				GoName:   "Name",
+				Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+				MinItems: &minLen,
 			},
 			wantErr: true,
 			errMsg:  "only valid for array",
@@ -436,12 +432,12 @@ func TestValidator_ValidateField(t *testing.T) {
 		{
 			name: "valid array with minItems and maxItems",
 			field: &resolver.ResolvedField{
-				Name:        "tags",
-				GoName:      "Tags",
-				OpenAPIType: "array",
-				IsArray:     true,
-				MinItems:    &minLen,
-				MaxItems:    &maxLen,
+				Name:   "tags",
+				GoName: "Tags",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+
+				MinItems: &minLen,
+				MaxItems: &maxLen,
 			},
 			wantErr: false,
 		},
@@ -450,7 +446,7 @@ func TestValidator_ValidateField(t *testing.T) {
 			field: &resolver.ResolvedField{
 				Name:        "name",
 				GoName:      "Name",
-				OpenAPIType: "string",
+				Type:        &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
 				UniqueItems: true,
 			},
 			wantErr: true,
@@ -459,10 +455,10 @@ func TestValidator_ValidateField(t *testing.T) {
 		{
 			name: "valid array with uniqueItems",
 			field: &resolver.ResolvedField{
-				Name:        "tags",
-				GoName:      "Tags",
-				OpenAPIType: "array",
-				IsArray:     true,
+				Name:   "tags",
+				GoName: "Tags",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+
 				UniqueItems: true,
 			},
 			wantErr: false,
@@ -470,11 +466,11 @@ func TestValidator_ValidateField(t *testing.T) {
 		{
 			name: "readOnly and writeOnly both true",
 			field: &resolver.ResolvedField{
-				Name:        "field",
-				GoName:      "Field",
-				OpenAPIType: "string",
-				ReadOnly:    true,
-				WriteOnly:   true,
+				Name:      "field",
+				GoName:    "Field",
+				Type:      &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+				ReadOnly:  true,
+				WriteOnly: true,
 			},
 			wantErr: true,
 			errMsg:  "readOnly and writeOnly cannot both be true",
@@ -482,20 +478,20 @@ func TestValidator_ValidateField(t *testing.T) {
 		{
 			name: "readOnly only",
 			field: &resolver.ResolvedField{
-				Name:        "id",
-				GoName:      "ID",
-				OpenAPIType: "string",
-				ReadOnly:    true,
+				Name:     "id",
+				GoName:   "ID",
+				Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+				ReadOnly: true,
 			},
 			wantErr: false,
 		},
 		{
 			name: "writeOnly only",
 			field: &resolver.ResolvedField{
-				Name:        "password",
-				GoName:      "Password",
-				OpenAPIType: "string",
-				WriteOnly:   true,
+				Name:      "password",
+				GoName:    "Password",
+				Type:      &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+				WriteOnly: true,
 			},
 			wantErr: false,
 		},
@@ -548,10 +544,10 @@ func TestValidator_ValidateParameterField(t *testing.T) {
 			name:      "path param cannot be nullable",
 			paramType: "path",
 			field: &resolver.ResolvedField{
-				Name:        "id",
-				GoName:      "ID",
-				OpenAPIType: "string",
-				Nullable:    true,
+				Name:     "id",
+				GoName:   "ID",
+				Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+				Nullable: true,
 			},
 			wantErr: true,
 			errMsg:  "cannot be nullable",
@@ -560,10 +556,9 @@ func TestValidator_ValidateParameterField(t *testing.T) {
 			name:      "path param cannot be array",
 			paramType: "path",
 			field: &resolver.ResolvedField{
-				Name:        "id",
-				GoName:      "ID",
-				OpenAPIType: "array",
-				IsArray:     true,
+				Name:   "id",
+				GoName: "ID",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 			},
 			wantErr: true,
 			errMsg:  "cannot be arrays",
@@ -572,10 +567,9 @@ func TestValidator_ValidateParameterField(t *testing.T) {
 			name:      "header param cannot be array",
 			paramType: "header",
 			field: &resolver.ResolvedField{
-				Name:        "token",
-				GoName:      "Token",
-				OpenAPIType: "array",
-				IsArray:     true,
+				Name:   "token",
+				GoName: "Token",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 			},
 			wantErr: true,
 			errMsg:  "cannot be arrays",
@@ -584,10 +578,9 @@ func TestValidator_ValidateParameterField(t *testing.T) {
 			name:      "cookie param cannot be array",
 			paramType: "cookie",
 			field: &resolver.ResolvedField{
-				Name:        "session",
-				GoName:      "Session",
-				OpenAPIType: "array",
-				IsArray:     true,
+				Name:   "session",
+				GoName: "Session",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 			},
 			wantErr: true,
 			errMsg:  "cannot be arrays",
@@ -596,10 +589,9 @@ func TestValidator_ValidateParameterField(t *testing.T) {
 			name:      "query param can be array",
 			paramType: "query",
 			field: &resolver.ResolvedField{
-				Name:        "tags",
-				GoName:      "Tags",
-				OpenAPIType: "array",
-				IsArray:     true,
+				Name:   "tags",
+				GoName: "Tags",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 			},
 			wantErr: false,
 		},
@@ -876,7 +868,7 @@ func TestValidator_ValidateRequestBody(t *testing.T) {
 				"User": {
 					Name: "User",
 					Fields: []*resolver.ResolvedField{
-						{Name: "id", GoName: "ID", OpenAPIType: "string"},
+						{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 					},
 				},
 			},
@@ -897,7 +889,7 @@ func TestValidator_ValidateRequestBody(t *testing.T) {
 			name: "unknown schema",
 			request: &resolver.ResolvedRequestBody{
 				ContentType: "application/json",
-				Body:        &resolver.ResolvedBody{Schema: "Unknown"},
+				Body:        &resolver.ResolvedBody{Schema: "Unknown", Type: &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "Unknown"}},
 			},
 			schemas: map[string]*resolver.ResolvedSchema{},
 			wantErr: true,
@@ -1226,8 +1218,8 @@ func TestValidator_ValidateBindTarget(t *testing.T) {
 		Name:       "DataResponse",
 		GoTypeName: "DataResponse",
 		Fields: []*resolver.ResolvedField{
-			{Name: "data", GoName: "Data", OpenAPIType: "object"},
-			{Name: "message", GoName: "Message", OpenAPIType: "string"},
+			{Name: "data", GoName: "Data", Type: &resolver.TypeRef{Shape: resolver.ShapeObject}},
+			{Name: "message", GoName: "Message", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 		},
 	}
 
@@ -1298,7 +1290,7 @@ func TestValidator_ValidateBindTarget_RequestBody(t *testing.T) {
 		Name:       "DataResponse",
 		GoTypeName: "DataResponse",
 		Fields: []*resolver.ResolvedField{
-			{Name: "data", GoName: "Data", OpenAPIType: "object"},
+			{Name: "data", GoName: "Data", Type: &resolver.TypeRef{Shape: resolver.ShapeObject}},
 		},
 	}
 
@@ -1308,7 +1300,7 @@ func TestValidator_ValidateBindTarget_RequestBody(t *testing.T) {
 			Version: "1.0.0",
 		},
 		Schemas: map[string]*resolver.ResolvedSchema{
-			"User":         {Name: "User", Fields: []*resolver.ResolvedField{{Name: "id", GoName: "ID", OpenAPIType: "string"}}},
+			"User":         {Name: "User", Fields: []*resolver.ResolvedField{{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}}}},
 			"DataResponse": wrapperSchema,
 		},
 		Parameters: map[string]*resolver.ResolvedParameter{},
@@ -1319,8 +1311,8 @@ func TestValidator_ValidateBindTarget_RequestBody(t *testing.T) {
 				Request: &resolver.ResolvedRequestBody{
 					ContentType: "application/json",
 					Body: &resolver.ResolvedBody{
-						Schema:      "User",
-						ElementType: "User",
+						Schema: "User",
+						Type:   &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"},
 						Bind: &resolver.ResolvedBindTarget{
 							Wrapper:       "NonExistent",
 							Field:         "Data",
@@ -1350,7 +1342,7 @@ func TestValidator_ValidateBindTarget_Response(t *testing.T) {
 		Name:       "DataResponse",
 		GoTypeName: "DataResponse",
 		Fields: []*resolver.ResolvedField{
-			{Name: "data", GoName: "Data", OpenAPIType: "object"},
+			{Name: "data", GoName: "Data", Type: &resolver.TypeRef{Shape: resolver.ShapeObject}},
 		},
 	}
 
@@ -1360,7 +1352,7 @@ func TestValidator_ValidateBindTarget_Response(t *testing.T) {
 			Version: "1.0.0",
 		},
 		Schemas: map[string]*resolver.ResolvedSchema{
-			"User":         {Name: "User", Fields: []*resolver.ResolvedField{{Name: "id", GoName: "ID", OpenAPIType: "string"}}},
+			"User":         {Name: "User", Fields: []*resolver.ResolvedField{{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}}}},
 			"DataResponse": wrapperSchema,
 		},
 		Parameters: map[string]*resolver.ResolvedParameter{},
@@ -1373,8 +1365,8 @@ func TestValidator_ValidateBindTarget_Response(t *testing.T) {
 						StatusCode:  "200",
 						ContentType: "application/json",
 						Body: &resolver.ResolvedBody{
-							Schema:      "User",
-							ElementType: "User",
+							Schema: "User",
+							Type:   &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"},
 							Bind: &resolver.ResolvedBindTarget{
 								Wrapper:       "DataResponse",
 								Field:         "NonExistent",

@@ -58,19 +58,14 @@ func isSpecialType(pkgPath, typeName string) bool {
 
 // Resolver resolves Go types to OpenAPI types
 type Resolver struct {
-	parsed    *parser.Package
-	pkg       *packages.Package
-	typeCache map[string]*TypeInfo
-}
+	parsed *parser.Package
+	pkg    *packages.Package
 
-// TypeInfo contains resolved type information
-type TypeInfo struct {
-	OpenAPIType string
-	Format      string
-	IsArray     bool
-	ItemsType   string
-	IsNullable  bool
-	IsAnyValue  bool // true for any/interface{} types
+	// schemaNames is the set of @schema type names. A named struct in that set
+	// resolves to a $ref; one outside it has no representation. Held here
+	// rather than threaded through every resolve function, since it is fixed
+	// for the life of the resolver.
+	schemaNames map[string]bool
 }
 
 // NewResolver creates a resolver for an already-parsed package.
@@ -80,10 +75,15 @@ type TypeInfo struct {
 // values that compare unequal to the parser's, and would double the cost of the
 // most expensive step in the pipeline.
 func NewResolver(parsed *parser.Package) *Resolver {
+	schemaNames := make(map[string]bool, len(parsed.Schemas))
+	for name := range parsed.Schemas {
+		schemaNames[name] = true
+	}
+
 	return &Resolver{
-		parsed:    parsed,
-		pkg:       parsed.Pkg,
-		typeCache: make(map[string]*TypeInfo),
+		parsed:      parsed,
+		pkg:         parsed.Pkg,
+		schemaNames: schemaNames,
 	}
 }
 
@@ -103,15 +103,9 @@ func (r *Resolver) Resolve() (*ResolvedPackage, error) {
 		resolved.API = r.resolveAPI(parsed.API)
 	}
 
-	// Build schema names map for detecting unresolved struct references
-	schemaNames := make(map[string]bool)
-	for name := range parsed.Schemas {
-		schemaNames[name] = true
-	}
-
 	// Resolve schemas
 	for name, schema := range parsed.Schemas {
-		resolvedSchema, err := r.resolveSchema(schema, schemaNames)
+		resolvedSchema, err := r.resolveSchema(schema)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve schema %s: %w", name, err)
 		}
@@ -221,7 +215,7 @@ func (r *Resolver) resolveAPI(api *parser.APIInfo) *ResolvedAPI {
 
 // resolveSchema resolves a schema by looking up the Go struct and resolving its fields
 // schemaNames contains all known @schema type names for detecting unresolved struct references
-func (r *Resolver) resolveSchema(schema *parser.Schema, schemaNames map[string]bool) (*ResolvedSchema, error) {
+func (r *Resolver) resolveSchema(schema *parser.Schema) (*ResolvedSchema, error) {
 	resolved := &ResolvedSchema{
 		Name:        schema.Name,
 		GoTypeName:  schema.GoTypeName,
@@ -250,7 +244,7 @@ func (r *Resolver) resolveSchema(schema *parser.Schema, schemaNames map[string]b
 	}
 
 	// Resolve each field (including embedded struct flattening)
-	fields, err := r.resolveSchemaFields(structType, schema.Fields, schemaNames, nil)
+	fields, err := r.resolveSchemaFields(structType, schema.Fields, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +255,7 @@ func (r *Resolver) resolveSchema(schema *parser.Schema, schemaNames map[string]b
 
 // resolveSchemaFields resolves fields from a struct type, flattening embedded structs.
 // visited tracks type names to prevent infinite recursion from circular embedding.
-func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*parser.Field, schemaNames map[string]bool, visited map[string]bool) ([]*ResolvedField, error) {
+func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*parser.Field, visited map[string]bool) ([]*ResolvedField, error) {
 	if visited == nil {
 		visited = make(map[string]bool)
 	}
@@ -274,7 +268,7 @@ func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*
 
 		// Handle embedded (anonymous) fields by flattening
 		if field.Anonymous() {
-			embeddedFields, err := r.flattenEmbeddedField(field, annotations, schemaNames, visited)
+			embeddedFields, err := r.flattenEmbeddedField(field, annotations, visited)
 			if err != nil {
 				return nil, err
 			}
@@ -292,7 +286,7 @@ func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*
 		}
 
 		// Resolve field type
-		resolvedField, err := r.resolveField(field, tag, fieldAnnotation, schemaNames)
+		resolvedField, err := r.resolveField(field, tag, fieldAnnotation)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve field %s: %w", field.Name(), err)
 		}
@@ -344,14 +338,14 @@ func unwrapEmbeddedStruct(t types.Type, visited map[string]bool) (st *types.Stru
 }
 
 // flattenEmbeddedField resolves an embedded struct field and returns its flattened fields.
-func (r *Resolver) flattenEmbeddedField(field *types.Var, annotations []*parser.Field, schemaNames map[string]bool, visited map[string]bool) ([]*ResolvedField, error) {
+func (r *Resolver) flattenEmbeddedField(field *types.Var, annotations []*parser.Field, visited map[string]bool) ([]*ResolvedField, error) {
 	embeddedStruct, cleanup := unwrapEmbeddedStruct(field.Type(), visited)
 	defer cleanup()
 	if embeddedStruct == nil {
 		return nil, nil
 	}
 
-	return r.resolveSchemaFields(embeddedStruct, annotations, schemaNames, visited)
+	return r.resolveSchemaFields(embeddedStruct, annotations, visited)
 }
 
 // extractTypeArg extracts the type argument from a generic instantiation
@@ -453,62 +447,35 @@ func (r *Resolver) flattenEmbeddedParamField(field *types.Var, annotations []*pa
 	return r.resolveParameterFields(embeddedStruct, annotations, paramType, visited)
 }
 
-// resolveField resolves a single struct field
-// schemaNames contains the names of all known @schema types for detecting unresolved struct references
-// Returns nil, nil if the field should be skipped (e.g., json:"-" or unexported fields)
-func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser.Field, schemaNames map[string]bool) (*ResolvedField, error) {
-	// Skip unexported (private) fields - they cannot be serialized
+// resolveField resolves a single struct field.
+//
+// Returns nil, nil when the field should not appear at all: unexported, or
+// tagged json:"-".
+func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser.Field) (*ResolvedField, error) {
+	// Unexported fields cannot be serialized.
 	if !field.Exported() {
 		return nil, nil
 	}
 
-	// Resolve field name using tag fallback chain (json -> xml -> Go field name)
-	// Returns "" if field should be skipped
 	fieldName := resolveFieldNameFromTag(tag, field.Name())
 	if fieldName == "" {
-		// Field should be skipped (e.g., json:"-")
 		return nil, nil
 	}
 
-	resolved := &ResolvedField{
-		Name:   fieldName,
-		GoName: field.Name(),
-		GoType: field.Type().String(),
-	}
+	typeRef := r.resolveTypeRef(field.Type())
 
-	// Check if field is required from JSON tag
+	// omitempty/omitzero drop a nil pointer rather than encoding null, so such
+	// a field can never appear as null on the wire.
 	omitted := omitsWhenEmpty(tag, field.Type())
-	resolved.Required = !omitted
 
-	// Check for anonymous struct types and resolve their fields inline
-	if inlineFields := r.resolveAnonymousStruct(field.Type(), schemaNames); inlineFields != nil {
-		resolved.InlineFields = inlineFields
-		resolved.OpenAPIType = "object"
-	} else if itemFields := r.resolveSliceOfAnonymousStruct(field.Type(), schemaNames); itemFields != nil {
-		// Slice of anonymous struct
-		resolved.IsArray = true
-		resolved.OpenAPIType = "array"
-		resolved.ItemsType = "object"
-		resolved.ItemsInlineFields = itemFields
-	} else if mapValueFields := r.resolveMapOfAnonymousStruct(field.Type(), schemaNames); mapValueFields != nil {
-		// Map with anonymous struct values
-		resolved.IsMap = true
-		resolved.OpenAPIType = "object"
-		resolved.MapValueInlineFields = mapValueFields
-	} else {
-		// Check for unresolved struct types (named structs not in @schema)
-		r.checkUnresolvedStruct(field.Type(), resolved, schemaNames)
-
-		// Resolve Go type to OpenAPI type
-		typeInfo := r.resolveType(field.Type())
-		resolved.OpenAPIType = typeInfo.OpenAPIType
-		resolved.Format = typeInfo.Format
-		resolved.IsArray = typeInfo.IsArray
-		resolved.ItemsType = typeInfo.ItemsType
-		// omitempty/omitzero omit a nil pointer instead of encoding null,
-		// so the field can never appear as null on the wire
-		resolved.Nullable = typeInfo.IsNullable && !omitted
-		resolved.IsAnyValue = typeInfo.IsAnyValue
+	resolved := &ResolvedField{
+		Name:     fieldName,
+		GoName:   field.Name(),
+		GoType:   field.Type().String(),
+		Type:     typeRef,
+		Format:   typeRef.Format,
+		Required: !omitted,
+		Nullable: isNullable(field.Type()) && !omitted,
 	}
 
 	applyAnnotationOverrides(resolved, annotation)
@@ -516,179 +483,35 @@ func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser
 	return resolved, nil
 }
 
-// resolveAnonymousStruct checks if a type is an anonymous struct and resolves its fields inline
-// Returns nil if the type is not an anonymous struct
-func (r *Resolver) resolveAnonymousStruct(t types.Type, schemaNames map[string]bool) []*ResolvedField {
-	// Unwrap pointer
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
-	}
-
-	// Check if this is an anonymous struct (a *types.Struct without being wrapped in *types.Named)
-	structType, ok := t.(*types.Struct)
-	if !ok {
-		return nil
-	}
-
-	// This is an anonymous struct - resolve its fields
+// resolveAnonymousFields resolves the members of an anonymous struct.
+//
+// Annotations do not reach here yet: the parser harvests @field comments only
+// at the top level of a struct, so nested ones are parsed and dropped. That is
+// bug #4, fixed separately.
+func (r *Resolver) resolveAnonymousFields(structType *types.Struct) []*ResolvedField {
 	fields := make([]*ResolvedField, 0, structType.NumFields())
 
 	for i := 0; i < structType.NumFields(); i++ {
 		field := structType.Field(i)
 		tag := structType.Tag(i)
 
-		// Handle embedded (anonymous) fields by flattening
 		if field.Anonymous() {
-			embeddedFields, err := r.flattenEmbeddedField(field, nil, schemaNames, nil)
+			embedded, err := r.flattenEmbeddedField(field, nil, nil)
 			if err != nil {
 				continue
 			}
-			fields = append(fields, embeddedFields...)
+			fields = append(fields, embedded...)
 			continue
 		}
 
-		// Skip unexported (private) fields - they cannot be serialized
-		if !field.Exported() {
+		resolved, err := r.resolveField(field, tag, nil)
+		if err != nil || resolved == nil {
 			continue
 		}
-
-		// Resolve field name using tag fallback chain (json -> xml -> Go field name)
-		// Returns "" if field should be skipped
-		fieldName := resolveFieldNameFromTag(tag, field.Name())
-		if fieldName == "" {
-			// Field should be skipped (e.g., json:"-")
-			continue
-		}
-
-		resolvedField := &ResolvedField{
-			Name:   fieldName,
-			GoName: field.Name(),
-			GoType: field.Type().String(),
-		}
-
-		// Check if field is required from JSON tag
-		omitted := omitsWhenEmpty(tag, field.Type())
-		resolvedField.Required = !omitted
-
-		// Check for nested anonymous structs (recursive)
-		if nestedFields := r.resolveAnonymousStruct(field.Type(), schemaNames); nestedFields != nil {
-			resolvedField.InlineFields = nestedFields
-			resolvedField.OpenAPIType = "object"
-		} else if itemFields := r.resolveSliceOfAnonymousStruct(field.Type(), schemaNames); itemFields != nil {
-			// Nested slice of anonymous struct
-			resolvedField.IsArray = true
-			resolvedField.OpenAPIType = "array"
-			resolvedField.ItemsType = "object"
-			resolvedField.ItemsInlineFields = itemFields
-		} else if mapValueFields := r.resolveMapOfAnonymousStruct(field.Type(), schemaNames); mapValueFields != nil {
-			// Nested map with anonymous struct values
-			resolvedField.IsMap = true
-			resolvedField.OpenAPIType = "object"
-			resolvedField.MapValueInlineFields = mapValueFields
-		} else {
-			// Check for unresolved struct types
-			r.checkUnresolvedStruct(field.Type(), resolvedField, schemaNames)
-
-			// Resolve Go type to OpenAPI type
-			typeInfo := r.resolveType(field.Type())
-			resolvedField.OpenAPIType = typeInfo.OpenAPIType
-			resolvedField.Format = typeInfo.Format
-			resolvedField.IsArray = typeInfo.IsArray
-			resolvedField.ItemsType = typeInfo.ItemsType
-			// omitempty/omitzero omit a nil pointer instead of encoding null,
-			// so the field can never appear as null on the wire
-			resolvedField.Nullable = typeInfo.IsNullable && !omitted
-			resolvedField.IsAnyValue = typeInfo.IsAnyValue
-		}
-
-		fields = append(fields, resolvedField)
+		fields = append(fields, resolved)
 	}
 
 	return fields
-}
-
-// resolveSliceOfAnonymousStruct checks if a type is a slice/array of anonymous struct
-// and resolves the element's fields inline. Returns nil if not a slice of anonymous struct.
-func (r *Resolver) resolveSliceOfAnonymousStruct(t types.Type, schemaNames map[string]bool) []*ResolvedField {
-	// Unwrap pointer
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
-	}
-
-	// Check if this is a slice
-	slice, ok := t.(*types.Slice)
-	if !ok {
-		return nil
-	}
-
-	// Check if the element type is an anonymous struct
-	return r.resolveAnonymousStruct(slice.Elem(), schemaNames)
-}
-
-// resolveMapOfAnonymousStruct checks if a type is a map with anonymous struct values
-// and resolves the value's fields inline. Returns nil if not a map of anonymous struct.
-func (r *Resolver) resolveMapOfAnonymousStruct(t types.Type, schemaNames map[string]bool) []*ResolvedField {
-	// Unwrap pointer
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
-	}
-
-	// Check if this is a map
-	mapType, ok := t.(*types.Map)
-	if !ok {
-		return nil
-	}
-
-	// Check if the value type is an anonymous struct
-	return r.resolveAnonymousStruct(mapType.Elem(), schemaNames)
-}
-
-// checkUnresolvedStruct checks if a type is a named struct that is not a known @schema
-// and marks the resolved field accordingly
-func (r *Resolver) checkUnresolvedStruct(t types.Type, resolved *ResolvedField, schemaNames map[string]bool) {
-	// Unwrap pointer
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
-	}
-
-	// Check for slice/array - check element type
-	if slice, ok := t.(*types.Slice); ok {
-		r.checkUnresolvedStruct(slice.Elem(), resolved, schemaNames)
-		return
-	}
-
-	// Check for map - check value type
-	if mapType, ok := t.(*types.Map); ok {
-		r.checkUnresolvedStruct(mapType.Elem(), resolved, schemaNames)
-		return
-	}
-
-	// Check for named types (could be struct or alias to slice/map)
-	if named, ok := t.(*types.Named); ok {
-		obj := named.Obj()
-		underlying := named.Underlying()
-
-		// Skip special standard library types (time.Time, url.URL, etc.)
-		// These are handled specially by the resolver
-		if obj.Pkg() != nil && isSpecialType(obj.Pkg().Path(), obj.Name()) {
-			return
-		}
-
-		// Check if underlying is a struct
-		if _, isStruct := underlying.(*types.Struct); isStruct {
-			typeName := obj.Name()
-			// If not in known schemas, mark as unresolved
-			if !schemaNames[typeName] {
-				resolved.IsUnresolvedStruct = true
-				resolved.UnresolvedTypeName = typeName
-			}
-			return
-		}
-
-		// If underlying is slice/map, recurse into element type
-		// This handles custom types like `type Addresses []Address`
-		r.checkUnresolvedStruct(underlying, resolved, schemaNames)
-	}
 }
 
 // omitsWhenEmpty reports whether the JSON tag actually drops the field for
@@ -770,13 +593,8 @@ func (r *Resolver) resolveFieldWithParamType(field *types.Var, tag string, annot
 		resolved.Required = !omitsWhenEmpty(tag, field.Type())
 	}
 
-	// Resolve Go type to OpenAPI type
-	typeInfo := r.resolveType(field.Type())
-	resolved.OpenAPIType = typeInfo.OpenAPIType
-	resolved.Format = typeInfo.Format
-	resolved.IsArray = typeInfo.IsArray
-	resolved.ItemsType = typeInfo.ItemsType
-	resolved.IsAnyValue = typeInfo.IsAnyValue
+	resolved.Type = r.resolveTypeRef(field.Type())
+	resolved.Format = resolved.Type.Format
 
 	// Parameters serialize as plain strings, which cannot represent null,
 	// so pointer-ness never implies nullable — a pointer only lets the
@@ -785,7 +603,7 @@ func (r *Resolver) resolveFieldWithParamType(field *types.Var, tag string, annot
 	case "path", "query", "header", "cookie":
 		resolved.Nullable = false
 	default:
-		resolved.Nullable = typeInfo.IsNullable
+		resolved.Nullable = isNullable(field.Type())
 	}
 
 	applyAnnotationOverrides(resolved, annotation)
@@ -858,121 +676,6 @@ func applyAnnotationOverrides(resolved *ResolvedField, annotation *parser.Field)
 	if annotation.WriteOnly {
 		resolved.WriteOnly = true
 	}
-}
-
-// resolveType resolves a Go type to OpenAPI type information
-func (r *Resolver) resolveType(t types.Type) *TypeInfo {
-	// Check cache first
-	typeStr := t.String()
-	if cached, ok := r.typeCache[typeStr]; ok {
-		return cached
-	}
-
-	info := &TypeInfo{}
-
-	// Handle pointer types
-	if ptr, ok := t.(*types.Pointer); ok {
-		info.IsNullable = true
-		t = ptr.Elem()
-	}
-
-	// Handle slices/arrays
-	if slice, ok := t.(*types.Slice); ok {
-		// Special case: []byte → string, format: byte (base64-encoded)
-		if basic, ok := slice.Elem().(*types.Basic); ok && basic.Kind() == types.Byte {
-			info.OpenAPIType = "string"
-			info.Format = "byte"
-			r.typeCache[typeStr] = info
-			return info
-		}
-
-		info.IsArray = true
-		elemInfo := r.resolveType(slice.Elem())
-		info.ItemsType = elemInfo.OpenAPIType
-		info.OpenAPIType = "array"
-		r.typeCache[typeStr] = info
-		return info
-	}
-
-	// Handle type aliases (e.g., "any" is an alias for interface{})
-	if alias, ok := t.(*types.Alias); ok {
-		// Recurse on the aliased type
-		aliasInfo := r.resolveType(alias.Rhs())
-		if info.IsNullable {
-			// Preserve nullable from pointer detection
-			result := *aliasInfo
-			result.IsNullable = true
-			r.typeCache[typeStr] = &result
-			return &result
-		}
-		return aliasInfo
-	}
-
-	// Handle named types
-	if named, ok := t.(*types.Named); ok {
-		obj := named.Obj()
-		pkgPath := ""
-		if obj.Pkg() != nil {
-			pkgPath = obj.Pkg().Path()
-		}
-
-		// Check for special standard library types
-		if specialType := resolveSpecialType(pkgPath, obj.Name()); specialType != nil {
-			info.OpenAPIType = specialType.openAPIType
-			info.Format = specialType.format
-			r.typeCache[typeStr] = info
-			return info
-		}
-
-		// Recurse on underlying type
-		underlyingInfo := r.resolveType(named.Underlying())
-		if info.IsNullable {
-			// Preserve nullable from pointer detection
-			result := *underlyingInfo
-			result.IsNullable = true
-			r.typeCache[typeStr] = &result
-			return &result
-		}
-		return underlyingInfo
-	}
-
-	// Handle basic types
-	if basic, ok := t.(*types.Basic); ok {
-		switch basic.Kind() {
-		case types.Bool:
-			info.OpenAPIType = "boolean"
-		case types.Int, types.Int8, types.Int16, types.Int32:
-			info.OpenAPIType = "integer"
-			if basic.Kind() == types.Int32 {
-				info.Format = "int32"
-			}
-		case types.Int64:
-			info.OpenAPIType = "integer"
-			info.Format = "int64"
-		case types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64:
-			info.OpenAPIType = "integer"
-		case types.Float32:
-			info.OpenAPIType = "number"
-			info.Format = "float"
-		case types.Float64:
-			info.OpenAPIType = "number"
-			info.Format = "double"
-		case types.String:
-			info.OpenAPIType = "string"
-		default:
-			// Unknown basic type, default to string
-			info.OpenAPIType = "string"
-		}
-	} else if _, ok := t.(*types.Interface); ok {
-		// Interface type (any/interface{}) - any JSON value
-		info.IsAnyValue = true
-	} else {
-		// Unknown type, default to string
-		info.OpenAPIType = "string"
-	}
-
-	r.typeCache[typeStr] = info
-	return info
 }
 
 // resolveEndpoint resolves an endpoint
@@ -1144,18 +847,7 @@ func (r *Resolver) resolveBody(body *parser.Body, schemas map[string]*ResolvedSc
 
 	resolved := &ResolvedBody{
 		Schema: body.Schema,
-	}
-
-	// Parse schema to determine if it's an array or map
-	schema := strings.TrimSpace(body.Schema)
-	if strings.HasPrefix(schema, "[]") {
-		resolved.IsArray = true
-		resolved.ElementType = strings.TrimPrefix(schema, "[]")
-	} else if strings.HasPrefix(schema, "map[string]") {
-		resolved.IsMap = true
-		resolved.ElementType = strings.TrimPrefix(schema, "map[string]")
-	} else {
-		resolved.ElementType = schema
+		Type:   r.resolveBodyType(body.Schema),
 	}
 
 	// Resolve bind target if present
@@ -1164,6 +856,32 @@ func (r *Resolver) resolveBody(body *parser.Body, schemas map[string]*ResolvedSc
 	}
 
 	return resolved
+}
+
+// resolveBodyType turns the text of a @body annotation into a shape.
+//
+// The text is written by hand — "User", "[]User", "map[string]string" — so it
+// is a small grammar rather than a Go type, but deciding whether "string" names
+// a primitive or a schema is still type reasoning, and it belongs here rather
+// than in the generator.
+func (r *Resolver) resolveBodyType(schema string) *TypeRef {
+	schema = strings.TrimSpace(schema)
+
+	if elem, ok := strings.CutPrefix(schema, "[]"); ok {
+		return &TypeRef{Shape: ShapeArray, Elem: r.resolveBodyType(elem)}
+	}
+	if elem, ok := strings.CutPrefix(schema, "map[string]"); ok {
+		return &TypeRef{Shape: ShapeMap, Elem: r.resolveBodyType(elem)}
+	}
+
+	if primitive, format, ok := primitiveByName(schema); ok {
+		return &TypeRef{Shape: ShapeScalar, Type: primitive, Format: format}
+	}
+
+	// Anything else names a schema. Whether that schema exists is the
+	// validator's question, so an unknown name still resolves to a reference
+	// and gets reported with a message about the name rather than the shape.
+	return &TypeRef{Shape: ShapeRef, Ref: schema}
 }
 
 // resolveBindTarget resolves a parser.BindTarget to a ResolvedBindTarget
@@ -1338,7 +1056,7 @@ func (r *Resolver) resolveInlineBody(info *parser.InlineStructInfo, parsed *pars
 		schemaNames[name] = true
 	}
 
-	fields, err := r.resolveSchemaFields(structType, info.Fields, schemaNames, nil)
+	fields, err := r.resolveSchemaFields(structType, info.Fields, nil)
 	if err != nil {
 		return nil, err
 	}

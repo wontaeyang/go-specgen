@@ -194,9 +194,7 @@ func (g *Generator) generateSchema(schema *resolver.ResolvedSchema, allSchemas m
 		s.Description = schema.Description
 	}
 
-	setObjectFields(s, schema.Fields, func(field *resolver.ResolvedField) *base.SchemaProxy {
-		return g.generateFieldSchemaWithRefs(field, allSchemas)
-	})
+	setObjectFields(s, schema.Fields, g.generateFieldSchema)
 
 	if schema.Deprecated {
 		t := true
@@ -206,114 +204,75 @@ func (g *Generator) generateSchema(schema *resolver.ResolvedSchema, allSchemas m
 	return base.CreateSchemaProxy(s)
 }
 
-// generateFieldSchemaWithRefs generates a schema for a field, using $ref for schema types
-func (g *Generator) generateFieldSchemaWithRefs(field *resolver.ResolvedField, schemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
-	// Handle anonymous structs - inline their fields
-	if len(field.InlineFields) > 0 {
-		proxy := g.buildInlineObjectSchema(field.InlineFields, schemas)
-		g.addFieldConstraints(proxy.Schema(), field)
-		return proxy
+// generateFieldSchema renders a field.
+//
+// The field's TypeRef says what shape to emit; there is nothing to discover
+// here, and in particular no Go type strings to re-parse. That is the point of
+// the shape. The generator used to have two versions of this — one that could
+// recognize a schema reference and one that could not — so the same field
+// rendered differently depending on which one reached it.
+func (g *Generator) generateFieldSchema(field *resolver.ResolvedField) *base.SchemaProxy {
+	// A $ref is the one shape that cannot simply carry the field's keywords,
+	// so it has its own builder.
+	if field.Type != nil && field.Type.Shape == resolver.ShapeRef {
+		return g.generateRefSchema(refPath(field.Type.Ref), field)
 	}
 
-	// Handle arrays of anonymous structs
-	if len(field.ItemsInlineFields) > 0 {
-		schema := newSchema("array")
-		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-			A: g.buildInlineObjectSchema(field.ItemsInlineFields, schemas),
-		}
-		g.addFieldConstraints(schema, field)
-		return base.CreateSchemaProxy(schema)
-	}
-
-	// Handle maps of anonymous structs
-	if len(field.MapValueInlineFields) > 0 {
-		schema := newSchema("object")
-		schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{
-			A: g.buildInlineObjectSchema(field.MapValueInlineFields, schemas),
-		}
-		g.addFieldConstraints(schema, field)
-		return base.CreateSchemaProxy(schema)
-	}
-
-	goType := field.GoType
-
-	// Handle arrays: []User or []string
-	if strings.HasPrefix(goType, "[]") {
-		elemType := strings.TrimPrefix(goType, "[]")
-		schema := newSchema("array")
-
-		if isSchemaReference(elemType, schemas) {
-			schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-				A: base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", extractTypeName(elemType))),
-			}
-		} else if isPrimitive(extractTypeName(elemType)) {
-			itemSchema := newSchema(goTypeToPrimitive(extractTypeName(elemType)))
-			schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-				A: base.CreateSchemaProxy(itemSchema),
-			}
-		} else {
-			itemSchema := newSchema(field.ItemsType)
-			schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-				A: base.CreateSchemaProxy(itemSchema),
-			}
-		}
-		g.addFieldConstraints(schema, field)
-		return base.CreateSchemaProxy(schema)
-	}
-
-	// Handle maps: map[string]User
-	if strings.HasPrefix(goType, "map[") {
-		if idx := strings.LastIndex(goType, "]"); idx > 0 && idx < len(goType)-1 {
-			valueType := goType[idx+1:]
-			schema := newSchema("object")
-
-			if isSchemaReference(valueType, schemas) {
-				schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{
-					A: base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", extractTypeName(valueType))),
-				}
-			} else if isPrimitive(extractTypeName(valueType)) {
-				propSchema := newSchema(goTypeToPrimitive(extractTypeName(valueType)))
-				schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{
-					A: base.CreateSchemaProxy(propSchema),
-				}
-			} else {
-				propSchema := newSchema("string")
-				schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{
-					A: base.CreateSchemaProxy(propSchema),
-				}
-			}
-			g.addFieldConstraints(schema, field)
-			return base.CreateSchemaProxy(schema)
-		}
-	}
-
-	// Handle schema references: User (named type that is a schema)
-	if isSchemaReference(goType, schemas) {
-		refPath := fmt.Sprintf("#/components/schemas/%s", extractTypeName(goType))
-		return g.generateRefSchema(refPath, field)
-	}
-
-	// Handle any value (empty schema)
-	if field.IsAnyValue {
-		schema := newSchema()
-		g.addFieldConstraints(schema, field)
-		return base.CreateSchemaProxy(schema)
-	}
-
-	// Handle primitives and other types
-	schema := newSchema()
-	if field.IsArray {
-		schema.Type = []string{"array"}
-		itemSchema := newSchema(field.ItemsType)
-		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-			A: base.CreateSchemaProxy(itemSchema),
-		}
-	} else {
-		schema.Type = []string{field.OpenAPIType}
-	}
-
+	schema := g.buildTypeSchema(field.Type)
 	g.addFieldConstraints(schema, field)
 	return base.CreateSchemaProxy(schema)
+}
+
+// buildTypeSchema renders a type shape, without any field-level annotations.
+//
+// It recurses, so every level of a nested container keeps its own type and
+// format: map[string][]time.Time is an object whose additionalProperties is an
+// array whose items are date-time strings.
+func (g *Generator) buildTypeSchema(t *resolver.TypeRef) *base.Schema {
+	if t == nil {
+		return newSchema()
+	}
+
+	switch t.Shape {
+	case resolver.ShapeArray:
+		schema := newSchema("array")
+		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{A: g.buildTypeProxy(t.Elem)}
+		return schema
+
+	case resolver.ShapeMap:
+		schema := newSchema("object")
+		schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{A: g.buildTypeProxy(t.Elem)}
+		return schema
+
+	case resolver.ShapeObject:
+		schema := newSchema("object")
+		setObjectFields(schema, t.Fields, g.generateFieldSchema)
+		return schema
+
+	case resolver.ShapeScalar:
+		schema := newSchema(t.Type)
+		schema.Format = t.Format
+		return schema
+	}
+
+	// ShapeAny is the empty schema, which accepts any JSON value. ShapeRef is
+	// handled by the callers, ShapeTypeParam belongs to a generic template that
+	// never reaches components, and ShapeUnsupported is rejected before here.
+	return newSchema()
+}
+
+// buildTypeProxy is buildTypeSchema for a nested position, where a reference
+// has to become an actual $ref rather than a schema carrying keywords.
+func (g *Generator) buildTypeProxy(t *resolver.TypeRef) *base.SchemaProxy {
+	if t != nil && t.Shape == resolver.ShapeRef {
+		return base.CreateSchemaProxyRef(refPath(t.Ref))
+	}
+	return base.CreateSchemaProxy(g.buildTypeSchema(t))
+}
+
+// refPath is the components pointer for a schema name.
+func refPath(name string) string {
+	return "#/components/schemas/" + name
 }
 
 // generateRefSchema builds the schema for a field whose type is a named @schema.
@@ -341,16 +300,6 @@ func (g *Generator) generateRefSchema(refPath string, field *resolver.ResolvedFi
 	return base.CreateSchemaProxyRefWithSchema(refPath, siblings)
 }
 
-// buildInlineObjectSchema builds an object schema from anonymous struct fields,
-// resolving $ref for any field whose type is a known schema.
-func (g *Generator) buildInlineObjectSchema(fields []*resolver.ResolvedField, schemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
-	schema := newSchema("object")
-	setObjectFields(schema, fields, func(field *resolver.ResolvedField) *base.SchemaProxy {
-		return g.generateFieldSchemaWithRefs(field, schemas)
-	})
-	return base.CreateSchemaProxy(schema)
-}
-
 // addFieldConstraints applies every annotation keyword a field carries.
 //
 // It is the single source of truth for which keywords exist: generateRefSchema
@@ -375,17 +324,16 @@ func (g *Generator) addValueConstraints(schema *base.Schema, field *resolver.Res
 		schema.Format = field.Format
 	}
 	if len(field.Enum) > 0 {
-		// An array's enum constrains its items, not the array itself. ItemsType
-		// rather than OpenAPIType, which is "array" here and would never match
-		// the integer case.
-		if field.IsArray {
+		// An array's enum constrains its items, not the array itself, so it
+		// goes inside items and is typed by the element rather than by "array".
+		if field.Type.IsArray() {
 			if schema.Items != nil && schema.Items.A != nil {
 				if itemSchema, _ := schema.Items.A.BuildSchema(); itemSchema != nil {
-					itemSchema.Enum = convertEnumToYAMLNodes(field.Enum, field.ItemsType)
+					itemSchema.Enum = convertEnumToYAMLNodes(field.Enum, field.Type.Elem.ScalarName())
 				}
 			}
 		} else {
-			schema.Enum = convertEnumToYAMLNodes(field.Enum, field.OpenAPIType)
+			schema.Enum = convertEnumToYAMLNodes(field.Enum, field.Type.ScalarName())
 		}
 	}
 	if field.Example != "" {
@@ -457,83 +405,13 @@ func convertEnumToYAMLNodes(values []string, openAPIType string) []*yaml.Node {
 	return result
 }
 
-// generateFieldSchema generates a schema for a field (without schema reference awareness)
-// Used for parameters and contexts where we don't have schema map
-func (g *Generator) generateFieldSchema(field *resolver.ResolvedField) *base.SchemaProxy {
-	// Handle any value (empty schema)
-	if field.IsAnyValue {
-		schema := newSchema()
-		if field.Description != "" {
-			schema.Description = field.Description
-		}
-		return base.CreateSchemaProxy(schema)
-	}
-
-	// Handle anonymous structs - inline their fields
-	if len(field.InlineFields) > 0 {
-		proxy := g.buildInlineObjectSchemaSimple(field.InlineFields)
-		g.addFieldConstraints(proxy.Schema(), field)
-		return proxy
-	}
-
-	// Handle arrays of anonymous structs
-	if len(field.ItemsInlineFields) > 0 {
-		schema := newSchema("array")
-		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-			A: g.buildInlineObjectSchemaSimple(field.ItemsInlineFields),
-		}
-		g.addFieldConstraints(schema, field)
-		return base.CreateSchemaProxy(schema)
-	}
-
-	// Handle maps of anonymous structs
-	if len(field.MapValueInlineFields) > 0 {
-		schema := newSchema("object")
-		schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{
-			A: g.buildInlineObjectSchemaSimple(field.MapValueInlineFields),
-		}
-		g.addFieldConstraints(schema, field)
-		return base.CreateSchemaProxy(schema)
-	}
-
-	// Handle arrays
-	schema := newSchema()
-	if field.IsArray {
-		schema.Type = []string{"array"}
-		itemSchema := newSchema(field.ItemsType)
-		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-			A: base.CreateSchemaProxy(itemSchema),
-		}
-	} else {
-		schema.Type = []string{field.OpenAPIType}
-	}
-
-	g.addFieldConstraints(schema, field)
-	return base.CreateSchemaProxy(schema)
-}
-
-// buildInlineObjectSchemaSimple builds an object schema from anonymous struct
-// fields without resolving refs. Identical to generateInlineSchema; both
-// disappear once TypeRef removes the ref-aware/ref-unaware split.
-func (g *Generator) buildInlineObjectSchemaSimple(fields []*resolver.ResolvedField) *base.SchemaProxy {
-	return g.generateInlineSchema(fields)
-}
-
 // generateParameterFieldSchema generates a schema for a parameter field.
 //
 // Parameters are scalars or arrays of scalars — never objects, never refs — so
 // this needs none of the shape handling generateFieldSchema does. The
 // description is deliberately left off: it belongs on the parameter itself.
 func (g *Generator) generateParameterFieldSchema(field *resolver.ResolvedField) *base.SchemaProxy {
-	schema := newSchema(field.OpenAPIType)
-
-	if field.IsArray {
-		schema.Type = []string{"array"}
-		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-			A: base.CreateSchemaProxy(newSchema(field.ItemsType)),
-		}
-	}
-
+	schema := g.buildTypeSchema(field.Type)
 	g.addValueConstraints(schema, field)
 
 	return base.CreateSchemaProxy(schema)
@@ -828,7 +706,7 @@ func generateResponseHeaders(params []*resolver.ResolvedParameter) *orderedmap.M
 	headers := orderedmap.New[string, *v3.Header]()
 	for _, param := range params {
 		for _, field := range param.Fields {
-			schema := newSchema(field.OpenAPIType)
+			schema := newSchema(field.Type.ScalarName())
 			if field.Format != "" {
 				schema.Format = field.Format
 			}
@@ -873,13 +751,13 @@ func (g *Generator) generateBodySchema(body *resolver.ResolvedBody, schemas map[
 	if body.Bind != nil {
 		return g.generateWrappedSchema(body, schemas)
 	}
-	return g.generateSchemaRef(body.Schema, body.IsArray, body.IsMap, body.ElementType)
+	return g.buildTypeProxy(body.Type)
 }
 
 // generateWrappedSchema generates a schema where the body is wrapped in an envelope
 func (g *Generator) generateWrappedSchema(body *resolver.ResolvedBody, schemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
 	bodySchema := func() *base.SchemaProxy {
-		return g.generateSchemaRef(body.Schema, body.IsArray, body.IsMap, body.ElementType)
+		return g.buildTypeProxy(body.Type)
 	}
 
 	if body.Bind.WrapperSchema == nil {
@@ -932,8 +810,8 @@ func (g *Generator) generateInlineSchema(fields []*resolver.ResolvedField) *base
 }
 
 // setObjectFields fills in an object schema's properties and required list.
-// fieldSchema renders one field, and is what distinguishes the callers: some
-// resolve $ref against the known schemas, some do not.
+// fieldSchema renders one field, which is what lets a @bind wrapper substitute
+// the body for its bound field while every other field renders normally.
 //
 // Property order is the field order it is given, which is Go declaration order
 // all the way back to the resolver. Required is emitted only when non-empty, so
@@ -956,87 +834,5 @@ func setObjectFields(schema *base.Schema, fields []*resolver.ResolvedField, fiel
 	schema.Properties = props
 	if len(required) > 0 {
 		schema.Required = required
-	}
-}
-
-// generateSchemaRef generates a schema reference (handles arrays, maps, and simple refs)
-func (g *Generator) generateSchemaRef(schemaName string, isArray bool, isMap bool, elementType string) *base.SchemaProxy {
-	if isArray {
-		schema := newSchema("array")
-
-		var itemsProxy *base.SchemaProxy
-		if isPrimitive(elementType) {
-			itemSchema := newSchema(goTypeToPrimitive(elementType))
-			itemsProxy = base.CreateSchemaProxy(itemSchema)
-		} else {
-			itemsProxy = base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", elementType))
-		}
-		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{A: itemsProxy}
-		return base.CreateSchemaProxy(schema)
-	}
-
-	if isMap {
-		schema := newSchema("object")
-
-		var propsProxy *base.SchemaProxy
-		if isPrimitive(elementType) {
-			propSchema := newSchema(goTypeToPrimitive(elementType))
-			propsProxy = base.CreateSchemaProxy(propSchema)
-		} else {
-			propsProxy = base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", elementType))
-		}
-		schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{A: propsProxy}
-		return base.CreateSchemaProxy(schema)
-	}
-
-	// Simple type or schema reference
-	if isPrimitive(elementType) {
-		schema := newSchema(goTypeToPrimitive(elementType))
-		return base.CreateSchemaProxy(schema)
-	}
-
-	return base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", elementType))
-}
-
-// extractTypeName extracts the simple type name from a Go type string
-func extractTypeName(goType string) string {
-	if idx := strings.LastIndex(goType, "."); idx >= 0 {
-		return goType[idx+1:]
-	}
-	return goType
-}
-
-// isSchemaReference checks if a Go type corresponds to a known schema
-func isSchemaReference(goType string, schemas map[string]*resolver.ResolvedSchema) bool {
-	typeName := extractTypeName(goType)
-	if schema, ok := schemas[typeName]; ok {
-		return !schema.IsGeneric
-	}
-	return false
-}
-
-// isPrimitive checks if a type is a Go primitive
-func isPrimitive(typeName string) bool {
-	primitives := map[string]bool{
-		"string": true, "int": true, "int8": true, "int16": true, "int32": true, "int64": true,
-		"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
-		"float32": true, "float64": true, "bool": true, "byte": true,
-	}
-	return primitives[typeName]
-}
-
-// goTypeToPrimitive converts Go type to OpenAPI primitive type
-func goTypeToPrimitive(typeName string) string {
-	switch typeName {
-	case "string":
-		return "string"
-	case "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64":
-		return "integer"
-	case "float32", "float64":
-		return "number"
-	case "bool":
-		return "boolean"
-	default:
-		return "string"
 	}
 }

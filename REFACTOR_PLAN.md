@@ -273,7 +273,9 @@ from one pipeline pass.
 
 - **C5** `TypeRef` replaces the boolean spread; one recursive field resolver replaces
   all four paths; generator consumes structure instead of parsing type strings.
-  Fixes bugs #1 and #11. Generator loses its `schemas` map, `isSchemaReference`,
+  Fixes bugs #1, #3, #11, and the struct-typed half of #2. C9 is folded in here:
+  once "unknown" is a shape rather than the same value as "schema reference",
+  erroring on it is not a separate change — it is what stops being impossible. Generator loses its `schemas` map, `isSchemaReference`,
   `extractTypeName`, `isPrimitive`, `goTypeToPrimitive`.
 - **C6** Merged, ordered `Parameters` and `Responses`; validator drops its inline
   special-case. Both ordering contracts land here.
@@ -283,8 +285,8 @@ from one pipeline pass.
 - **C7** `(name, in)` conflict rule, covering inline parameters explicitly (bug #6),
   plus the ungated undefined-tag check (bug #10). Both are validator rules and both
   move a fixture between `features/` and `errors/`.
-- **C8** Parameter tag rules and `,required` reading (bugs #2, #7, #8).
-- **C9** Unsupported-type errors (bug #3).
+- **C8** Parameter tag rules and `,required` reading (bugs #7, #8, and the tag half
+  of #2). The shape half of #2 lands at C5.
 - **C10** Recursive `@field` harvest applied (bug #4) — **the `inline.yaml` diff**.
 - **C11** Grouped `X, Y` field annotations (bug #5).
 - **C12** Embedded field family mirrors `encoding/json` (bug #9).

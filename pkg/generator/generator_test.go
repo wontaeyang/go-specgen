@@ -31,10 +31,10 @@ func TestGenerator_Generate(t *testing.T) {
 				Name: "User",
 				Fields: []*resolver.ResolvedField{
 					{
-						Name:        "id",
-						GoName:      "ID",
-						OpenAPIType: "string",
-						Required:    true,
+						Name:     "id",
+						GoName:   "ID",
+						Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+						Required: true,
 					},
 				},
 			},
@@ -160,17 +160,17 @@ func TestGenerator_GenerateSchemas(t *testing.T) {
 				{
 					Name:        "id",
 					GoName:      "ID",
-					OpenAPIType: "string",
+					Type:        &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
 					Format:      "uuid",
 					Required:    true,
 					Description: "User ID",
 				},
 				{
-					Name:        "email",
-					GoName:      "Email",
-					OpenAPIType: "string",
-					Format:      "email",
-					Required:    true,
+					Name:     "email",
+					GoName:   "Email",
+					Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+					Format:   "email",
+					Required: true,
 				},
 			},
 		},
@@ -354,10 +354,10 @@ func TestGenerator_GenerateOperation(t *testing.T) {
 				Name: "UserIDPath",
 				Fields: []*resolver.ResolvedField{
 					{
-						Name:        "id",
-						GoName:      "ID",
-						OpenAPIType: "string",
-						Required:    true,
+						Name:     "id",
+						GoName:   "ID",
+						Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+						Required: true,
 					},
 				},
 			},
@@ -367,7 +367,7 @@ func TestGenerator_GenerateOperation(t *testing.T) {
 				StatusCode:  "200",
 				Description: "Success",
 				ContentType: "application/json",
-				Body:        &resolver.ResolvedBody{Schema: "User", ElementType: "User"},
+				Body:        &resolver.ResolvedBody{Schema: "User", Type: &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"}},
 			},
 		},
 	}
@@ -563,8 +563,8 @@ func TestGenerator_GenerateBodySchema_Ref(t *testing.T) {
 	gen := NewGenerator("3.1")
 
 	body := &resolver.ResolvedBody{
-		Schema:      "User",
-		ElementType: "User",
+		Schema: "User",
+		Type:   &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"},
 	}
 
 	schemas := map[string]*resolver.ResolvedSchema{}
@@ -587,14 +587,14 @@ func TestGenerator_GenerateBodySchema_Wrapped(t *testing.T) {
 	wrapperSchema := &resolver.ResolvedSchema{
 		Name: "DataResponse",
 		Fields: []*resolver.ResolvedField{
-			{Name: "status", GoName: "Status", OpenAPIType: "string", Required: true},
-			{Name: "data", GoName: "Data", OpenAPIType: "object", Required: true},
+			{Name: "status", GoName: "Status", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}, Required: true},
+			{Name: "data", GoName: "Data", Type: &resolver.TypeRef{Shape: resolver.ShapeObject}, Required: true},
 		},
 	}
 
 	body := &resolver.ResolvedBody{
-		Schema:      "User",
-		ElementType: "User",
+		Schema: "User",
+		Type:   &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"},
 		Bind: &resolver.ResolvedBindTarget{
 			Wrapper:       "DataResponse",
 			Field:         "Data",
@@ -629,10 +629,10 @@ func TestGenerator_GenerateBodySchema_Wrapped(t *testing.T) {
 	}
 }
 
-func TestGenerator_GenerateSchemaRef_Simple(t *testing.T) {
+func TestGenerator_BuildTypeProxy_Simple(t *testing.T) {
 	gen := NewGenerator("3.1")
 
-	result := gen.generateSchemaRef("User", false, false, "User")
+	result := gen.buildTypeProxy(&resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"})
 
 	if !result.IsReference() {
 		t.Error("Expected schema reference")
@@ -643,10 +643,10 @@ func TestGenerator_GenerateSchemaRef_Simple(t *testing.T) {
 	}
 }
 
-func TestGenerator_GenerateSchemaRef_Array(t *testing.T) {
+func TestGenerator_BuildTypeProxy_Array(t *testing.T) {
 	gen := NewGenerator("3.1")
 
-	result := gen.generateSchemaRef("[]User", true, false, "User")
+	result := gen.buildTypeProxy(&resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"}})
 
 	schema, err := result.BuildSchema()
 	if err != nil {
@@ -662,10 +662,10 @@ func TestGenerator_GenerateSchemaRef_Array(t *testing.T) {
 	}
 }
 
-func TestGenerator_GenerateSchemaRef_Map(t *testing.T) {
+func TestGenerator_BuildTypeProxy_Map(t *testing.T) {
 	gen := NewGenerator("3.1")
 
-	result := gen.generateSchemaRef("map[string]User", false, true, "User")
+	result := gen.buildTypeProxy(&resolver.TypeRef{Shape: resolver.ShapeMap, Elem: &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"}})
 
 	schema, err := result.BuildSchema()
 	if err != nil {
@@ -681,10 +681,10 @@ func TestGenerator_GenerateSchemaRef_Map(t *testing.T) {
 	}
 }
 
-func TestGenerator_GenerateSchemaRef_Primitive(t *testing.T) {
+func TestGenerator_BuildTypeProxy_Primitive(t *testing.T) {
 	gen := NewGenerator("3.1")
 
-	result := gen.generateSchemaRef("int", false, false, "int")
+	result := gen.buildTypeProxy(&resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "integer"})
 
 	schema, err := result.BuildSchema()
 	if err != nil {
@@ -702,10 +702,7 @@ func TestGenerator_GenerateSchemaRef_Primitive(t *testing.T) {
 func renderRefField(t *testing.T, version string, field *resolver.ResolvedField) string {
 	t.Helper()
 	gen := NewGenerator(version)
-	schemas := map[string]*resolver.ResolvedSchema{
-		"Address": {Name: "Address"},
-	}
-	proxy := gen.generateFieldSchemaWithRefs(field, schemas)
+	proxy := gen.generateFieldSchema(field)
 	out, err := yaml.Marshal(proxy)
 	if err != nil {
 		t.Fatalf("yaml.Marshal() error = %v", err)
@@ -714,7 +711,8 @@ func renderRefField(t *testing.T, version string, field *resolver.ResolvedField)
 }
 
 func TestGenerator_RefField_BareWhenNoSiblings(t *testing.T) {
-	field := &resolver.ResolvedField{Name: "home_address", GoName: "HomeAddress", GoType: "Address"}
+	field := &resolver.ResolvedField{Name: "home_address", GoName: "HomeAddress", GoType: "Address",
+		Type: &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "Address"}}
 	got := renderRefField(t, "3.1", field)
 
 	if !strings.Contains(got, "$ref: '#/components/schemas/Address'") {
@@ -728,6 +726,7 @@ func TestGenerator_RefField_BareWhenNoSiblings(t *testing.T) {
 func TestGenerator_RefField_Deprecated_31Siblings(t *testing.T) {
 	field := &resolver.ResolvedField{
 		Name: "home_address", GoName: "HomeAddress", GoType: "Address",
+		Type:        &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "Address"},
 		Description: "Home address", Deprecated: true,
 	}
 	got := renderRefField(t, "3.1", field)
@@ -750,6 +749,7 @@ func TestGenerator_RefField_Deprecated_31Siblings(t *testing.T) {
 func TestGenerator_RefField_NullableDeprecated_31OneOf(t *testing.T) {
 	field := &resolver.ResolvedField{
 		Name: "work_address", GoName: "WorkAddress", GoType: "Address",
+		Type:        &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "Address"},
 		Description: "Work address", Deprecated: true, Nullable: true,
 	}
 	got := renderRefField(t, "3.1", field)
@@ -766,60 +766,14 @@ func TestGenerator_RefField_NullableDeprecated_31OneOf(t *testing.T) {
 	}
 }
 
-func TestIsPrimitive(t *testing.T) {
-	tests := []struct {
-		input string
-		want  bool
-	}{
-		{"string", true},
-		{"int", true},
-		{"int64", true},
-		{"float64", true},
-		{"bool", true},
-		{"User", false},
-		{"CustomType", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := isPrimitive(tt.input)
-			if got != tt.want {
-				t.Errorf("isPrimitive(%q) = %v, want %v", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestGoTypeToPrimitive(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"string", "string"},
-		{"int", "integer"},
-		{"int64", "integer"},
-		{"float64", "number"},
-		{"bool", "boolean"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := goTypeToPrimitive(tt.input)
-			if got != tt.want {
-				t.Errorf("goTypeToPrimitive(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestGenerator_GenerateInlineWrappedSchema(t *testing.T) {
 	gen := NewGenerator("3.1")
 
 	wrapperSchema := &resolver.ResolvedSchema{
 		Name: "DataResponse",
 		Fields: []*resolver.ResolvedField{
-			{Name: "status", GoName: "Status", OpenAPIType: "string", Required: true},
-			{Name: "data", GoName: "Data", OpenAPIType: "object", Required: true},
+			{Name: "status", GoName: "Status", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}, Required: true},
+			{Name: "data", GoName: "Data", Type: &resolver.TypeRef{Shape: resolver.ShapeObject}, Required: true},
 		},
 	}
 
@@ -827,8 +781,8 @@ func TestGenerator_GenerateInlineWrappedSchema(t *testing.T) {
 	inline := &resolver.ResolvedInlineBody{
 		ContentType: "application/json",
 		Fields: []*resolver.ResolvedField{
-			{Name: "id", GoName: "ID", OpenAPIType: "string", Required: true},
-			{Name: "email", GoName: "Email", OpenAPIType: "string", Required: true},
+			{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}, Required: true},
+			{Name: "email", GoName: "Email", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}, Required: true},
 		},
 		Bind: &resolver.ResolvedBindTarget{
 			Wrapper:       "DataResponse",
@@ -876,7 +830,7 @@ func TestGenerator_GenerateInlineWrappedSchema_NoBind(t *testing.T) {
 	inline := &resolver.ResolvedInlineBody{
 		ContentType: "application/json",
 		Fields: []*resolver.ResolvedField{
-			{Name: "id", GoName: "ID", OpenAPIType: "string", Required: true},
+			{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}, Required: true},
 		},
 		Bind: nil,
 	}
@@ -906,12 +860,10 @@ func TestGenerator_GenerateFieldSchema_ArrayEnum(t *testing.T) {
 	gen := NewGenerator("3.1")
 
 	field := &resolver.ResolvedField{
-		Name:        "tags",
-		GoName:      "Tags",
-		OpenAPIType: "array",
-		IsArray:     true,
-		ItemsType:   "string",
-		Enum:        []string{"red", "green", "blue"},
+		Name:   "tags",
+		GoName: "Tags",
+		Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+		Enum:   []string{"red", "green", "blue"},
 	}
 
 	result := gen.generateFieldSchema(field)
@@ -951,10 +903,10 @@ func TestGenerator_GenerateFieldSchema_IntegerEnum(t *testing.T) {
 	gen := NewGenerator("3.1")
 
 	field := &resolver.ResolvedField{
-		Name:        "priority",
-		GoName:      "Priority",
-		OpenAPIType: "integer",
-		Enum:        []string{"1", "2", "3"},
+		Name:   "priority",
+		GoName: "Priority",
+		Type:   &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "integer"},
+		Enum:   []string{"1", "2", "3"},
 	}
 
 	result := gen.generateFieldSchema(field)
@@ -981,12 +933,10 @@ func TestGenerator_GenerateParameterFieldSchema_ArrayEnum(t *testing.T) {
 	gen := NewGenerator("3.1")
 
 	field := &resolver.ResolvedField{
-		Name:        "status",
-		GoName:      "Status",
-		OpenAPIType: "array",
-		IsArray:     true,
-		ItemsType:   "string",
-		Enum:        []string{"active", "pending", "done"},
+		Name:   "status",
+		GoName: "Status",
+		Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+		Enum:   []string{"active", "pending", "done"},
 	}
 
 	result := gen.generateParameterFieldSchema(field)
@@ -1015,10 +965,10 @@ func TestGenerator_Version31Nullable(t *testing.T) {
 	gen := NewGenerator("3.1")
 
 	field := &resolver.ResolvedField{
-		Name:        "nickname",
-		GoName:      "Nickname",
-		OpenAPIType: "string",
-		Nullable:    true,
+		Name:     "nickname",
+		GoName:   "Nickname",
+		Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+		Nullable: true,
 	}
 
 	result := gen.generateFieldSchema(field)
@@ -1054,10 +1004,10 @@ func TestGenerator_Version32Nullable(t *testing.T) {
 	gen := NewGenerator("3.2")
 
 	field := &resolver.ResolvedField{
-		Name:        "nickname",
-		GoName:      "Nickname",
-		OpenAPIType: "string",
-		Nullable:    true,
+		Name:     "nickname",
+		GoName:   "Nickname",
+		Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+		Nullable: true,
 	}
 
 	result := gen.generateFieldSchema(field)
@@ -1086,7 +1036,7 @@ func TestGenerator_ExclusiveMinMax_31(t *testing.T) {
 	field := &resolver.ResolvedField{
 		Name:             "score",
 		GoName:           "Score",
-		OpenAPIType:      "number",
+		Type:             &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "number"},
 		ExclusiveMinimum: &exMin,
 		ExclusiveMaximum: &exMax,
 	}
@@ -1119,10 +1069,10 @@ func TestGenerator_ReadOnly(t *testing.T) {
 	gen := NewGenerator("3.1")
 
 	field := &resolver.ResolvedField{
-		Name:        "id",
-		GoName:      "ID",
-		OpenAPIType: "string",
-		ReadOnly:    true,
+		Name:     "id",
+		GoName:   "ID",
+		Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+		ReadOnly: true,
 	}
 
 	result := gen.generateFieldSchema(field)
@@ -1141,10 +1091,10 @@ func TestGenerator_WriteOnly(t *testing.T) {
 	gen := NewGenerator("3.1")
 
 	field := &resolver.ResolvedField{
-		Name:        "password",
-		GoName:      "Password",
-		OpenAPIType: "string",
-		WriteOnly:   true,
+		Name:      "password",
+		GoName:    "Password",
+		Type:      &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+		WriteOnly: true,
 	}
 
 	result := gen.generateFieldSchema(field)
@@ -1161,24 +1111,15 @@ func TestGenerator_WriteOnly(t *testing.T) {
 
 func TestGenerator_NullableSchemaRef_31(t *testing.T) {
 	gen := NewGenerator("3.1")
-	schemas := map[string]*resolver.ResolvedSchema{
-		"Address": {
-			Name: "Address",
-			Fields: []*resolver.ResolvedField{
-				{Name: "street", GoName: "Street", OpenAPIType: "string"},
-			},
-		},
-	}
-
 	field := &resolver.ResolvedField{
-		Name:        "address",
-		GoName:      "Address",
-		GoType:      "Address",
-		OpenAPIType: "object",
-		Nullable:    true,
+		Name:     "address",
+		GoName:   "Address",
+		GoType:   "Address",
+		Type:     &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "Address"},
+		Nullable: true,
 	}
 
-	result := gen.generateFieldSchemaWithRefs(field, schemas)
+	result := gen.generateFieldSchema(field)
 
 	schema, err := result.BuildSchema()
 	if err != nil {
@@ -1213,24 +1154,15 @@ func TestGenerator_NullableSchemaRef_31(t *testing.T) {
 
 func TestGenerator_NonNullableSchemaRef(t *testing.T) {
 	gen := NewGenerator("3.1")
-	schemas := map[string]*resolver.ResolvedSchema{
-		"Address": {
-			Name: "Address",
-			Fields: []*resolver.ResolvedField{
-				{Name: "street", GoName: "Street", OpenAPIType: "string"},
-			},
-		},
-	}
-
 	field := &resolver.ResolvedField{
-		Name:        "address",
-		GoName:      "Address",
-		GoType:      "Address",
-		OpenAPIType: "object",
-		Nullable:    false,
+		Name:     "address",
+		GoName:   "Address",
+		GoType:   "Address",
+		Type:     &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "Address"},
+		Nullable: false,
 	}
 
-	result := gen.generateFieldSchemaWithRefs(field, schemas)
+	result := gen.generateFieldSchema(field)
 
 	// Non-nullable schema ref should be a bare $ref
 	// A bare $ref proxy returns the reference string, not a built schema

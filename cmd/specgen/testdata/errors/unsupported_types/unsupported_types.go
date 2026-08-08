@@ -1,10 +1,8 @@
 // Package unsupported_types covers Go types with no OpenAPI equivalent (bug #3).
 //
-// resolveType ends in "else { OpenAPIType = "string" }", so a channel, a
-// function, or a complex number renders as "type: string" — a spec that claims
-// something the encoder can never produce. These are meant to be an error.
-//
-// This fixture moves to testdata/errors when that lands.
+// A channel, a function, or a complex number has no OpenAPI representation,
+// and encoding/json refuses to marshal them at all. TypeRef gives them their own
+// shape, so the validator reports them instead of the resolver guessing.
 //
 //	@api {
 //	  @title Unsupported Types Fixture

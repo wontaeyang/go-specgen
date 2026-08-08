@@ -198,21 +198,25 @@ func (v *Validator) validateParameter(name string, param *resolver.ResolvedParam
 func (v *Validator) validateField(path string, field *resolver.ResolvedField) {
 	fieldPath := fmt.Sprintf("%s.%s", path, field.GoName)
 
-	// Check for unresolved struct types (named structs not marked with @schema)
-	if field.IsUnresolvedStruct {
-		v.addError(fieldPath, fmt.Sprintf(
-			"field references struct '%s' which is not a @schema. Add @schema annotation to %s or use an anonymous struct",
-			field.UnresolvedTypeName, field.UnresolvedTypeName,
-		))
+	// A type with no OpenAPI representation. The resolver marks it rather than
+	// guessing a substitute, which is what used to turn a channel into a string.
+	if field.Type != nil && field.Type.Shape == resolver.ShapeUnsupported {
+		if name := field.Type.Ref; name != "" {
+			v.addError(fieldPath, fmt.Sprintf(
+				"references struct %s, which has no @schema annotation; annotate %s or use an anonymous struct",
+				name, name))
+		} else {
+			v.addError(fieldPath, fmt.Sprintf("%s has no OpenAPI representation", field.GoType))
+		}
 	}
 
 	// Validate enum values match type
 	if len(field.Enum) > 0 {
-		switch field.OpenAPIType {
+		switch openAPIType := field.Type.ScalarName(); openAPIType {
 		case "string", "integer":
 			// OK - enum supported for string and integer types
 		case "array":
-			if field.ItemsType != "string" && field.ItemsType != "integer" {
+			if items := field.Type.Elem.ScalarName(); items != "string" && items != "integer" {
 				v.addError(fieldPath, "enum for arrays only supported with string or integer items")
 			}
 		default:
@@ -235,7 +239,7 @@ func (v *Validator) validateField(path string, field *resolver.ResolvedField) {
 	}
 
 	// Validate length constraints are for strings
-	if (field.MinLength != nil || field.MaxLength != nil) && field.OpenAPIType != "string" {
+	if (field.MinLength != nil || field.MaxLength != nil) && field.Type.ScalarName() != "string" {
 		v.addError(fieldPath, "minLength/maxLength only valid for string types")
 	}
 
@@ -247,17 +251,17 @@ func (v *Validator) validateField(path string, field *resolver.ResolvedField) {
 	}
 
 	// Validate items constraints are for arrays
-	if (field.MinItems != nil || field.MaxItems != nil) && field.OpenAPIType != "array" {
+	if (field.MinItems != nil || field.MaxItems != nil) && field.Type.ScalarName() != "array" {
 		v.addError(fieldPath, "minItems/maxItems only valid for array types")
 	}
 
 	// Validate uniqueItems is for arrays
-	if field.UniqueItems && field.OpenAPIType != "array" {
+	if field.UniqueItems && field.Type.ScalarName() != "array" {
 		v.addError(fieldPath, "uniqueItems only valid for array types")
 	}
 
 	// Validate pattern is for strings
-	if field.Pattern != "" && field.OpenAPIType != "string" {
+	if field.Pattern != "" && field.Type.ScalarName() != "string" {
 		v.addError(fieldPath, "pattern only valid for string types")
 	}
 
@@ -284,24 +288,72 @@ func (v *Validator) validateParameterField(path, paramType string, field *resolv
 	}
 
 	// Path parameters cannot be arrays
-	if paramType == "path" && field.IsArray {
+	if paramType == "path" && field.Type.IsArray() {
 		v.addError(fieldPath, "path parameters cannot be arrays")
 	}
 
 	// Header parameters cannot be arrays
-	if paramType == "header" && field.IsArray {
+	if paramType == "header" && field.Type.IsArray() {
 		v.addError(fieldPath, "header parameters cannot be arrays")
 	}
 
 	// Cookie parameters cannot be arrays
-	if paramType == "cookie" && field.IsArray {
+	if paramType == "cookie" && field.Type.IsArray() {
 		v.addError(fieldPath, "cookie parameters cannot be arrays")
 	}
 
 	// Query parameters can be arrays (this is allowed)
 
+	// A parameter is a scalar or a list of scalars, and nothing else. net/http
+	// hands parameters over as map[string][]string, so there is no structured
+	// value to decode into — an object-shaped parameter would need deepObject,
+	// which specgen does not implement.
+	if !isParameterShape(field.Type) {
+		v.addError(fieldPath, fmt.Sprintf(
+			"%s parameters must be a scalar or a list of scalars, but %s is %s",
+			paramType, field.GoName, describeShape(field.Type)))
+		return
+	}
+
 	// Run standard field validation
 	v.validateField(path, field)
+}
+
+// isParameterShape reports whether a type can be carried as a URL or header
+// parameter.
+func isParameterShape(t *resolver.TypeRef) bool {
+	if t == nil {
+		return false
+	}
+	switch t.Shape {
+	case resolver.ShapeScalar:
+		return true
+	case resolver.ShapeArray:
+		return t.Elem != nil && t.Elem.Shape == resolver.ShapeScalar
+	}
+	return false
+}
+
+// describeShape names a type shape for an error message.
+func describeShape(t *resolver.TypeRef) string {
+	if t == nil {
+		return "an unresolved type"
+	}
+	switch t.Shape {
+	case resolver.ShapeMap:
+		return "a map"
+	case resolver.ShapeObject:
+		return "an anonymous struct"
+	case resolver.ShapeRef:
+		return "the schema " + t.Ref
+	case resolver.ShapeAny:
+		return "an unconstrained value"
+	case resolver.ShapeArray:
+		return "a list of " + describeShape(t.Elem)
+	case resolver.ShapeUnsupported:
+		return t.Reason
+	}
+	return "a scalar"
 }
 
 // validateEndpoint validates an endpoint
@@ -446,20 +498,29 @@ func (v *Validator) validateRequestBody(path string, request *resolver.ResolvedR
 		return
 	}
 
-	// Validate schema exists (use ElementType which extracts the base type from []T or map[string]T)
-	schemaToCheck := request.Body.ElementType
-	if schemaToCheck == "" {
-		schemaToCheck = request.Body.Schema
-	}
-	if !isPrimitiveType(schemaToCheck) {
-		if _, ok := schemas[schemaToCheck]; !ok {
-			v.addError(path+".@request", fmt.Sprintf("references unknown schema: %s", schemaToCheck))
-		}
-	}
+	v.validateBodySchemaExists(path+".@request", request.Body, schemas)
 
 	// Validate bind target
 	if request.Body.Bind != nil {
 		v.validateBindTarget(path+".@request", request.Body.Bind, schemas)
+	}
+}
+
+// validateBodySchemaExists checks that a body naming a schema names one that
+// exists. The body's shape already says which name that is, whatever nesting
+// the annotation was written with.
+func (v *Validator) validateBodySchemaExists(path string, body *resolver.ResolvedBody, schemas map[string]*resolver.ResolvedSchema) {
+	ref := body.Type
+	for ref != nil && (ref.Shape == resolver.ShapeArray || ref.Shape == resolver.ShapeMap) {
+		ref = ref.Elem
+	}
+
+	if ref == nil || ref.Shape != resolver.ShapeRef {
+		return
+	}
+
+	if _, ok := schemas[ref.Ref]; !ok {
+		v.addError(path, fmt.Sprintf("references unknown schema: %s", ref.Ref))
 	}
 }
 
@@ -474,16 +535,7 @@ func (v *Validator) validateResponse(path, statusCode string, response *resolver
 
 	// Schema is optional for responses (e.g., 204 No Content)
 	if response.Body != nil && response.Body.Schema != "" {
-		// Validate schema exists (use ElementType which extracts the base type from []T or map[string]T)
-		schemaToCheck := response.Body.ElementType
-		if schemaToCheck == "" {
-			schemaToCheck = response.Body.Schema
-		}
-		if !isPrimitiveType(schemaToCheck) {
-			if _, ok := schemas[schemaToCheck]; !ok {
-				v.addError(responsePath, fmt.Sprintf("references unknown schema: %s", schemaToCheck))
-			}
-		}
+		v.validateBodySchemaExists(responsePath, response.Body, schemas)
 
 		// Validate bind target
 		if response.Body.Bind != nil {

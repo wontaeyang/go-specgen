@@ -100,6 +100,104 @@ type ResolvedParameter struct {
 	Fields     []*ResolvedField
 }
 
+// Shape is the structural kind of a resolved Go type. It is what decides how
+// the generator emits a field, and it is exhaustive: every Go type a field can
+// have lands on exactly one of these.
+type Shape int
+
+const (
+	// ShapeScalar is a value with an OpenAPI primitive type. TypeRef.Type says
+	// which one. time.Time and the other special types land here too — they are
+	// Go structs that serialize as scalars.
+	ShapeScalar Shape = iota
+
+	// ShapeArray is a slice or fixed-size array. Elem is the element type.
+	ShapeArray
+
+	// ShapeMap is a map. Elem is the value type; OpenAPI keys are always strings.
+	ShapeMap
+
+	// ShapeObject is an anonymous struct, inlined at the point of use.
+	// Fields are its members.
+	ShapeObject
+
+	// ShapeRef is a named struct carrying @schema. Ref is its name, and the
+	// field emits a $ref rather than repeating the definition.
+	ShapeRef
+
+	// ShapeAny is any/interface{} — an empty schema, which accepts any JSON value.
+	ShapeAny
+
+	// ShapeTypeParam is a generic type parameter. Generic structs are templates
+	// and never reach components, but they still have to resolve: validateSchema
+	// rejects a schema with no fields.
+	ShapeTypeParam
+
+	// ShapeUnsupported is a type with no OpenAPI representation. Reason says
+	// which type and why, for the error message.
+	ShapeUnsupported
+)
+
+// TypeRef describes a resolved Go type as a shape the generator can emit
+// directly.
+//
+// It is recursive because Go types are: map[string][]User is a map whose
+// element is an array whose element is a reference. The flat alternative — a
+// bool per container kind plus a single element type name — could only ever
+// describe one level, which is why nested containers used to lose their inner
+// one.
+type TypeRef struct {
+	// Shape decides which of the remaining fields are meaningful.
+	Shape Shape
+
+	// Type is the OpenAPI primitive name when Shape is ShapeScalar:
+	// "string", "integer", "number", or "boolean".
+	Type string
+
+	// Format refines a scalar: "int64", "date-time", "byte", and so on.
+	// It is carried at every level, so an element keeps the format its own
+	// type has.
+	Format string
+
+	// Ref is the schema name when Shape is ShapeRef. It is also set when
+	// Shape is ShapeUnsupported because the type is a struct without @schema,
+	// so callers can name the type they want annotated.
+	Ref string
+
+	// Elem is the element type of an array or the value type of a map.
+	Elem *TypeRef
+
+	// Fields are an anonymous struct's members when Shape is ShapeObject.
+	Fields []*ResolvedField
+
+	// Reason describes an unsupported type as a noun phrase ("a channel",
+	// "a struct (Coords) with no @schema annotation"), so it reads correctly in
+	// any sentence that reports it.
+	Reason string
+}
+
+// IsArray reports whether this is an array, which several callers need without
+// caring about the element.
+func (t *TypeRef) IsArray() bool { return t != nil && t.Shape == ShapeArray }
+
+// ScalarName is the OpenAPI type name to use when a value has to be described
+// by a single word — an enum's item type, a header schema. Containers and
+// objects have no such word, and report "".
+func (t *TypeRef) ScalarName() string {
+	if t == nil {
+		return ""
+	}
+	switch t.Shape {
+	case ShapeScalar:
+		return t.Type
+	case ShapeArray:
+		return "array"
+	case ShapeMap, ShapeObject:
+		return "object"
+	}
+	return ""
+}
+
 // ResolvedField contains a field with resolved type information
 type ResolvedField struct {
 	// From annotation or inferred
@@ -112,29 +210,16 @@ type ResolvedField struct {
 	ReadOnly    bool
 	WriteOnly   bool
 
-	// Type information (resolved from Go type)
-	GoType      string // Original Go type string
-	OpenAPIType string // "string", "integer", "number", "boolean", "array", "object"
-	Format      string // "int32", "int64", "float", "double", "byte", "binary", "date", "date-time", "password", "email", "uuid", etc.
+	// GoType is the original Go type string, kept for error messages.
+	GoType string
 
-	// Array information
-	IsArray           bool
-	ItemsType         string           // For arrays, the OpenAPI type of items
-	ItemsInlineFields []*ResolvedField // For arrays of anonymous structs, the resolved fields
+	// Type is the resolved shape of the field's Go type.
+	Type *TypeRef
 
-	// Map information
-	IsMap                bool
-	MapValueInlineFields []*ResolvedField // For maps of anonymous structs, the resolved value fields
-
-	// Any value type (any/interface{})
-	IsAnyValue bool // True if field accepts any JSON value
-
-	// Struct type information
-	IsUnresolvedStruct bool   // True if field references a struct that is not a @schema
-	UnresolvedTypeName string // The name of the unresolved struct type (for error messages)
-
-	// Anonymous struct support
-	InlineFields []*ResolvedField // For anonymous structs, the resolved fields to inline
+	// Format is the field's format after @format has had its say. It seeds
+	// from Type.Format and overrides it, since an annotation names the format
+	// of the field rather than of some element inside it.
+	Format string
 
 	// Validation constraints
 	Enum             []string
@@ -211,21 +296,16 @@ type ResolvedResponse struct {
 
 // ResolvedBody contains the resolved body with optional binding
 type ResolvedBody struct {
-	// Schema is the schema name being referenced (e.g., "User", "[]User", "map[string]User")
+	// Schema is the schema name as written (e.g., "User", "[]User",
+	// "map[string]User"), kept for validation messages.
 	Schema string
+
+	// Type is the shape the body renders as.
+	Type *TypeRef
 
 	// Bind contains the resolved wrapper binding
 	// When non-nil, the body should be wrapped in the specified envelope
 	Bind *ResolvedBindTarget
-
-	// IsArray indicates Schema is an array type (e.g., []User)
-	IsArray bool
-
-	// IsMap indicates Schema is a map type (e.g., map[string]User)
-	IsMap bool
-
-	// ElementType is the element type for arrays/maps (e.g., "User")
-	ElementType string
 }
 
 // ResolvedBindTarget represents a resolved @bind Wrapper.Field annotation
