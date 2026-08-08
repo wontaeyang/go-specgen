@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wontaeyang/go-specgen/pkg/schema"
+	"github.com/wontaeyang/go-specgen/pkg/annotation"
 )
 
 func TestIsInlineFormat(t *testing.T) {
@@ -60,7 +60,7 @@ func TestIsInlineFormat(t *testing.T) {
 }
 
 func TestParseInlineAnnotation(t *testing.T) {
-	fieldNode := schema.AnnotationSchema.GetChild("@field")
+	fieldNode := annotation.Schema.GetChild("@field")
 
 	tests := []struct {
 		name    string
@@ -110,7 +110,7 @@ func TestParseInlineAnnotation(t *testing.T) {
 }
 
 func TestParseInlineAnnotation_Values(t *testing.T) {
-	fieldNode := schema.AnnotationSchema.GetChild("@field")
+	fieldNode := annotation.Schema.GetChild("@field")
 	// NOTE: @ symbols in values not supported in current inline implementation
 	line := "@field { @description User email @format email @example test }"
 
@@ -141,7 +141,7 @@ func TestParseInlineAnnotation_Values(t *testing.T) {
 func TestParseInlineAnnotation_EmailInValue(t *testing.T) {
 	// NOTE: @ symbols in values are NOT supported in inline format
 	// This is a known limitation - use multi-line format for values with @ symbols
-	apiNode := schema.AnnotationSchema.GetChild("@api")
+	apiNode := annotation.Schema.GetChild("@api")
 	contactNode := apiNode.GetChild("@contact")
 	line := "@contact { @name API Team @url https://example.com }"
 
@@ -162,7 +162,7 @@ func TestParseInlineAnnotation_EmailInValue(t *testing.T) {
 }
 
 func TestParseInlineAnnotation_FlagAnnotation(t *testing.T) {
-	fieldNode := schema.AnnotationSchema.GetChild("@field")
+	fieldNode := annotation.Schema.GetChild("@field")
 	line := "@field { @description Test @deprecated }"
 
 	parsed, err := ParseInlineAnnotation(line, "@field", fieldNode)
@@ -182,7 +182,7 @@ func TestParseInlineAnnotation_FlagAnnotation(t *testing.T) {
 
 func TestParseInlineAnnotation_NestedBlocksNotAllowed(t *testing.T) {
 	// All block annotations support inline, but nested blocks within inline are not allowed
-	endpointNode := schema.AnnotationSchema.GetChild("@endpoint")
+	endpointNode := annotation.Schema.GetChild("@endpoint")
 	line := "@endpoint GET /users { @response 200 { @body User } }"
 
 	_, err := ParseInlineAnnotation(line, "@endpoint", endpointNode)
@@ -195,7 +195,7 @@ func TestParseInlineAnnotation_BraceQuantifierInValue(t *testing.T) {
 	// Regression: @pattern values can legitimately contain `{N}` (regex quantifiers).
 	// When the parent annotation (@field) has no block-producing children, brace
 	// validation is skipped so {64} is not misread as a nested block.
-	fieldNode := schema.AnnotationSchema.GetChild("@field")
+	fieldNode := annotation.Schema.GetChild("@field")
 	line := "@field { @pattern ^[a-fA-F0-9]{64}$ @description SHA-256 digest }"
 
 	parsed, err := ParseInlineAnnotation(line, "@field", fieldNode)
@@ -214,7 +214,7 @@ func TestParseInlineAnnotation_NestedBlockStillRejectedForBlockParents(t *testin
 	// HasBlockChildren is only false for annotations whose children are all
 	// value/flag — like @field. For annotations with block-producing children
 	// (e.g. @endpoint with @response/@request), nested-brace validation still applies.
-	endpointNode := schema.AnnotationSchema.GetChild("@endpoint")
+	endpointNode := annotation.Schema.GetChild("@endpoint")
 	line := "@endpoint GET /users { @response 200 { @body User } }"
 
 	if _, err := ParseInlineAnnotation(line, "@endpoint", endpointNode); err == nil {
@@ -224,7 +224,7 @@ func TestParseInlineAnnotation_NestedBlockStillRejectedForBlockParents(t *testin
 
 func TestParseInlineAnnotation_AllBlocksSupported(t *testing.T) {
 	// All block annotations now support inline format
-	apiNode := schema.AnnotationSchema.GetChild("@api")
+	apiNode := annotation.Schema.GetChild("@api")
 	line := "@api { @title Test API @version 1.0.0 }"
 
 	parsed, err := ParseInlineAnnotation(line, "@api", apiNode)
@@ -243,19 +243,19 @@ func TestParseInlineAnnotation_AllBlocksSupported(t *testing.T) {
 func TestParseInlineChildren_Repeatable(t *testing.T) {
 	// Test repeatable sub-commands in inline format
 	// @with supports inline since it's a SubCommand
-	apiNode := schema.AnnotationSchema.GetChild("@api")
+	apiNode := annotation.Schema.GetChild("@api")
 	securityNode := apiNode.GetChild("@security")
 	withNode := securityNode.GetChild("@with")
 
 	// Verify @with is a SubCommand (all SubCommands support inline)
-	if withNode.Type != schema.SubCommand {
-		t.Fatalf("@with should be SubCommand, got %v", withNode.Type)
+	if withNode.Kind != annotation.SubCommand {
+		t.Fatalf("@with should be SubCommand, got %v", withNode.Kind)
 	}
 
 	// @security is a BlockAnnotation and supports inline format
 	// But we can't have nested blocks in inline, so @with with children would fail
-	if securityNode.Type != schema.BlockAnnotation {
-		t.Fatalf("@security should be BlockAnnotation, got %v", securityNode.Type)
+	if securityNode.Kind != annotation.Block {
+		t.Fatalf("@security should be BlockAnnotation, got %v", securityNode.Kind)
 	}
 
 	// Test flat inline security (no nested blocks)
@@ -402,7 +402,7 @@ func TestValidateNoNestedBraces(t *testing.T) {
 }
 
 func TestParseInlineAnnotation_EscapedCharacters(t *testing.T) {
-	fieldNode := schema.AnnotationSchema.GetChild("@field")
+	fieldNode := annotation.Schema.GetChild("@field")
 
 	tests := []struct {
 		name     string
@@ -472,7 +472,7 @@ func TestParseInlineAnnotation_EscapedCharacters(t *testing.T) {
 func TestParseInlineAnnotation_RawPatternBraces(t *testing.T) {
 	// @pattern is a RawValue annotation: raw braces are passed through verbatim
 	// without being mistaken for a nested block.
-	fieldNode := schema.AnnotationSchema.GetChild("@field")
+	fieldNode := annotation.Schema.GetChild("@field")
 
 	line := `@field { @pattern ^[A-Z]{2}$ @description Country code }`
 
@@ -493,13 +493,13 @@ func TestParseInlineAnnotation_RawPatternBraces(t *testing.T) {
 }
 
 func TestParseAnnotation_RejectsUnescapedSpecials(t *testing.T) {
-	fieldNode := schema.AnnotationSchema.GetChild("@field")
-	apiNode := schema.AnnotationSchema.GetChild("@api")
+	fieldNode := annotation.Schema.GetChild("@field")
+	apiNode := annotation.Schema.GetChild("@api")
 
 	tests := []struct {
 		name  string
 		lines []string
-		node  *schema.SchemaNode
+		node  *annotation.Def
 		root  string
 		want  string // substring expected in the error
 	}{

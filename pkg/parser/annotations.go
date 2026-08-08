@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/wontaeyang/go-specgen/pkg/schema"
+	"github.com/wontaeyang/go-specgen/pkg/annotation"
 )
 
 // ParsedAnnotation represents a parsed annotation with its content
@@ -163,7 +163,7 @@ func ExtractMetadata(line, annotationName string) string {
 // resolveValue applies leaf-value rules for an annotation value.
 // RawValue nodes pass through verbatim; all others are validated for
 // unescaped specials ({, }, @) and then unescaped.
-func resolveValue(value string, node *schema.SchemaNode, annotationName string) (string, error) {
+func resolveValue(value string, node *annotation.Def, annotationName string) (string, error) {
 	if node.RawValue {
 		return value, nil
 	}
@@ -174,7 +174,7 @@ func resolveValue(value string, node *schema.SchemaNode, annotationName string) 
 }
 
 // ParseAnnotationBlock parses an annotation block using the schema
-func ParseAnnotationBlock(lines []string, annotationName string, node *schema.SchemaNode) (*ParsedAnnotation, error) {
+func ParseAnnotationBlock(lines []string, annotationName string, node *annotation.Def) (*ParsedAnnotation, error) {
 	if node == nil {
 		return nil, fmt.Errorf("unknown annotation: %s", annotationName)
 	}
@@ -187,13 +187,13 @@ func ParseAnnotationBlock(lines []string, annotationName string, node *schema.Sc
 	}
 
 	// Handle marker annotations
-	if node.Type == schema.MarkerAnnotation {
+	if node.Kind == annotation.Marker {
 		result.IsFlag = true
 		return result, nil
 	}
 
 	// Handle flag annotations
-	if node.Type == schema.FlagAnnotation {
+	if node.Kind == annotation.Flag {
 		result.IsFlag = true
 		return result, nil
 	}
@@ -204,7 +204,7 @@ func ParseAnnotationBlock(lines []string, annotationName string, node *schema.Sc
 	}
 
 	// Handle value annotations
-	if node.Type == schema.ValueAnnotation {
+	if node.Kind == annotation.Value {
 		if len(lines) > 0 {
 			// Extract value (everything after annotation name)
 			firstLine := lines[0]
@@ -231,7 +231,7 @@ func ParseAnnotationBlock(lines []string, annotationName string, node *schema.Sc
 	}
 
 	// Handle reference annotations
-	if node.Type == schema.ReferenceAnnotation {
+	if node.Kind == annotation.Reference {
 		if len(lines) > 0 {
 			// Extract reference name(s) - can be comma-separated
 			firstLine := lines[0]
@@ -247,7 +247,7 @@ func ParseAnnotationBlock(lines []string, annotationName string, node *schema.Sc
 	}
 
 	// Handle block annotations and sub-commands
-	if node.Type == schema.BlockAnnotation || node.Type == schema.SubCommand {
+	if node.Kind == annotation.Block || node.Kind == annotation.SubCommand {
 		// Extract content within braces
 		content, err := ParseBracedBlock(lines)
 		if err != nil {
@@ -281,7 +281,7 @@ func ParseAnnotationBlock(lines []string, annotationName string, node *schema.Sc
 }
 
 // parseChildren parses child annotations within a block
-func parseChildren(lines []string, parentNode *schema.SchemaNode, result *ParsedAnnotation) error {
+func parseChildren(lines []string, parentNode *annotation.Def, result *ParsedAnnotation) error {
 	if len(lines) == 0 {
 		return nil
 	}

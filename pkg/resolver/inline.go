@@ -4,76 +4,20 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/wontaeyang/go-specgen/pkg/annotation"
 	"github.com/wontaeyang/go-specgen/pkg/parser"
-	"github.com/wontaeyang/go-specgen/pkg/schema"
 )
 
-// InlineAnnotationSchema defines valid annotations for inline declarations.
-// These are temporary and only exist during @endpoint resolution.
-// Note: @body is intentionally excluded - the struct IS the body in inline context.
-var InlineAnnotationSchema = map[string]*schema.SchemaNode{
-	"@response": {
-		Name:        "@response",
-		Type:        schema.BlockAnnotation,
-		HasMetadata: true, // status code
-		Children: map[string]*schema.SchemaNode{
-			"@contentType": {
-				Name: "@contentType",
-				Type: schema.ValueAnnotation,
-			},
-			"@description": {
-				Name:              "@description",
-				Type:              schema.ValueAnnotation,
-				SupportsMultiline: true,
-			},
-			"@header": {
-				Name:       "@header",
-				Type:       schema.ValueAnnotation,
-				Repeatable: true,
-			},
-			"@bind": {
-				Name: "@bind",
-				Type: schema.ValueAnnotation,
-			},
-		},
-	},
-	"@request": {
-		Name: "@request",
-		Type: schema.BlockAnnotation,
-		Children: map[string]*schema.SchemaNode{
-			"@contentType": {
-				Name: "@contentType",
-				Type: schema.ValueAnnotation,
-			},
-			"@description": {
-				Name:              "@description",
-				Type:              schema.ValueAnnotation,
-				SupportsMultiline: true,
-			},
-			"@bind": {
-				Name: "@bind",
-				Type: schema.ValueAnnotation,
-			},
-		},
-	},
-}
-
-func init() {
-	// Initialize parent references for inline schema nodes
-	for _, node := range InlineAnnotationSchema {
-		node.InitializeParents()
-	}
-}
-
-// ParseInlineDeclaration parses an inline @request/@response comment using InlineAnnotationSchema.
+// ParseInlineDeclaration parses an inline @request/@response comment against
+// the in-function grammar.
 // Returns parsed annotation or error if invalid annotations are used.
 func ParseInlineDeclaration(comment *parser.CommentBlock, annotationType string) (*parser.ParsedAnnotation, error) {
 	if comment == nil {
 		return nil, nil
 	}
 
-	schemaNode, ok := InlineAnnotationSchema["@"+annotationType]
-	if !ok {
+	def := annotation.Declaration.GetChild("@" + annotationType)
+	if def == nil {
 		return nil, fmt.Errorf("unknown inline annotation type: %s", annotationType)
 	}
 
@@ -83,7 +27,7 @@ func ParseInlineDeclaration(comment *parser.CommentBlock, annotationType string)
 		return nil, nil
 	}
 
-	return parser.ParseAnnotationBlock(lines, "@"+annotationType, schemaNode)
+	return parser.ParseAnnotationBlock(lines, "@"+annotationType, def)
 }
 
 // extractInlineBlockContent extracts the annotation block content from comment lines.

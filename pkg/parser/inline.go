@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/wontaeyang/go-specgen/pkg/schema"
+	"github.com/wontaeyang/go-specgen/pkg/annotation"
 )
 
 // IsInlineFormat checks if an annotation uses inline format
@@ -40,7 +40,7 @@ func IsInlineFormat(lines []string) bool {
 // The nested-brace check is skipped when the annotation has no block-producing children
 // (e.g. @field's children are all value/flag annotations), so values like a regex
 // quantifier `{64}` are not misread as a nested block.
-func ParseInlineAnnotation(line, annotationName string, node *schema.SchemaNode) (*ParsedAnnotation, error) {
+func ParseInlineAnnotation(line, annotationName string, node *annotation.Def) (*ParsedAnnotation, error) {
 	if node.HasBlockChildren() {
 		if err := validateNoNestedBraces(line); err != nil {
 			return nil, err
@@ -84,7 +84,7 @@ func ParseInlineAnnotation(line, annotationName string, node *schema.SchemaNode)
 // parseInlineChildren parses children in inline format
 // Example: "@description User email @format email @example test@example.com"
 // Supports escape sequences: \{, \}, \@, \\
-func parseInlineChildren(content string, parentNode *schema.SchemaNode, result *ParsedAnnotation) error {
+func parseInlineChildren(content string, parentNode *annotation.Def, result *ParsedAnnotation) error {
 	if content == "" {
 		return nil
 	}
@@ -122,7 +122,7 @@ func parseInlineChildren(content string, parentNode *schema.SchemaNode, result *
 		}
 
 		// Check if sub-command has sub-blocks (not allowed in inline)
-		if childNode.Type == schema.SubCommand && len(childNode.Children) > 0 {
+		if childNode.Kind == annotation.SubCommand && len(childNode.Children) > 0 {
 			// Check if value contains unescaped braces (sub-block)
 			if ContainsUnescapedBrace(value) {
 				return fmt.Errorf("sub-commands with sub-blocks cannot be inlined: %s", annotationName)
@@ -136,7 +136,7 @@ func parseInlineChildren(content string, parentNode *schema.SchemaNode, result *
 		parsed := &ParsedAnnotation{
 			Name:             annotationName,
 			Value:            resolvedValue,
-			IsFlag:           childNode.Type == schema.FlagAnnotation,
+			IsFlag:           childNode.Kind == annotation.Flag,
 			Children:         make(map[string]*ParsedAnnotation),
 			RepeatedChildren: make(map[string][]*ParsedAnnotation),
 		}

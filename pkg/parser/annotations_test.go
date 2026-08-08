@@ -3,7 +3,7 @@ package parser
 import (
 	"testing"
 
-	"github.com/wontaeyang/go-specgen/pkg/schema"
+	"github.com/wontaeyang/go-specgen/pkg/annotation"
 )
 
 func TestParseBracedBlock(t *testing.T) {
@@ -294,7 +294,7 @@ func TestParseBracedBlock_PathParams(t *testing.T) {
 
 func TestParseAnnotationBlock_Marker(t *testing.T) {
 	// Use @path which is still a MarkerAnnotation
-	node := schema.AnnotationSchema.GetChild("@path")
+	node := annotation.Schema.GetChild("@path")
 	lines := []string{"@path"}
 
 	parsed, err := ParseAnnotationBlock(lines, "@path", node)
@@ -312,7 +312,7 @@ func TestParseAnnotationBlock_Marker(t *testing.T) {
 }
 
 func TestParseAnnotationBlock_Value(t *testing.T) {
-	apiNode := schema.AnnotationSchema.GetChild("@api")
+	apiNode := annotation.Schema.GetChild("@api")
 	titleNode := apiNode.GetChild("@title")
 
 	lines := []string{"@title My API Title"}
@@ -328,7 +328,7 @@ func TestParseAnnotationBlock_Value(t *testing.T) {
 }
 
 func TestParseAnnotationBlock_SimpleBlock(t *testing.T) {
-	fieldNode := schema.AnnotationSchema.GetChild("@field")
+	fieldNode := annotation.Schema.GetChild("@field")
 	lines := []string{
 		"@field {",
 		"  @description User email address",
@@ -366,7 +366,7 @@ func TestParseAnnotationBlock_SimpleBlock(t *testing.T) {
 }
 
 func TestParseAnnotationBlock_NestedBlocks(t *testing.T) {
-	apiNode := schema.AnnotationSchema.GetChild("@api")
+	apiNode := annotation.Schema.GetChild("@api")
 	lines := []string{
 		"@api {",
 		"  @title Test API",
@@ -408,7 +408,7 @@ func TestParseAnnotationBlock_NestedBlocks(t *testing.T) {
 }
 
 func TestParseAnnotationBlock_Repeatable(t *testing.T) {
-	apiNode := schema.AnnotationSchema.GetChild("@api")
+	apiNode := annotation.Schema.GetChild("@api")
 	lines := []string{
 		"@api {",
 		"  @server https://api.example.com {",
@@ -447,7 +447,7 @@ func TestParseAnnotationBlock_Repeatable(t *testing.T) {
 
 func TestParseAnnotationBlock_EmptyBlock(t *testing.T) {
 	// @field allows empty because it's marker pattern
-	fieldNode := schema.AnnotationSchema.GetChild("@field")
+	fieldNode := annotation.Schema.GetChild("@field")
 	lines := []string{"@field { }"}
 
 	parsed, err := ParseAnnotationBlock(lines, "@field", fieldNode)
@@ -461,7 +461,7 @@ func TestParseAnnotationBlock_EmptyBlock(t *testing.T) {
 }
 
 func TestParseAnnotationBlock_WithMetadata(t *testing.T) {
-	endpointNode := schema.AnnotationSchema.GetChild("@endpoint")
+	endpointNode := annotation.Schema.GetChild("@endpoint")
 	lines := []string{
 		"@endpoint GET /users/{id} {",
 		"@summary Get user by ID",
@@ -547,7 +547,7 @@ func TestParsedAnnotation_Helpers(t *testing.T) {
 }
 
 func TestParseAnnotationBlock_InlineResponse(t *testing.T) {
-	endpointNode := schema.AnnotationSchema.GetChild("@endpoint")
+	endpointNode := annotation.Schema.GetChild("@endpoint")
 	responseNode := endpointNode.GetChild("@response")
 
 	lines := []string{"@response 200 { @body User @description User found }"}
@@ -582,7 +582,7 @@ func TestParseAnnotationBlock_InlineResponse(t *testing.T) {
 }
 
 func TestParseAnnotationBlock_NestedInlineResponse(t *testing.T) {
-	endpointNode := schema.AnnotationSchema.GetChild("@endpoint")
+	endpointNode := annotation.Schema.GetChild("@endpoint")
 
 	// Simulating the actual lines from a comment block
 	lines := []string{

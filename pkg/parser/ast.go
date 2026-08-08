@@ -7,6 +7,7 @@ import (
 	"go/types"
 	"strings"
 
+	"github.com/wontaeyang/go-specgen/pkg/annotation"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -565,42 +566,40 @@ func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.Bl
 	return result, nil
 }
 
-// detectInlineAnnotation detects the annotation type from comment lines
-// Returns the annotation type and optionally a status code for responses
-func detectInlineAnnotation(lines []string) (annotation string, statusCode string) {
+// detectInlineAnnotation reports which in-function annotation a comment block
+// opens with, and the status code when that annotation is @response.
+//
+// The names come from annotation.Declaration rather than a list here, so adding
+// an in-function annotation means editing the grammar and nothing else.
+func detectInlineAnnotation(lines []string) (name string, statusCode string) {
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
 
-		if strings.HasPrefix(line, "@query") {
-			return "query", ""
+		def := annotation.Declaration.GetChild(fields[0])
+		if def == nil {
+			continue
 		}
-		if strings.HasPrefix(line, "@path") {
-			return "path", ""
+
+		if def.Name != "@response" {
+			return strings.TrimPrefix(def.Name, "@"), ""
 		}
-		if strings.HasPrefix(line, "@header") {
-			return "header", ""
+
+		// @response 404 { ... } — the status code is the block's metadata.
+		if len(fields) > 1 && isStatusCode(fields[1]) {
+			return "response", fields[1]
 		}
-		if strings.HasPrefix(line, "@cookie") {
-			return "cookie", ""
-		}
-		if strings.HasPrefix(line, "@request") {
-			return "request", ""
-		}
-		if strings.HasPrefix(line, "@response") {
-			// Extract status code if present: @response 200 { ... } or @response 200
-			rest := strings.TrimPrefix(line, "@response")
-			rest = strings.TrimSpace(rest)
-			// Parse status code (first numeric part)
-			parts := strings.Fields(rest)
-			if len(parts) > 0 {
-				// Check if first part is a status code
-				code := parts[0]
-				if len(code) == 3 && code[0] >= '1' && code[0] <= '5' {
-					return "response", code
-				}
-			}
-			return "response", "200" // default status code
-		}
+		return "response", "200"
 	}
+
 	return "", ""
+}
+
+// isStatusCode reports whether s looks like an HTTP status code. Wildcard forms
+// like 4XX are deliberately not accepted here: they are valid in a doc-comment
+// @response, but an in-function one describes a concrete struct being returned.
+func isStatusCode(s string) bool {
+	return len(s) == 3 && s[0] >= '1' && s[0] <= '5'
 }

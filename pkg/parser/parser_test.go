@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wontaeyang/go-specgen/pkg/schema"
+	"github.com/wontaeyang/go-specgen/pkg/annotation"
 )
 
 func TestParser_Parse(t *testing.T) {
@@ -1300,7 +1300,7 @@ func TestParseBindTarget_Invalid(t *testing.T) {
 
 func TestSchemaHasBodyAnnotation(t *testing.T) {
 	// Verify @body is in schema
-	requestNode := schema.AnnotationSchema.GetChild("@endpoint").GetChild("@request")
+	requestNode := annotation.Schema.GetChild("@endpoint").GetChild("@request")
 	bodyNode := requestNode.GetChild("@body")
 
 	if bodyNode == nil {

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/wontaeyang/go-specgen/pkg/schema"
+	"github.com/wontaeyang/go-specgen/pkg/annotation"
 )
 
 // Parser orchestrates the parsing of a Go package into a ParsedPackage
@@ -129,7 +129,7 @@ func (p *Parser) parseStructFields(result *ParsedPackage) error {
 // blocks into *Field values. Single source of truth for @field parsing.
 func (p *Parser) parseFieldComments(fieldComments map[string]*CommentBlock, context string) ([]*Field, error) {
 	var fields []*Field
-	fieldNode := schema.AnnotationSchema.GetChild("@field")
+	fieldNode := annotation.Schema.GetChild("@field")
 
 	for fieldName, fieldComment := range fieldComments {
 		if fieldComment == nil || !fieldComment.HasAnnotation("@field") {
@@ -172,7 +172,7 @@ func (p *Parser) parseAPI(result *ParsedPackage) error {
 	}
 
 	// Get @api schema node
-	apiNode := schema.AnnotationSchema.GetChild("@api")
+	apiNode := annotation.Schema.GetChild("@api")
 	if apiNode == nil {
 		return fmt.Errorf("@api schema node not found")
 	}
@@ -290,9 +290,9 @@ func (p *Parser) parseSchemas(result *ParsedPackage) error {
 		}
 
 		lines := commentBlock.GetAnnotationLines()
-		schemaNode := schema.AnnotationSchema.GetChild("@schema")
+		def := annotation.Schema.GetChild("@schema")
 
-		parsed, err := ParseAnnotationBlock(lines, "@schema", schemaNode)
+		parsed, err := ParseAnnotationBlock(lines, "@schema", def)
 		if err != nil {
 			return fmt.Errorf("failed to parse @schema for %s: %w", structName, err)
 		}
@@ -403,7 +403,7 @@ func (p *Parser) parseParameters(result *ParsedPackage) error {
 				}
 
 				fieldLines := fieldComment.GetAnnotationLines()
-				fieldNode := schema.AnnotationSchema.GetChild("@field")
+				fieldNode := annotation.Schema.GetChild("@field")
 
 				// Check if inline format
 				if IsInlineFormat(fieldLines) {
@@ -446,7 +446,7 @@ func (p *Parser) parseEndpoints(result *ParsedPackage) error {
 		}
 
 		lines := commentBlock.GetAnnotationLines()
-		endpointNode := schema.AnnotationSchema.GetChild("@endpoint")
+		endpointNode := annotation.Schema.GetChild("@endpoint")
 
 		parsed, err := ParseAnnotationBlock(lines, "@endpoint", endpointNode)
 		if err != nil {

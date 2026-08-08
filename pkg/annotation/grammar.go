@@ -1,128 +1,135 @@
-package schema
+package annotation
 
-// AnnotationSchema is the complete annotation schema tree
-// This is the single source of truth for all annotations
-var AnnotationSchema = &SchemaNode{
+// There are two grammars because the two contexts genuinely differ.
+//
+// Schema covers annotations written in doc comments, above a type or a
+// function. Declaration covers annotations written inside a function body,
+// above a var declaration. The difference that forces the split is @body: a
+// doc-comment @response names its body, while an in-function @response is
+// attached to a struct that already is the body, so @body has nothing to say.
+
+// Schema is the grammar for doc-comment annotations.
+var Schema = &Def{
 	Name: "root",
-	Type: BlockAnnotation,
-	Children: map[string]*SchemaNode{
+	Kind: Block,
+	Children: map[string]*Def{
 		"@api": {
 			Name:     "@api",
-			Type:     BlockAnnotation,
+			Kind:     Block,
 			Required: true,
-			Children: map[string]*SchemaNode{
+			Children: map[string]*Def{
 				"@title": {
 					Name:     "@title",
-					Type:     ValueAnnotation,
+					Kind:     Value,
 					Required: true,
 				},
 				"@version": {
 					Name:     "@version",
-					Type:     ValueAnnotation,
+					Kind:     Value,
 					Required: true,
 				},
 				"@description": {
 					Name:              "@description",
-					Type:              ValueAnnotation,
+					Kind:              Value,
 					SupportsMultiline: true,
 				},
 				"@termsOfService": {
 					Name: "@termsOfService",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@contact": {
 					Name: "@contact",
-					Type: BlockAnnotation,
-					Children: map[string]*SchemaNode{
+					Kind: Block,
+					Children: map[string]*Def{
 						"@name": {
 							Name: "@name",
-							Type: ValueAnnotation,
+							Kind: Value,
 						},
 						"@email": {
 							Name: "@email",
-							Type: ValueAnnotation,
+							Kind: Value,
 						},
 						"@url": {
 							Name: "@url",
-							Type: ValueAnnotation,
+							Kind: Value,
 						},
 					},
 				},
 				"@license": {
 					Name: "@license",
-					Type: BlockAnnotation,
-					Children: map[string]*SchemaNode{
+					Kind: Block,
+					Children: map[string]*Def{
 						"@name": {
 							Name: "@name",
-							Type: ValueAnnotation,
+							Kind: Value,
 						},
 						"@url": {
 							Name: "@url",
-							Type: ValueAnnotation,
+							Kind: Value,
 						},
 					},
 				},
 				"@server": {
 					Name:        "@server",
-					Type:        BlockAnnotation,
+					Kind:        Block,
 					HasMetadata: true,
 					Repeatable:  true,
-					Children: map[string]*SchemaNode{
+					Children: map[string]*Def{
 						"@description": {
 							Name:              "@description",
-							Type:              ValueAnnotation,
+							Kind:              Value,
 							SupportsMultiline: true,
 						},
 					},
 				},
 				"@securityScheme": {
 					Name:        "@securityScheme",
-					Type:        BlockAnnotation,
+					Kind:        Block,
 					HasMetadata: true,
 					Repeatable:  true,
-					Children: map[string]*SchemaNode{
+					Children: map[string]*Def{
 						"@type": {
 							Name:     "@type",
-							Type:     ValueAnnotation,
+							Kind:     Value,
 							Required: true,
 						},
 						"@scheme": {
 							Name: "@scheme",
-							Type: ValueAnnotation,
+							Kind: Value,
 						},
 						"@bearerFormat": {
 							Name: "@bearerFormat",
-							Type: ValueAnnotation,
+							Kind: Value,
 						},
 						"@in": {
 							Name: "@in",
-							Type: ValueAnnotation,
+							Kind: Value,
 						},
 						"@name": {
 							Name: "@name",
-							Type: ValueAnnotation,
+							Kind: Value,
 						},
 						"@description": {
 							Name:              "@description",
-							Type:              ValueAnnotation,
+							Kind:              Value,
 							SupportsMultiline: true,
 						},
 					},
 				},
 				"@security": {
 					Name:       "@security",
-					Type:       BlockAnnotation,
+					Kind:       Block,
 					Repeatable: true,
-					Children: map[string]*SchemaNode{
+					Children: map[string]*Def{
 						"@with": {
 							Name:        "@with",
-							Type:        SubCommand,
+							Kind:        SubCommand,
 							HasMetadata: true,
 							Repeatable:  true,
-							Children: map[string]*SchemaNode{
+							Children: map[string]*Def{
 								"@scope": {
 									Name:       "@scope",
-									Type:       ValueAnnotation,
+									Kind:       Value,
 									Repeatable: true,
 								},
 							},
@@ -131,120 +138,120 @@ var AnnotationSchema = &SchemaNode{
 				},
 				"@tag": {
 					Name:        "@tag",
-					Type:        BlockAnnotation,
+					Kind:        Block,
 					HasMetadata: true,
 					Repeatable:  true,
-					Children: map[string]*SchemaNode{
+					Children: map[string]*Def{
 						"@description": {
 							Name:              "@description",
-							Type:              ValueAnnotation,
+							Kind:              Value,
 							SupportsMultiline: true,
 						},
 					},
 				},
 				"@defaultContentType": {
 					Name: "@defaultContentType",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 			},
 		},
 		"@endpoint": {
 			Name:        "@endpoint",
-			Type:        BlockAnnotation,
+			Kind:        Block,
 			HasMetadata: true,
-			Children: map[string]*SchemaNode{
+			Children: map[string]*Def{
 				"@operationID": {
 					Name: "@operationID",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@summary": {
 					Name: "@summary",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@description": {
 					Name:              "@description",
-					Type:              ValueAnnotation,
+					Kind:              Value,
 					SupportsMultiline: true,
 				},
 				"@tag": {
 					Name:       "@tag",
-					Type:       ReferenceAnnotation,
+					Kind:       Reference,
 					Repeatable: true,
 				},
 				"@deprecated": {
 					Name: "@deprecated",
-					Type: FlagAnnotation,
+					Kind: Flag,
 				},
 				"@auth": {
 					Name: "@auth",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@path": {
 					Name:       "@path",
-					Type:       ReferenceAnnotation,
+					Kind:       Reference,
 					Repeatable: true,
 				},
 				"@query": {
 					Name:       "@query",
-					Type:       ReferenceAnnotation,
+					Kind:       Reference,
 					Repeatable: true,
 				},
 				"@header": {
 					Name:       "@header",
-					Type:       ReferenceAnnotation,
+					Kind:       Reference,
 					Repeatable: true,
 				},
 				"@cookie": {
 					Name:       "@cookie",
-					Type:       ReferenceAnnotation,
+					Kind:       Reference,
 					Repeatable: true,
 				},
 				"@request": {
 					Name: "@request",
-					Type: BlockAnnotation,
-					Children: map[string]*SchemaNode{
+					Kind: Block,
+					Children: map[string]*Def{
 						"@contentType": {
 							Name: "@contentType",
-							Type: ValueAnnotation,
+							Kind: Value,
 						},
 						"@body": {
 							Name:        "@body",
-							Type:        ValueAnnotation,
+							Kind:        Value,
 							HasMetadata: true,
 						},
 						"@bind": {
 							Name: "@bind",
-							Type: ValueAnnotation,
+							Kind: Value,
 						},
 					},
 				},
 				"@response": {
 					Name:        "@response",
-					Type:        BlockAnnotation,
+					Kind:        Block,
 					HasMetadata: true,
 					Repeatable:  true,
-					Children: map[string]*SchemaNode{
+					Children: map[string]*Def{
 						"@contentType": {
 							Name: "@contentType",
-							Type: ValueAnnotation,
+							Kind: Value,
 						},
 						"@body": {
 							Name:        "@body",
-							Type:        ValueAnnotation,
+							Kind:        Value,
 							HasMetadata: true,
 						},
 						"@bind": {
 							Name: "@bind",
-							Type: ValueAnnotation,
+							Kind: Value,
 						},
 						"@description": {
 							Name:              "@description",
-							Type:              ValueAnnotation,
+							Kind:              Value,
 							SupportsMultiline: true,
 						},
 						"@header": {
 							Name:       "@header",
-							Type:       ValueAnnotation,
+							Kind:       Value,
 							Repeatable: true,
 						},
 					},
@@ -253,127 +260,185 @@ var AnnotationSchema = &SchemaNode{
 		},
 		"@field": {
 			Name: "@field",
-			Type: BlockAnnotation,
-			Children: map[string]*SchemaNode{
+			Kind: Block,
+			Children: map[string]*Def{
 				"@description": {
 					Name:              "@description",
-					Type:              ValueAnnotation,
+					Kind:              Value,
 					SupportsMultiline: true,
 				},
 				"@format": {
 					Name: "@format",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@example": {
 					Name: "@example",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@enum": {
 					Name: "@enum",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@default": {
 					Name: "@default",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@minimum": {
 					Name: "@minimum",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@maximum": {
 					Name: "@maximum",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@exclusiveMinimum": {
 					Name: "@exclusiveMinimum",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@exclusiveMaximum": {
 					Name: "@exclusiveMaximum",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@minLength": {
 					Name: "@minLength",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@maxLength": {
 					Name: "@maxLength",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@minItems": {
 					Name: "@minItems",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@maxItems": {
 					Name: "@maxItems",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@uniqueItems": {
 					Name: "@uniqueItems",
-					Type: FlagAnnotation,
+					Kind: Flag,
 				},
 				"@pattern": {
 					Name:     "@pattern",
-					Type:     ValueAnnotation,
+					Kind:     Value,
 					RawValue: true,
 				},
 				"@deprecated": {
 					Name: "@deprecated",
-					Type: FlagAnnotation,
+					Kind: Flag,
 				},
 				"@readOnly": {
 					Name: "@readOnly",
-					Type: FlagAnnotation,
+					Kind: Flag,
 				},
 				"@writeOnly": {
 					Name: "@writeOnly",
-					Type: FlagAnnotation,
+					Kind: Flag,
 				},
 				"@required": {
 					Name: "@required",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 				"@nullable": {
 					Name: "@nullable",
-					Type: ValueAnnotation,
+					Kind: Value,
 				},
 			},
 		},
 		"@schema": {
 			Name: "@schema",
-			Type: BlockAnnotation,
-			Children: map[string]*SchemaNode{
+			Kind: Block,
+			Children: map[string]*Def{
 				"@description": {
 					Name:              "@description",
-					Type:              ValueAnnotation,
+					Kind:              Value,
 					SupportsMultiline: true,
 				},
 				"@deprecated": {
 					Name: "@deprecated",
-					Type: FlagAnnotation,
+					Kind: Flag,
 				},
 			},
 		},
 		"@path": {
 			Name: "@path",
-			Type: MarkerAnnotation,
+			Kind: Marker,
 		},
 		"@query": {
 			Name: "@query",
-			Type: MarkerAnnotation,
+			Kind: Marker,
 		},
 		"@header": {
 			Name: "@header",
-			Type: MarkerAnnotation,
+			Kind: Marker,
 		},
 		"@cookie": {
 			Name: "@cookie",
-			Type: MarkerAnnotation,
+			Kind: Marker,
 		},
 	},
 }
 
+// Declaration is the grammar for annotations written inside a function body,
+// above a var declaration. The struct being declared is the body, so @body is
+// deliberately absent — naming one would contradict the struct it sits on.
+var Declaration = &Def{
+	Name: "root",
+	Kind: Block,
+	Children: map[string]*Def{
+		"@request": {
+			Name: "@request",
+			Kind: Block,
+			Children: map[string]*Def{
+				"@contentType": {
+					Name: "@contentType",
+					Kind: Value,
+				},
+				"@description": {
+					Name:              "@description",
+					Kind:              Value,
+					SupportsMultiline: true,
+				},
+				"@bind": {
+					Name: "@bind",
+					Kind: Value,
+				},
+			},
+		},
+		"@response": {
+			Name:        "@response",
+			Kind:        Block,
+			HasMetadata: true, // status code
+			Children: map[string]*Def{
+				"@contentType": {
+					Name: "@contentType",
+					Kind: Value,
+				},
+				"@description": {
+					Name:              "@description",
+					Kind:              Value,
+					SupportsMultiline: true,
+				},
+				"@header": {
+					Name:       "@header",
+					Kind:       Value,
+					Repeatable: true,
+				},
+				"@bind": {
+					Name: "@bind",
+					Kind: Value,
+				},
+			},
+		},
+		"@path":   {Name: "@path", Kind: Marker},
+		"@query":  {Name: "@query", Kind: Marker},
+		"@header": {Name: "@header", Kind: Marker},
+		"@cookie": {Name: "@cookie", Kind: Marker},
+	},
+}
+
 func init() {
-	// Initialize parent references in the schema tree
-	AnnotationSchema.InitializeParents()
+	Schema.InitializeParents()
+	Declaration.InitializeParents()
 }

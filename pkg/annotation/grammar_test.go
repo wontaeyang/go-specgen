@@ -1,30 +1,30 @@
-package schema
+package annotation
 
 import (
 	"testing"
 )
 
-func TestAnnotationSchema_Structure(t *testing.T) {
-	// Test that AnnotationSchema is properly initialized
-	if AnnotationSchema == nil {
-		t.Fatal("AnnotationSchema is nil")
+func TestSchema_Structure(t *testing.T) {
+	// Test that Schema is properly initialized
+	if Schema == nil {
+		t.Fatal("Schema is nil")
 	}
 
-	if AnnotationSchema.Name != "root" {
-		t.Errorf("AnnotationSchema.Name = %v, want root", AnnotationSchema.Name)
+	if Schema.Name != "root" {
+		t.Errorf("Schema.Name = %v, want root", Schema.Name)
 	}
 
 	// Test top-level annotations exist
 	topLevel := []string{"@api", "@endpoint", "@field", "@schema", "@path", "@query", "@header", "@cookie"}
 	for _, name := range topLevel {
-		if !AnnotationSchema.HasChild(name) {
-			t.Errorf("AnnotationSchema missing top-level annotation: %s", name)
+		if !Schema.HasChild(name) {
+			t.Errorf("Schema missing top-level annotation: %s", name)
 		}
 	}
 }
 
-func TestAnnotationSchema_API(t *testing.T) {
-	api := AnnotationSchema.GetChild("@api")
+func TestSchema_API(t *testing.T) {
+	api := Schema.GetChild("@api")
 	if api == nil {
 		t.Fatal("@api annotation not found")
 	}
@@ -56,8 +56,8 @@ func TestAnnotationSchema_API(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_Contact(t *testing.T) {
-	api := AnnotationSchema.GetChild("@api")
+func TestSchema_Contact(t *testing.T) {
+	api := Schema.GetChild("@api")
 	contact := api.GetChild("@contact")
 
 	if contact == nil {
@@ -65,8 +65,8 @@ func TestAnnotationSchema_Contact(t *testing.T) {
 	}
 
 	// All block annotations support inline format
-	if contact.Type != BlockAnnotation {
-		t.Error("@contact should be a BlockAnnotation")
+	if contact.Kind != Block {
+		t.Error("@contact should be a Block")
 	}
 
 	// @contact can be empty (no required children)
@@ -83,8 +83,8 @@ func TestAnnotationSchema_Contact(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_Endpoint(t *testing.T) {
-	endpoint := AnnotationSchema.GetChild("@endpoint")
+func TestSchema_Endpoint(t *testing.T) {
+	endpoint := Schema.GetChild("@endpoint")
 	if endpoint == nil {
 		t.Fatal("@endpoint annotation not found")
 	}
@@ -102,8 +102,8 @@ func TestAnnotationSchema_Endpoint(t *testing.T) {
 			continue
 		}
 
-		if node.Type != ReferenceAnnotation {
-			t.Errorf("@endpoint.%s should be ReferenceAnnotation", ref)
+		if node.Kind != Reference {
+			t.Errorf("@endpoint.%s should be Reference", ref)
 		}
 
 		if !node.Repeatable {
@@ -112,8 +112,8 @@ func TestAnnotationSchema_Endpoint(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_Response(t *testing.T) {
-	endpoint := AnnotationSchema.GetChild("@endpoint")
+func TestSchema_Response(t *testing.T) {
+	endpoint := Schema.GetChild("@endpoint")
 	response := endpoint.GetChild("@response")
 
 	if response == nil {
@@ -138,15 +138,15 @@ func TestAnnotationSchema_Response(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_Field(t *testing.T) {
-	field := AnnotationSchema.GetChild("@field")
+func TestSchema_Field(t *testing.T) {
+	field := Schema.GetChild("@field")
 	if field == nil {
 		t.Fatal("@field annotation not found")
 	}
 
 	// All block annotations support inline format
-	if field.Type != BlockAnnotation {
-		t.Error("@field should be a BlockAnnotation")
+	if field.Kind != Block {
+		t.Error("@field should be a Block")
 	}
 
 	// @field can be empty (no required children)
@@ -172,24 +172,24 @@ func TestAnnotationSchema_Field(t *testing.T) {
 		t.Fatal("@field missing @deprecated")
 	}
 
-	if deprecated.Type != FlagAnnotation {
-		t.Error("@deprecated should be FlagAnnotation")
+	if deprecated.Kind != Flag {
+		t.Error("@deprecated should be Flag")
 	}
 }
 
-func TestAnnotationSchema_MarkerAnnotations(t *testing.T) {
-	// @schema is now BlockAnnotation with optional children
+func TestSchema_MarkerAnnotations(t *testing.T) {
+	// @schema is now Block with optional children
 	markers := []string{"@path", "@query", "@header", "@cookie"}
 
 	for _, name := range markers {
-		node := AnnotationSchema.GetChild(name)
+		node := Schema.GetChild(name)
 		if node == nil {
 			t.Errorf("%s annotation not found", name)
 			continue
 		}
 
-		if node.Type != MarkerAnnotation {
-			t.Errorf("%s should be MarkerAnnotation, got %v", name, node.Type)
+		if node.Kind != Marker {
+			t.Errorf("%s should be Marker, got %v", name, node.Kind)
 		}
 
 		// Marker annotations have no children, so CanBeEmpty is true
@@ -203,14 +203,14 @@ func TestAnnotationSchema_MarkerAnnotations(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_SchemaBlock(t *testing.T) {
-	schema := AnnotationSchema.GetChild("@schema")
+func TestSchema_SchemaBlock(t *testing.T) {
+	schema := Schema.GetChild("@schema")
 	if schema == nil {
 		t.Fatal("@schema annotation not found")
 	}
 
-	if schema.Type != BlockAnnotation {
-		t.Errorf("@schema should be BlockAnnotation, got %v", schema.Type)
+	if schema.Kind != Block {
+		t.Errorf("@schema should be Block, got %v", schema.Kind)
 	}
 
 	// @schema can be empty (no required children)
@@ -229,8 +229,8 @@ func TestAnnotationSchema_SchemaBlock(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_Security(t *testing.T) {
-	api := AnnotationSchema.GetChild("@api")
+func TestSchema_Security(t *testing.T) {
+	api := Schema.GetChild("@api")
 	security := api.GetChild("@security")
 
 	if security == nil {
@@ -247,7 +247,7 @@ func TestAnnotationSchema_Security(t *testing.T) {
 		t.Fatal("@security missing @with")
 	}
 
-	if with.Type != SubCommand {
+	if with.Kind != SubCommand {
 		t.Error("@with should be SubCommand type")
 	}
 
@@ -268,11 +268,11 @@ func TestAnnotationSchema_Security(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_ParentReferences(t *testing.T) {
+func TestSchema_ParentReferences(t *testing.T) {
 	// Test that parent references were initialized
-	api := AnnotationSchema.GetChild("@api")
-	if api.Parent != AnnotationSchema {
-		t.Error("@api.Parent should be AnnotationSchema")
+	api := Schema.GetChild("@api")
+	if api.Parent != Schema {
+		t.Error("@api.Parent should be Schema")
 	}
 
 	title := api.GetChild("@title")
@@ -287,29 +287,29 @@ func TestAnnotationSchema_ParentReferences(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_Endpoint_AllChildren(t *testing.T) {
-	endpoint := AnnotationSchema.GetChild("@endpoint")
+func TestSchema_Endpoint_AllChildren(t *testing.T) {
+	endpoint := Schema.GetChild("@endpoint")
 	if endpoint == nil {
 		t.Fatal("@endpoint annotation not found")
 	}
 
 	tests := []struct {
 		name       string
-		annType    AnnotationType
+		annType    Kind
 		repeatable bool
 	}{
-		{"@operationID", ValueAnnotation, false},
-		{"@summary", ValueAnnotation, false},
-		{"@description", ValueAnnotation, false},
-		{"@tag", ReferenceAnnotation, true},
-		{"@deprecated", FlagAnnotation, false},
-		{"@auth", ValueAnnotation, false},
-		{"@path", ReferenceAnnotation, true},
-		{"@query", ReferenceAnnotation, true},
-		{"@header", ReferenceAnnotation, true},
-		{"@cookie", ReferenceAnnotation, true},
-		{"@request", BlockAnnotation, false},
-		{"@response", BlockAnnotation, true},
+		{"@operationID", Value, false},
+		{"@summary", Value, false},
+		{"@description", Value, false},
+		{"@tag", Reference, true},
+		{"@deprecated", Flag, false},
+		{"@auth", Value, false},
+		{"@path", Reference, true},
+		{"@query", Reference, true},
+		{"@header", Reference, true},
+		{"@cookie", Reference, true},
+		{"@request", Block, false},
+		{"@response", Block, true},
 	}
 
 	for _, tt := range tests {
@@ -318,8 +318,8 @@ func TestAnnotationSchema_Endpoint_AllChildren(t *testing.T) {
 			if node == nil {
 				t.Fatalf("@endpoint missing child: %s", tt.name)
 			}
-			if node.Type != tt.annType {
-				t.Errorf("@endpoint.%s type = %v, want %v", tt.name, node.Type, tt.annType)
+			if node.Kind != tt.annType {
+				t.Errorf("@endpoint.%s type = %v, want %v", tt.name, node.Kind, tt.annType)
 			}
 			if node.Repeatable != tt.repeatable {
 				t.Errorf("@endpoint.%s repeatable = %v, want %v", tt.name, node.Repeatable, tt.repeatable)
@@ -328,25 +328,25 @@ func TestAnnotationSchema_Endpoint_AllChildren(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_Request(t *testing.T) {
-	endpoint := AnnotationSchema.GetChild("@endpoint")
+func TestSchema_Request(t *testing.T) {
+	endpoint := Schema.GetChild("@endpoint")
 	request := endpoint.GetChild("@request")
 	if request == nil {
 		t.Fatal("@request annotation not found")
 	}
 
-	if request.Type != BlockAnnotation {
-		t.Errorf("@request type = %v, want BlockAnnotation", request.Type)
+	if request.Kind != Block {
+		t.Errorf("@request type = %v, want Block", request.Kind)
 	}
 
 	children := []struct {
 		name        string
-		annType     AnnotationType
+		annType     Kind
 		hasMetadata bool
 	}{
-		{"@contentType", ValueAnnotation, false},
-		{"@body", ValueAnnotation, true},
-		{"@bind", ValueAnnotation, false},
+		{"@contentType", Value, false},
+		{"@body", Value, true},
+		{"@bind", Value, false},
 	}
 
 	for _, tt := range children {
@@ -355,8 +355,8 @@ func TestAnnotationSchema_Request(t *testing.T) {
 			if node == nil {
 				t.Fatalf("@request missing child: %s", tt.name)
 			}
-			if node.Type != tt.annType {
-				t.Errorf("@request.%s type = %v, want %v", tt.name, node.Type, tt.annType)
+			if node.Kind != tt.annType {
+				t.Errorf("@request.%s type = %v, want %v", tt.name, node.Kind, tt.annType)
 			}
 			if node.HasMetadata != tt.hasMetadata {
 				t.Errorf("@request.%s hasMetadata = %v, want %v", tt.name, node.HasMetadata, tt.hasMetadata)
@@ -365,8 +365,8 @@ func TestAnnotationSchema_Request(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_Response_AllChildren(t *testing.T) {
-	endpoint := AnnotationSchema.GetChild("@endpoint")
+func TestSchema_Response_AllChildren(t *testing.T) {
+	endpoint := Schema.GetChild("@endpoint")
 	response := endpoint.GetChild("@response")
 	if response == nil {
 		t.Fatal("@response annotation not found")
@@ -374,14 +374,14 @@ func TestAnnotationSchema_Response_AllChildren(t *testing.T) {
 
 	children := []struct {
 		name       string
-		annType    AnnotationType
+		annType    Kind
 		repeatable bool
 	}{
-		{"@contentType", ValueAnnotation, false},
-		{"@body", ValueAnnotation, false},
-		{"@bind", ValueAnnotation, false},
-		{"@description", ValueAnnotation, false},
-		{"@header", ValueAnnotation, true},
+		{"@contentType", Value, false},
+		{"@body", Value, false},
+		{"@bind", Value, false},
+		{"@description", Value, false},
+		{"@header", Value, true},
 	}
 
 	for _, tt := range children {
@@ -390,8 +390,8 @@ func TestAnnotationSchema_Response_AllChildren(t *testing.T) {
 			if node == nil {
 				t.Fatalf("@response missing child: %s", tt.name)
 			}
-			if node.Type != tt.annType {
-				t.Errorf("@response.%s type = %v, want %v", tt.name, node.Type, tt.annType)
+			if node.Kind != tt.annType {
+				t.Errorf("@response.%s type = %v, want %v", tt.name, node.Kind, tt.annType)
 			}
 			if node.Repeatable != tt.repeatable {
 				t.Errorf("@response.%s repeatable = %v, want %v", tt.name, node.Repeatable, tt.repeatable)
@@ -412,8 +412,8 @@ func TestAnnotationSchema_Response_AllChildren(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_Field_AllChildren(t *testing.T) {
-	field := AnnotationSchema.GetChild("@field")
+func TestSchema_Field_AllChildren(t *testing.T) {
+	field := Schema.GetChild("@field")
 	if field == nil {
 		t.Fatal("@field annotation not found")
 	}
@@ -429,8 +429,8 @@ func TestAnnotationSchema_Field_AllChildren(t *testing.T) {
 			if node == nil {
 				t.Fatalf("@field missing child: %s", name)
 			}
-			if node.Type != ValueAnnotation {
-				t.Errorf("@field.%s type = %v, want ValueAnnotation", name, node.Type)
+			if node.Kind != Value {
+				t.Errorf("@field.%s type = %v, want Value", name, node.Kind)
 			}
 		})
 	}
@@ -442,8 +442,8 @@ func TestAnnotationSchema_Field_AllChildren(t *testing.T) {
 			if node == nil {
 				t.Fatalf("@field missing child: %s", name)
 			}
-			if node.Type != FlagAnnotation {
-				t.Errorf("@field.%s type = %v, want FlagAnnotation", name, node.Type)
+			if node.Kind != Flag {
+				t.Errorf("@field.%s type = %v, want Flag", name, node.Kind)
 			}
 		})
 	}
@@ -455,28 +455,28 @@ func TestAnnotationSchema_Field_AllChildren(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_API_AllChildren(t *testing.T) {
-	api := AnnotationSchema.GetChild("@api")
+func TestSchema_API_AllChildren(t *testing.T) {
+	api := Schema.GetChild("@api")
 	if api == nil {
 		t.Fatal("@api annotation not found")
 	}
 
 	expectedChildren := []struct {
 		name       string
-		annType    AnnotationType
+		annType    Kind
 		repeatable bool
 	}{
-		{"@title", ValueAnnotation, false},
-		{"@version", ValueAnnotation, false},
-		{"@description", ValueAnnotation, false},
-		{"@termsOfService", ValueAnnotation, false},
-		{"@contact", BlockAnnotation, false},
-		{"@license", BlockAnnotation, false},
-		{"@server", BlockAnnotation, true},
-		{"@securityScheme", BlockAnnotation, true},
-		{"@security", BlockAnnotation, true},
-		{"@tag", BlockAnnotation, true},
-		{"@defaultContentType", ValueAnnotation, false},
+		{"@title", Value, false},
+		{"@version", Value, false},
+		{"@description", Value, false},
+		{"@termsOfService", Value, false},
+		{"@contact", Block, false},
+		{"@license", Block, false},
+		{"@server", Block, true},
+		{"@securityScheme", Block, true},
+		{"@security", Block, true},
+		{"@tag", Block, true},
+		{"@defaultContentType", Value, false},
 	}
 
 	for _, tt := range expectedChildren {
@@ -485,8 +485,8 @@ func TestAnnotationSchema_API_AllChildren(t *testing.T) {
 			if node == nil {
 				t.Fatalf("@api missing child: %s", tt.name)
 			}
-			if node.Type != tt.annType {
-				t.Errorf("@api.%s type = %v, want %v", tt.name, node.Type, tt.annType)
+			if node.Kind != tt.annType {
+				t.Errorf("@api.%s type = %v, want %v", tt.name, node.Kind, tt.annType)
 			}
 			if node.Repeatable != tt.repeatable {
 				t.Errorf("@api.%s repeatable = %v, want %v", tt.name, node.Repeatable, tt.repeatable)
@@ -501,8 +501,8 @@ func TestAnnotationSchema_API_AllChildren(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_SecurityScheme(t *testing.T) {
-	api := AnnotationSchema.GetChild("@api")
+func TestSchema_SecurityScheme(t *testing.T) {
+	api := Schema.GetChild("@api")
 	scheme := api.GetChild("@securityScheme")
 	if scheme == nil {
 		t.Fatal("@securityScheme annotation not found")
@@ -534,15 +534,15 @@ func TestAnnotationSchema_SecurityScheme(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_License(t *testing.T) {
-	api := AnnotationSchema.GetChild("@api")
+func TestSchema_License(t *testing.T) {
+	api := Schema.GetChild("@api")
 	license := api.GetChild("@license")
 	if license == nil {
 		t.Fatal("@license annotation not found")
 	}
 
-	if license.Type != BlockAnnotation {
-		t.Errorf("@license type = %v, want BlockAnnotation", license.Type)
+	if license.Kind != Block {
+		t.Errorf("@license type = %v, want Block", license.Kind)
 	}
 
 	expectedChildren := []string{"@name", "@url"}
@@ -553,8 +553,8 @@ func TestAnnotationSchema_License(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_Tag(t *testing.T) {
-	api := AnnotationSchema.GetChild("@api")
+func TestSchema_Tag(t *testing.T) {
+	api := Schema.GetChild("@api")
 	tag := api.GetChild("@tag")
 	if tag == nil {
 		t.Fatal("@tag annotation not found")
@@ -577,8 +577,8 @@ func TestAnnotationSchema_Tag(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_Server(t *testing.T) {
-	api := AnnotationSchema.GetChild("@api")
+func TestSchema_Server(t *testing.T) {
+	api := Schema.GetChild("@api")
 	server := api.GetChild("@server")
 	if server == nil {
 		t.Fatal("@server annotation not found")
@@ -601,8 +601,8 @@ func TestAnnotationSchema_Server(t *testing.T) {
 	}
 }
 
-func TestAnnotationSchema_Integrity(t *testing.T) {
-	if err := AnnotationSchema.Validate(); err != nil {
+func TestSchema_Integrity(t *testing.T) {
+	if err := Schema.Validate(); err != nil {
 		t.Errorf("Schema integrity validation failed: %v", err)
 	}
 }
