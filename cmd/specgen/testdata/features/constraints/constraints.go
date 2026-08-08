@@ -35,14 +35,31 @@ type Measurement struct {
 	// @field { @description Bounded list without the uniqueness flag @minItems 2 @maxItems 4 }
 	Samples []int `json:"samples"`
 
+	// @field { @description Allowed sample counts @enum 1,5,10 }
+	AllowedCounts []int `json:"allowed_counts"`
+
+	// @field { @description Allowed units @enum mm,cm,m }
+	AllowedUnits []string `json:"allowed_units"`
+
 	// @field { @description Calibration secret, accepted but never returned @writeOnly }
 	CalibrationKey string `json:"calibration_key"`
+}
+
+// MeasurementQuery filters measurements, with the same enum shapes as a parameter.
+// @query
+type MeasurementQuery struct {
+	// @field { @description Filter by sample count @enum 1,5,10 }
+	Counts []int `query:"counts"`
+
+	// @field { @description Filter by unit @enum mm,cm,m }
+	Units []string `query:"units"`
 }
 
 // ListMeasurements returns measurements.
 //
 //	@endpoint GET /measurements {
 //	  @summary List measurements
+//	  @query MeasurementQuery
 //	  @response 200 { @body []Measurement }
 //	}
 func ListMeasurements(w http.ResponseWriter, r *http.Request) {}

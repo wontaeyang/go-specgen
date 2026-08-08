@@ -7,6 +7,31 @@ paths:
     /measurements:
         get:
             summary: List measurements
+            parameters:
+                - name: counts
+                  in: query
+                  description: Filter by sample count
+                  required: false
+                  schema:
+                    type: array
+                    items:
+                        type: integer
+                        enum:
+                            - 1
+                            - 5
+                            - 10
+                - name: units
+                  in: query
+                  description: Filter by unit
+                  required: false
+                  schema:
+                    type: array
+                    items:
+                        type: string
+                        enum:
+                            - mm
+                            - cm
+                            - m
             responses:
                 "200":
                     description: ""
@@ -61,6 +86,24 @@ components:
                     maxItems: 4
                     minItems: 2
                     description: Bounded list without the uniqueness flag
+                allowed_counts:
+                    type: array
+                    items:
+                        type: integer
+                        enum:
+                            - 1
+                            - 5
+                            - 10
+                    description: Allowed sample counts
+                allowed_units:
+                    type: array
+                    items:
+                        type: string
+                        enum:
+                            - mm
+                            - cm
+                            - m
+                    description: Allowed units
                 calibration_key:
                     type: string
                     description: Calibration secret, accepted but never returned
@@ -73,4 +116,6 @@ components:
                 - score
                 - labels
                 - samples
+                - allowed_counts
+                - allowed_units
                 - calibration_key
