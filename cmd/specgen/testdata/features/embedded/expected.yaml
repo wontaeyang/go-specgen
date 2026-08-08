@@ -23,9 +23,11 @@ components:
                     type: string
                 created_at:
                     type: string
-                revision:
-                    type: integer
-                secret:
+                meta:
+                    $ref: '#/components/schemas/Meta'
+                Label:
+                    type: string
+                slug:
                     type: string
                 title:
                     type: string
@@ -33,8 +35,9 @@ components:
             required:
                 - id
                 - created_at
-                - revision
-                - secret
+                - meta
+                - Label
+                - slug
                 - title
         Meta:
             type: object

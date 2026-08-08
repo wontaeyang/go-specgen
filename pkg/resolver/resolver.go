@@ -268,8 +268,7 @@ func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*
 		field := structType.Field(i)
 		tag := structType.Tag(i)
 
-		// Handle embedded (anonymous) fields by flattening
-		if field.Anonymous() {
+		if field.Anonymous() && flattensEmbedded(field, tag, SupportedTags...) {
 			embeddedFields, err := r.flattenEmbeddedField(field, annotations, visited)
 			if err != nil {
 				return nil, err
@@ -294,6 +293,50 @@ func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*
 	}
 
 	return fields, nil
+}
+
+// flattensEmbedded reports whether an embedded field's own fields should be
+// lifted into the enclosing struct.
+//
+// encoding/json flattens an embedded struct only when it is untagged. Every
+// other case is an ordinary field, and falls through to the normal field path:
+//
+//	Base              untagged struct      flatten
+//	Meta `json:"meta"`  tagged struct      a field named meta
+//	Hidden `json:"-"`   tagged "-"         skipped
+//	Label             untagged non-struct  a field named Label
+//	Slug `json:"slug"`  tagged non-struct   a field named slug
+//
+// The last two need no special handling: an embedded field's Go name is its
+// type name, so the ordinary naming path already produces the right key. Which
+// is why this asks one question rather than enumerating five cases.
+//
+// tagKeys is what makes the rule work for both callers: json (and xml) for
+// schema fields, the parameter kind for parameter fields.
+func flattensEmbedded(field *types.Var, tag string, tagKeys ...string) bool {
+	structTag := reflect.StructTag(tag)
+	for _, key := range tagKeys {
+		if _, tagged := structTag.Lookup(key); tagged {
+			return false
+		}
+	}
+
+	t := field.Type()
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+
+	// time.Time and friends are structs that serialize as scalars, so
+	// flattening them would spill their internals into the enclosing object.
+	if named, ok := t.(*types.Named); ok {
+		obj := named.Obj()
+		if obj.Pkg() != nil && isSpecialType(obj.Pkg().Path(), obj.Name()) {
+			return false
+		}
+	}
+
+	_, isStruct := t.Underlying().(*types.Struct)
+	return isStruct
 }
 
 // unwrapEmbeddedStruct unwraps a type (through pointers and named types) to get
@@ -396,8 +439,7 @@ func (r *Resolver) resolveParameterFields(structType *types.Struct, annotations 
 		field := structType.Field(i)
 		tag := structType.Tag(i)
 
-		// Handle embedded (anonymous) fields by flattening
-		if field.Anonymous() {
+		if field.Anonymous() && flattensEmbedded(field, tag, paramType) {
 			embeddedFields, err := r.flattenEmbeddedParamField(field, annotations, paramType, visited)
 			if err != nil {
 				return nil, err
