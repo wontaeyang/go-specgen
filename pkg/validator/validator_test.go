@@ -13,8 +13,8 @@ func TestNewValidator(t *testing.T) {
 		t.Fatal("NewValidator() returned nil")
 	}
 
-	if v.errors == nil {
-		t.Error("Validator.errors is nil")
+	if v.errs.Stage != "validation" {
+		t.Errorf("Validator.errs.Stage = %q, want %q", v.errs.Stage, "validation")
 	}
 }
 
@@ -988,40 +988,6 @@ func TestValidator_ValidateResponseStatusCode(t *testing.T) {
 	}
 }
 
-func TestMultiError_Error(t *testing.T) {
-	tests := []struct {
-		name   string
-		errors []error
-		want   string
-	}{
-		{
-			name: "single error",
-			errors: []error{
-				&ValidationError{Message: "test error"},
-			},
-			want: "test error",
-		},
-		{
-			name: "multiple errors",
-			errors: []error{
-				&ValidationError{Message: "error 1"},
-				&ValidationError{Message: "error 2"},
-			},
-			want: "2 validation errors",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			me := &MultiError{Errors: tt.errors}
-			got := me.Error()
-			if !strings.Contains(got, tt.want) {
-				t.Errorf("MultiError.Error() = %q, want to contain %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestValidator_ValidateEndpointTags(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -1078,24 +1044,24 @@ func TestValidator_ValidateEndpointTags(t *testing.T) {
 			v := NewValidator()
 			v.validateEndpointTags("@endpoint[GET /test]", tt.endpointTags, tt.apiTags)
 
-			if tt.wantError && len(v.errors) == 0 {
+			if tt.wantError && len(v.errs.Errors) == 0 {
 				t.Errorf("expected error but got none")
 			}
 
-			if !tt.wantError && len(v.errors) > 0 {
-				t.Errorf("expected no error but got: %v", v.errors)
+			if !tt.wantError && len(v.errs.Errors) > 0 {
+				t.Errorf("expected no error but got: %v", v.errs.Errors)
 			}
 
-			if tt.wantError && len(v.errors) > 0 {
+			if tt.wantError && len(v.errs.Errors) > 0 {
 				found := false
-				for _, err := range v.errors {
+				for _, err := range v.errs.Errors {
 					if strings.Contains(err.Error(), tt.errorMessage) {
 						found = true
 						break
 					}
 				}
 				if !found {
-					t.Errorf("expected error containing %q but got: %v", tt.errorMessage, v.errors)
+					t.Errorf("expected error containing %q but got: %v", tt.errorMessage, v.errs.Errors)
 				}
 			}
 		})
@@ -1187,24 +1153,24 @@ func TestValidator_ValidateEndpointWithTags(t *testing.T) {
 			v := NewValidator()
 			v.validateEndpoint(tt.endpoint, tt.pkg)
 
-			if tt.wantError && len(v.errors) == 0 {
+			if tt.wantError && len(v.errs.Errors) == 0 {
 				t.Errorf("expected error but got none")
 			}
 
-			if !tt.wantError && len(v.errors) > 0 {
-				t.Errorf("expected no error but got: %v", v.errors)
+			if !tt.wantError && len(v.errs.Errors) > 0 {
+				t.Errorf("expected no error but got: %v", v.errs.Errors)
 			}
 
-			if tt.wantError && tt.errorMsg != "" && len(v.errors) > 0 {
+			if tt.wantError && tt.errorMsg != "" && len(v.errs.Errors) > 0 {
 				found := false
-				for _, err := range v.errors {
+				for _, err := range v.errs.Errors {
 					if strings.Contains(err.Error(), tt.errorMsg) {
 						found = true
 						break
 					}
 				}
 				if !found {
-					t.Errorf("expected error containing %q but got: %v", tt.errorMsg, v.errors)
+					t.Errorf("expected error containing %q but got: %v", tt.errorMsg, v.errs.Errors)
 				}
 			}
 		})
@@ -1266,17 +1232,17 @@ func TestValidator_ValidateBindTarget(t *testing.T) {
 			}
 			v.validateBindTarget("@endpoint[GET /users].@request", tt.bind, schemas)
 
-			if tt.wantErr && len(v.errors) == 0 {
+			if tt.wantErr && len(v.errs.Errors) == 0 {
 				t.Error("expected error but got none")
 			}
 
-			if !tt.wantErr && len(v.errors) > 0 {
-				t.Errorf("expected no error but got: %v", v.errors)
+			if !tt.wantErr && len(v.errs.Errors) > 0 {
+				t.Errorf("expected no error but got: %v", v.errs.Errors)
 			}
 
-			if tt.wantErr && len(v.errors) > 0 {
-				if !strings.Contains(v.errors[0].Error(), tt.errMsg) {
-					t.Errorf("expected error containing %q, got: %v", tt.errMsg, v.errors[0])
+			if tt.wantErr && len(v.errs.Errors) > 0 {
+				if !strings.Contains(v.errs.Errors[0].Error(), tt.errMsg) {
+					t.Errorf("expected error containing %q, got: %v", tt.errMsg, v.errs.Errors[0])
 				}
 			}
 		})

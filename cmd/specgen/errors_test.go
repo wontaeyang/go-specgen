@@ -25,11 +25,12 @@ import (
 // `go vet ./...` refuse to descend into, which is exactly right for a package
 // with a chan field or a mis-tagged struct.
 //
-// How much one package can demonstrate depends on the stage that rejects it.
-// Parser and resolver errors abort the pipeline, so such a package shows
-// exactly one error and cannot show more. Validator errors accumulate, so those
-// packages can show several at once. A thin fixture is usually that limit
-// rather than neglect.
+// All three stages accumulate to the same depth: every bad annotation is
+// reported, not just the first one in a declaration. So a package here can show
+// as many errors as it has mistakes, and a fixture that shows one usually has
+// one. What still stops the run is the stage boundary -- the resolver never
+// sees a package that failed to parse -- so no fixture can show parse and
+// resolve errors together.
 const errorsDir = "testdata/errors"
 
 // TestErrorFixtures pins the message text of every failure specgen is supposed

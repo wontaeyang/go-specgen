@@ -77,7 +77,8 @@ func TestParser_ParseAPI(t *testing.T) {
 		Endpoints:   make([]*Endpoint, 0),
 	}
 
-	err = p.parseAPI(result)
+	p.parseAPI(result)
+	err = p.errs.Err()
 	if err != nil {
 		t.Fatalf("parseAPI() error = %v", err)
 	}
@@ -110,7 +111,8 @@ func TestParser_ParseAPI_MissingRequired(t *testing.T) {
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := p.parseAPI(result)
+	p.parseAPI(result)
+	err := p.errs.Err()
 	if err == nil {
 		t.Error("parseAPI() should error when @api is missing")
 	}
@@ -131,7 +133,8 @@ func TestParser_ParseSchemas(t *testing.T) {
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err = p.parseSchemas(result)
+	p.parseSchemas(result)
+	err = p.errs.Err()
 	if err != nil {
 		t.Fatalf("parseSchemas() error = %v", err)
 	}
@@ -139,7 +142,8 @@ func TestParser_ParseSchemas(t *testing.T) {
 	// parseStructFields is the single place that parses @field annotations, so
 	// it must be invoked to populate Schema.Fields — identical path to inline
 	// var structs.
-	if err := p.parseStructFields(result); err != nil {
+	p.parseStructFields(result)
+	if err := p.errs.Err(); err != nil {
 		t.Fatalf("parseStructFields() error = %v", err)
 	}
 
@@ -170,7 +174,8 @@ func TestParser_ParseParameters(t *testing.T) {
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err = p.parseParameters(result)
+	p.parseParameters(result)
+	err = p.errs.Err()
 	if err != nil {
 		t.Fatalf("parseParameters() error = %v", err)
 	}
@@ -253,7 +258,8 @@ func TestParser_ParseEndpoints(t *testing.T) {
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err = p.parseEndpoints(result)
+	p.parseEndpoints(result)
+	err = p.errs.Err()
 	if err != nil {
 		t.Fatalf("parseEndpoints() error = %v", err)
 	}
@@ -607,7 +613,8 @@ func TestParser_ParseEndpoint_Metadata(t *testing.T) {
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := p.parseEndpoints(result)
+	p.parseEndpoints(result)
+	err := p.errs.Err()
 	if err != nil {
 		t.Fatalf("parseEndpoints() error = %v", err)
 	}
@@ -655,7 +662,8 @@ func TestParser_ParseEndpoint_Tags(t *testing.T) {
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := p.parseEndpoints(result)
+	p.parseEndpoints(result)
+	err := p.errs.Err()
 	if err != nil {
 		t.Fatalf("parseEndpoints() error = %v", err)
 	}
@@ -699,7 +707,8 @@ func TestParser_ParseEndpoint_Request(t *testing.T) {
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := p.parseEndpoints(result)
+	p.parseEndpoints(result)
+	err := p.errs.Err()
 	if err != nil {
 		t.Fatalf("parseEndpoints() error = %v", err)
 	}
@@ -752,7 +761,8 @@ func TestParser_ParseEndpoint_Responses(t *testing.T) {
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := p.parseEndpoints(result)
+	p.parseEndpoints(result)
+	err := p.errs.Err()
 	if err != nil {
 		t.Fatalf("parseEndpoints() error = %v", err)
 	}
@@ -821,7 +831,8 @@ func TestParser_ParseAPI_Contact(t *testing.T) {
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := p.parseAPI(result)
+	p.parseAPI(result)
+	err := p.errs.Err()
 	if err != nil {
 		t.Fatalf("parseAPI() error = %v", err)
 	}
@@ -869,7 +880,8 @@ func TestParser_ParseAPI_Servers(t *testing.T) {
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := p.parseAPI(result)
+	p.parseAPI(result)
+	err := p.errs.Err()
 	if err != nil {
 		t.Fatalf("parseAPI() error = %v", err)
 	}
@@ -913,7 +925,8 @@ func TestParser_ParseAPI_SecuritySchemes(t *testing.T) {
 		Endpoints:  make([]*Endpoint, 0),
 	}
 
-	err := p.parseAPI(result)
+	p.parseAPI(result)
+	err := p.errs.Err()
 	if err != nil {
 		t.Fatalf("parseAPI() error = %v", err)
 	}
@@ -996,7 +1009,8 @@ func TestParser_ParseAPI_DefaultContentType(t *testing.T) {
 				Endpoints:  make([]*Endpoint, 0),
 			}
 
-			err := p.parseAPI(result)
+			p.parseAPI(result)
+			err := p.errs.Err()
 			if err != nil {
 				t.Fatalf("parseAPI() error = %v", err)
 			}
@@ -1031,7 +1045,8 @@ func TestParser_ParseBody_Simple(t *testing.T) {
 		Endpoints: make([]*Endpoint, 0),
 	}
 
-	err := p.parseEndpoints(result)
+	p.parseEndpoints(result)
+	err := p.errs.Err()
 	if err != nil {
 		t.Fatalf("parseEndpoints failed: %v", err)
 	}
@@ -1083,7 +1098,8 @@ func TestParser_ParseBody_WithBind(t *testing.T) {
 		Endpoints: make([]*Endpoint, 0),
 	}
 
-	err := p.parseEndpoints(result)
+	p.parseEndpoints(result)
+	err := p.errs.Err()
 	if err != nil {
 		t.Fatalf("parseEndpoints failed: %v", err)
 	}
@@ -1142,7 +1158,8 @@ func TestParser_ParseBody_WithArrayBind(t *testing.T) {
 		Endpoints: make([]*Endpoint, 0),
 	}
 
-	err := p.parseEndpoints(result)
+	p.parseEndpoints(result)
+	err := p.errs.Err()
 	if err != nil {
 		t.Fatalf("parseEndpoints failed: %v", err)
 	}
@@ -1190,7 +1207,8 @@ func TestParser_ParseBody_Request(t *testing.T) {
 		Endpoints: make([]*Endpoint, 0),
 	}
 
-	err := p.parseEndpoints(result)
+	p.parseEndpoints(result)
+	err := p.errs.Err()
 	if err != nil {
 		t.Fatalf("parseEndpoints failed: %v", err)
 	}

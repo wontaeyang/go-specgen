@@ -8,36 +8,22 @@ import (
 	"strings"
 
 	"github.com/wontaeyang/go-specgen/pkg/resolver"
+	"github.com/wontaeyang/go-specgen/pkg/specerr"
 )
 
 // Validator validates business rules for the resolved package
 type Validator struct {
-	errors []error
-}
-
-// ValidationError represents a validation error
-type ValidationError struct {
-	Message string
-	Path    string
-}
-
-func (e *ValidationError) Error() string {
-	if e.Path != "" {
-		return fmt.Sprintf("%s: %s", e.Path, e.Message)
-	}
-	return e.Message
+	errs specerr.List
 }
 
 // NewValidator creates a new validator
 func NewValidator() *Validator {
-	return &Validator{
-		errors: make([]error, 0),
-	}
+	return &Validator{errs: specerr.List{Stage: "validation"}}
 }
 
 // Validate validates the resolved package
 func (v *Validator) Validate(pkg *resolver.Package) error {
-	v.errors = make([]error, 0)
+	v.errs = specerr.List{Stage: "validation"}
 
 	// Validate API
 	if pkg.API == nil {
@@ -59,42 +45,17 @@ func (v *Validator) Validate(pkg *resolver.Package) error {
 		v.validateParameter(name, pkg.Parameters[name])
 	}
 
-	// Validate endpoints
+	// Endpoints are a slice, ordered by the parser. Nothing to sort here.
 	for _, endpoint := range pkg.Endpoints {
 		v.validateEndpoint(endpoint, pkg)
 	}
 
-	// Return errors if any
-	if len(v.errors) > 0 {
-		return &MultiError{Errors: v.errors}
-	}
-
-	return nil
-}
-
-// MultiError contains multiple validation errors
-type MultiError struct {
-	Errors []error
-}
-
-func (e *MultiError) Error() string {
-	if len(e.Errors) == 1 {
-		return e.Errors[0].Error()
-	}
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%d validation errors:\n", len(e.Errors)))
-	for i, err := range e.Errors {
-		sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, err.Error()))
-	}
-	return sb.String()
+	return v.errs.Err()
 }
 
 // addError adds a validation error
 func (v *Validator) addError(path, message string) {
-	v.errors = append(v.errors, &ValidationError{
-		Path:    path,
-		Message: message,
-	})
+	v.errs.Add(path, message)
 }
 
 // validateAPI validates API info

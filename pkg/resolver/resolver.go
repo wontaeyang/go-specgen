@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/wontaeyang/go-specgen/pkg/parser"
+	"github.com/wontaeyang/go-specgen/pkg/specerr"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -68,6 +69,17 @@ type Resolver struct {
 	// rather than threaded through every resolve function, since it is fixed
 	// for the life of the resolver.
 	schemaNames map[string]bool
+
+	// errs accumulates everything that failed to resolve.
+	errs specerr.List
+
+	// path names the declaration being resolved right now, so a field error
+	// raised several calls deep can say which schema or endpoint it belongs to.
+	// Held here for the same reason schemaNames is: threading it would touch
+	// every field-resolving function and the embedded-flattening recursion
+	// between them, to carry a value that is constant for one declaration.
+	// Resolve sets it, in the three places it moves to a new declaration.
+	path string
 }
 
 // NewResolver creates a resolver for an already-parsed package.
@@ -86,10 +98,21 @@ func NewResolver(parsed *parser.Package) *Resolver {
 		parsed:      parsed,
 		pkg:         parsed.Pkg,
 		schemaNames: schemaNames,
+		errs:        specerr.List{Stage: "resolve"},
 	}
 }
 
-// Resolve resolves all types in the parsed package
+// Resolve resolves all types in the parsed package.
+//
+// Like the parser, it accumulates and keeps going, down to the individual
+// field: a struct with four unresolvable fields reports four. The maps are
+// walked in name order because otherwise which failure appeared -- back when the
+// first one returned -- was down to Go's map iteration.
+//
+// Nothing here reports on an earlier declaration's absence: a schema that failed
+// to resolve is simply missing from the map, and both later loops treat a
+// missing entry as nothing to do. Saying "unknown schema" about it is the
+// validator's job, and the validator never runs on a package that failed here.
 func (r *Resolver) Resolve() (*Package, error) {
 	parsed := r.parsed
 
@@ -106,19 +129,26 @@ func (r *Resolver) Resolve() (*Package, error) {
 	}
 
 	// Resolve schemas
-	for name, schema := range parsed.Schemas {
-		resolvedSchema, err := r.resolveSchema(schema)
+	for _, name := range slices.Sorted(maps.Keys(parsed.Schemas)) {
+		r.path = fmt.Sprintf("@schema[%s]", name)
+
+		resolvedSchema, err := r.resolveSchema(parsed.Schemas[name])
 		if err != nil {
-			return nil, fmt.Errorf("failed to resolve schema %s: %w", name, err)
+			r.errs.Wrap(r.path, err)
+			continue
 		}
 		resolved.Schemas[name] = resolvedSchema
 	}
 
 	// Resolve parameters
-	for name, param := range parsed.Parameters {
+	for _, name := range slices.Sorted(maps.Keys(parsed.Parameters)) {
+		param := parsed.Parameters[name]
+		r.path = fmt.Sprintf("@%s[%s]", param.Type, name)
+
 		resolvedParam, err := r.resolveParameter(param)
 		if err != nil {
-			return nil, fmt.Errorf("failed to resolve parameter %s: %w", name, err)
+			r.errs.Wrap(r.path, err)
+			continue
 		}
 		resolved.Parameters[name] = resolvedParam
 	}
@@ -128,12 +158,20 @@ func (r *Resolver) Resolve() (*Package, error) {
 	if resolved.API != nil {
 		defaultContentType = resolved.API.DefaultContentType
 	}
+	// Endpoints are already in parser order, which is sorted by function name.
 	for _, endpoint := range parsed.Endpoints {
+		r.path = fmt.Sprintf("@endpoint[%s %s]", endpoint.Method, endpoint.Path)
+
 		resolvedEndpoint, err := r.resolveEndpoint(endpoint, resolved.Parameters, resolved.Schemas, defaultContentType)
 		if err != nil {
-			return nil, fmt.Errorf("failed to resolve endpoint %s %s: %w", endpoint.Method, endpoint.Path, err)
+			r.errs.Wrap(r.path, err)
+			continue
 		}
 		resolved.Endpoints = append(resolved.Endpoints, resolvedEndpoint)
+	}
+
+	if err := r.errs.Err(); err != nil {
+		return nil, err
 	}
 
 	return resolved, nil
@@ -279,10 +317,13 @@ func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*
 
 		fieldAnnotation := findAnnotation(annotations, field.Name())
 
-		// Resolve field type
+		// Resolve field type. A field that cannot resolve is recorded and
+		// skipped rather than ending the struct, so a type mistake repeated
+		// across several fields is reported once per field instead of once.
 		resolvedField, err := r.resolveField(field, tag, fieldAnnotation)
 		if err != nil {
-			return nil, fmt.Errorf("failed to resolve field %s: %w", field.Name(), err)
+			r.errs.Addf(r.path+"."+field.Name(), "%s", err)
+			continue
 		}
 		// Skip fields that should be omitted (e.g., json:"-")
 		if resolvedField == nil {
@@ -472,10 +513,13 @@ func (r *Resolver) resolveParameterFields(structType *types.Struct, annotations 
 
 		fieldAnnotation := findAnnotation(annotations, field.Name())
 
-		// Resolve field type
+		// Resolve field type. Recorded and skipped, for the same reason as in
+		// resolveSchemaFields: mis-tagging one field of a parameter struct
+		// usually means mis-tagging several.
 		resolvedField, err := r.resolveFieldWithParamType(field, tag, fieldAnnotation, paramType)
 		if err != nil {
-			return nil, fmt.Errorf("failed to resolve field %s: %w", field.Name(), err)
+			r.errs.Addf(r.path+"."+field.Name(), "%s", err)
+			continue
 		}
 		// Skip fields that should be omitted
 		if resolvedField == nil {

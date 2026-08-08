@@ -1,1 +1,1 @@
-parse: failed to parse struct fields: failed to parse inline @field for Widget.ID: unknown annotation @multipleOf in @field
+parse: @field[Widget.ID]: unknown annotation @multipleOf in @field
