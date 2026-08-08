@@ -88,14 +88,14 @@ func NewResolver(parsed *parser.Package) *Resolver {
 }
 
 // Resolve resolves all types in the parsed package
-func (r *Resolver) Resolve() (*ResolvedPackage, error) {
+func (r *Resolver) Resolve() (*Package, error) {
 	parsed := r.parsed
 
-	resolved := &ResolvedPackage{
+	resolved := &Package{
 		PackageName: parsed.PackageName,
-		Schemas:     make(map[string]*ResolvedSchema),
-		Parameters:  make(map[string]*ResolvedParameter),
-		Endpoints:   make([]*ResolvedEndpoint, 0),
+		Schemas:     make(map[string]*Schema),
+		Parameters:  make(map[string]*ParameterStruct),
+		Endpoints:   make([]*Endpoint, 0),
 	}
 
 	// Resolve API info (no type resolution needed, just copy)
@@ -138,8 +138,8 @@ func (r *Resolver) Resolve() (*ResolvedPackage, error) {
 }
 
 // resolveAPI copies API info (no type resolution needed)
-func (r *Resolver) resolveAPI(api *parser.APIInfo) *ResolvedAPI {
-	resolved := &ResolvedAPI{
+func (r *Resolver) resolveAPI(api *parser.APIInfo) *API {
+	resolved := &API{
 		Title:           api.Title,
 		Version:         api.Version,
 		Description:     api.Description,
@@ -215,13 +215,13 @@ func (r *Resolver) resolveAPI(api *parser.APIInfo) *ResolvedAPI {
 
 // resolveSchema resolves a schema by looking up the Go struct and resolving its fields
 // schemaNames contains all known @schema type names for detecting unresolved struct references
-func (r *Resolver) resolveSchema(schema *parser.Schema) (*ResolvedSchema, error) {
-	resolved := &ResolvedSchema{
+func (r *Resolver) resolveSchema(schema *parser.Schema) (*Schema, error) {
+	resolved := &Schema{
 		Name:        schema.Name,
 		GoTypeName:  schema.GoTypeName,
 		Description: schema.Description,
 		Deprecated:  schema.Deprecated,
-		Fields:      make([]*ResolvedField, 0),
+		Fields:      make([]*Field, 0),
 		IsGeneric:   schema.IsGeneric,
 		IsTypeAlias: schema.IsTypeAlias,
 		AliasOf:     schema.AliasOf,
@@ -255,12 +255,12 @@ func (r *Resolver) resolveSchema(schema *parser.Schema) (*ResolvedSchema, error)
 
 // resolveSchemaFields resolves fields from a struct type, flattening embedded structs.
 // visited tracks type names to prevent infinite recursion from circular embedding.
-func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*parser.Field, visited map[string]bool) ([]*ResolvedField, error) {
+func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*parser.Field, visited map[string]bool) ([]*Field, error) {
 	if visited == nil {
 		visited = make(map[string]bool)
 	}
 
-	var fields []*ResolvedField
+	var fields []*Field
 
 	for i := 0; i < structType.NumFields(); i++ {
 		field := structType.Field(i)
@@ -338,7 +338,7 @@ func unwrapEmbeddedStruct(t types.Type, visited map[string]bool) (st *types.Stru
 }
 
 // flattenEmbeddedField resolves an embedded struct field and returns its flattened fields.
-func (r *Resolver) flattenEmbeddedField(field *types.Var, annotations []*parser.Field, visited map[string]bool) ([]*ResolvedField, error) {
+func (r *Resolver) flattenEmbeddedField(field *types.Var, annotations []*parser.Field, visited map[string]bool) ([]*Field, error) {
 	embeddedStruct, cleanup := unwrapEmbeddedStruct(field.Type(), visited)
 	defer cleanup()
 	if embeddedStruct == nil {
@@ -360,12 +360,12 @@ func extractTypeArg(aliasOf string) string {
 }
 
 // resolveParameter resolves a parameter struct
-func (r *Resolver) resolveParameter(param *parser.Parameter) (*ResolvedParameter, error) {
-	resolved := &ResolvedParameter{
+func (r *Resolver) resolveParameter(param *parser.Parameter) (*ParameterStruct, error) {
+	resolved := &ParameterStruct{
 		Name:       param.Name,
 		Type:       string(param.Type),
 		GoTypeName: param.GoTypeName,
-		Fields:     make([]*ResolvedField, 0),
+		Fields:     make([]*Field, 0),
 	}
 
 	// Find the Go struct
@@ -390,12 +390,12 @@ func (r *Resolver) resolveParameter(param *parser.Parameter) (*ResolvedParameter
 }
 
 // resolveParameterFields resolves fields from a parameter struct, flattening embedded structs.
-func (r *Resolver) resolveParameterFields(structType *types.Struct, annotations []*parser.Field, paramType string, visited map[string]bool) ([]*ResolvedField, error) {
+func (r *Resolver) resolveParameterFields(structType *types.Struct, annotations []*parser.Field, paramType string, visited map[string]bool) ([]*Field, error) {
 	if visited == nil {
 		visited = make(map[string]bool)
 	}
 
-	var fields []*ResolvedField
+	var fields []*Field
 
 	for i := 0; i < structType.NumFields(); i++ {
 		field := structType.Field(i)
@@ -437,7 +437,7 @@ func (r *Resolver) resolveParameterFields(structType *types.Struct, annotations 
 }
 
 // flattenEmbeddedParamField resolves an embedded struct field for parameters.
-func (r *Resolver) flattenEmbeddedParamField(field *types.Var, annotations []*parser.Field, paramType string, visited map[string]bool) ([]*ResolvedField, error) {
+func (r *Resolver) flattenEmbeddedParamField(field *types.Var, annotations []*parser.Field, paramType string, visited map[string]bool) ([]*Field, error) {
 	embeddedStruct, cleanup := unwrapEmbeddedStruct(field.Type(), visited)
 	defer cleanup()
 	if embeddedStruct == nil {
@@ -451,7 +451,7 @@ func (r *Resolver) flattenEmbeddedParamField(field *types.Var, annotations []*pa
 //
 // Returns nil, nil when the field should not appear at all: unexported, or
 // tagged json:"-".
-func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser.Field) (*ResolvedField, error) {
+func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser.Field) (*Field, error) {
 	// Unexported fields cannot be serialized.
 	if !field.Exported() {
 		return nil, nil
@@ -468,7 +468,7 @@ func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser
 	// a field can never appear as null on the wire.
 	omitted := omitsWhenEmpty(tag, field.Type())
 
-	resolved := &ResolvedField{
+	resolved := &Field{
 		Name:     fieldName,
 		GoName:   field.Name(),
 		GoType:   field.Type().String(),
@@ -488,8 +488,8 @@ func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser
 // Annotations do not reach here yet: the parser harvests @field comments only
 // at the top level of a struct, so nested ones are parsed and dropped. That is
 // bug #4, fixed separately.
-func (r *Resolver) resolveAnonymousFields(structType *types.Struct) []*ResolvedField {
-	fields := make([]*ResolvedField, 0, structType.NumFields())
+func (r *Resolver) resolveAnonymousFields(structType *types.Struct) []*Field {
+	fields := make([]*Field, 0, structType.NumFields())
 
 	for i := 0; i < structType.NumFields(); i++ {
 		field := structType.Field(i)
@@ -543,7 +543,7 @@ func canBeEmpty(fieldType types.Type) bool {
 
 // resolveFieldWithParamType resolves a field for a parameter with the appropriate struct tag
 // Returns nil, nil if the field should be skipped (e.g., json:"-" for schema fields or unexported fields)
-func (r *Resolver) resolveFieldWithParamType(field *types.Var, tag string, annotation *parser.Field, paramType string) (*ResolvedField, error) {
+func (r *Resolver) resolveFieldWithParamType(field *types.Var, tag string, annotation *parser.Field, paramType string) (*Field, error) {
 	// Skip unexported (private) fields - they cannot be serialized
 	if !field.Exported() {
 		return nil, nil
@@ -574,7 +574,7 @@ func (r *Resolver) resolveFieldWithParamType(field *types.Var, tag string, annot
 		tagName = field.Name()
 	}
 
-	resolved := &ResolvedField{
+	resolved := &Field{
 		Name:   tagName,
 		GoName: field.Name(),
 		GoType: field.Type().String(),
@@ -612,7 +612,7 @@ func (r *Resolver) resolveFieldWithParamType(field *types.Var, tag string, annot
 }
 
 // applyAnnotationOverrides applies @field annotation values onto a resolved field
-func applyAnnotationOverrides(resolved *ResolvedField, annotation *parser.Field) {
+func applyAnnotationOverrides(resolved *Field, annotation *parser.Field) {
 	if annotation == nil {
 		return
 	}
@@ -679,8 +679,8 @@ func applyAnnotationOverrides(resolved *ResolvedField, annotation *parser.Field)
 }
 
 // resolveEndpoint resolves an endpoint
-func (r *Resolver) resolveEndpoint(endpoint *parser.Endpoint, parameters map[string]*ResolvedParameter, schemas map[string]*ResolvedSchema, defaultContentType string) (*ResolvedEndpoint, error) {
-	resolved := &ResolvedEndpoint{
+func (r *Resolver) resolveEndpoint(endpoint *parser.Endpoint, parameters map[string]*ParameterStruct, schemas map[string]*Schema, defaultContentType string) (*Endpoint, error) {
+	resolved := &Endpoint{
 		FuncName:        endpoint.FuncName,
 		Method:          endpoint.Method,
 		Path:            endpoint.Path,
@@ -690,12 +690,12 @@ func (r *Resolver) resolveEndpoint(endpoint *parser.Endpoint, parameters map[str
 		Tags:            endpoint.Tags,
 		Deprecated:      endpoint.Deprecated,
 		Auth:            endpoint.Auth,
-		Responses:       make(map[string]*ResolvedResponse),
-		PathParams:      make([]*ResolvedParameter, 0),
-		QueryParams:     make([]*ResolvedParameter, 0),
-		HeaderParams:    make([]*ResolvedParameter, 0),
-		CookieParams:    make([]*ResolvedParameter, 0),
-		InlineResponses: make(map[string]*ResolvedInlineBody),
+		Responses:       make(map[string]*Response),
+		PathParams:      make([]*ParameterStruct, 0),
+		QueryParams:     make([]*ParameterStruct, 0),
+		HeaderParams:    make([]*ParameterStruct, 0),
+		CookieParams:    make([]*ParameterStruct, 0),
+		InlineResponses: make(map[string]*InlineBody),
 	}
 
 	// Resolve request body
@@ -707,7 +707,7 @@ func (r *Resolver) resolveEndpoint(endpoint *parser.Endpoint, parameters map[str
 		if contentType == "" {
 			contentType = "application/json" // Fallback
 		}
-		resolved.Request = &ResolvedRequestBody{
+		resolved.Request = &RequestBody{
 			ContentType: contentType,
 			Body:        r.resolveBody(endpoint.Request.Body, schemas),
 			Required:    true, // Default to required
@@ -725,7 +725,7 @@ func (r *Resolver) resolveEndpoint(endpoint *parser.Endpoint, parameters map[str
 			contentType = "application/json" // Fallback
 		}
 
-		resolvedResponse := &ResolvedResponse{
+		resolvedResponse := &Response{
 			StatusCode:  response.StatusCode,
 			Description: response.Description,
 			ContentType: contentType,
@@ -839,13 +839,13 @@ func resolveFieldNameFromTag(tag string, goFieldName string) string {
 	return goFieldName
 }
 
-// resolveBody resolves a parser.Body to a ResolvedBody
-func (r *Resolver) resolveBody(body *parser.Body, schemas map[string]*ResolvedSchema) *ResolvedBody {
+// resolveBody resolves a parser.Body to a Body
+func (r *Resolver) resolveBody(body *parser.Body, schemas map[string]*Schema) *Body {
 	if body == nil {
 		return nil
 	}
 
-	resolved := &ResolvedBody{
+	resolved := &Body{
 		Schema: body.Schema,
 		Type:   r.resolveBodyType(body.Schema),
 	}
@@ -884,13 +884,13 @@ func (r *Resolver) resolveBodyType(schema string) *TypeRef {
 	return &TypeRef{Shape: ShapeRef, Ref: schema}
 }
 
-// resolveBindTarget resolves a parser.BindTarget to a ResolvedBindTarget
-func (r *Resolver) resolveBindTarget(bind *parser.BindTarget, schemas map[string]*ResolvedSchema) *ResolvedBindTarget {
+// resolveBindTarget resolves a parser.BindTarget to a BindTarget
+func (r *Resolver) resolveBindTarget(bind *parser.BindTarget, schemas map[string]*Schema) *BindTarget {
 	if bind == nil {
 		return nil
 	}
 
-	resolved := &ResolvedBindTarget{
+	resolved := &BindTarget{
 		Wrapper: bind.Wrapper,
 		Field:   bind.Field,
 	}
@@ -905,9 +905,9 @@ func (r *Resolver) resolveBindTarget(bind *parser.BindTarget, schemas map[string
 
 // resolveInlineDeclarations resolves inline struct declarations from function body.
 // @query/@path/@header/@cookie are repeatable per schema — every inline struct in
-// each category is resolved and its fields concatenated into one *ResolvedInlineParams
+// each category is resolved and its fields concatenated into one *InlineParams
 // (the downstream generator/validator consume a flat Fields list).
-func (r *Resolver) resolveInlineDeclarations(endpoint *ResolvedEndpoint, inlines *parser.FuncInlineInfo, parameters map[string]*ResolvedParameter, schemas map[string]*ResolvedSchema, defaultContentType string) error {
+func (r *Resolver) resolveInlineDeclarations(endpoint *Endpoint, inlines *parser.FuncInlineInfo, parameters map[string]*ParameterStruct, schemas map[string]*Schema, defaultContentType string) error {
 	mergedPath, err := r.mergeInlineParams(inlines.Path, "path")
 	if err != nil {
 		return err
@@ -991,15 +991,15 @@ func (r *Resolver) inlineStructType(info *parser.InlineStructInfo) (*types.Struc
 
 // mergeInlineParams resolves every inline struct in a repeatable category (e.g.
 // all inline @query structs declared in one handler) and concatenates their fields
-// into a single *ResolvedInlineParams. Returns nil when no inline structs exist
+// into a single *InlineParams. Returns nil when no inline structs exist
 // for the category — preserving the "nil means none" contract downstream code relies on.
 // OpenAPI emits one flat parameters array per operation regardless of how many
 // inline structs the handler declared, so the merge happens here.
-func (r *Resolver) mergeInlineParams(infos []*parser.InlineStructInfo, paramType string) (*ResolvedInlineParams, error) {
+func (r *Resolver) mergeInlineParams(infos []*parser.InlineStructInfo, paramType string) (*InlineParams, error) {
 	if len(infos) == 0 {
 		return nil, nil
 	}
-	merged := &ResolvedInlineParams{}
+	merged := &InlineParams{}
 	for _, info := range infos {
 		params, err := r.resolveInlineParams(info, paramType)
 		if err != nil {
@@ -1019,7 +1019,7 @@ func (r *Resolver) mergeInlineParams(infos []*parser.InlineStructInfo, paramType
 // resolveInlineParams resolves an inline parameter struct via the same
 // *types.Struct + parsed *Field path as named parameter structs — no AST walk,
 // no resolver-side @field parsing.
-func (r *Resolver) resolveInlineParams(info *parser.InlineStructInfo, paramType string) (*ResolvedInlineParams, error) {
+func (r *Resolver) resolveInlineParams(info *parser.InlineStructInfo, paramType string) (*InlineParams, error) {
 	if info == nil {
 		return nil, nil
 	}
@@ -1034,14 +1034,14 @@ func (r *Resolver) resolveInlineParams(info *parser.InlineStructInfo, paramType 
 		return nil, err
 	}
 
-	return &ResolvedInlineParams{
+	return &InlineParams{
 		Fields: fields,
 	}, nil
 }
 
 // resolveInlineBody resolves an inline request/response body struct using parsed annotation.
 // Uses the same *types.Struct + parsed *Field path as @schema structs.
-func (r *Resolver) resolveInlineBody(info *parser.InlineStructInfo, parsed *parser.ParsedAnnotation, parameters map[string]*ResolvedParameter, schemas map[string]*ResolvedSchema, defaultContentType string) (*ResolvedInlineBody, error) {
+func (r *Resolver) resolveInlineBody(info *parser.InlineStructInfo, parsed *parser.ParsedAnnotation, parameters map[string]*ParameterStruct, schemas map[string]*Schema, defaultContentType string) (*InlineBody, error) {
 	if info == nil {
 		return nil, nil
 	}
@@ -1061,7 +1061,7 @@ func (r *Resolver) resolveInlineBody(info *parser.InlineStructInfo, parsed *pars
 		return nil, err
 	}
 
-	resolved := &ResolvedInlineBody{
+	resolved := &InlineBody{
 		Fields: fields,
 	}
 

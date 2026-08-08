@@ -102,7 +102,7 @@ func TestResolver_ResolveSchema(t *testing.T) {
 	}
 
 	// Check specific fields
-	var idField, emailField *ResolvedField
+	var idField, emailField *Field
 	for _, field := range resolved.Fields {
 		switch field.GoName {
 		case "ID":
@@ -311,7 +311,7 @@ func TestResolver_ResolveEndpoint(t *testing.T) {
 	resolver := newTestResolver(t, "../parser/testdata")
 
 	// Resolve schemas first
-	schemas := make(map[string]*ResolvedSchema)
+	schemas := make(map[string]*Schema)
 	for name, schema := range resolver.parsed.Schemas {
 		resolved, err := resolver.resolveSchema(schema)
 		if err != nil {
@@ -321,7 +321,7 @@ func TestResolver_ResolveEndpoint(t *testing.T) {
 	}
 
 	// Resolve parameters
-	parameters := make(map[string]*ResolvedParameter)
+	parameters := make(map[string]*ParameterStruct)
 	for name, param := range resolver.parsed.Parameters {
 		resolved, err := resolver.resolveParameter(param)
 		if err != nil {
@@ -465,7 +465,7 @@ func TestResolver_InlineDeclarations(t *testing.T) {
 	}
 
 	// Find GetUser endpoint
-	var getUserEndpoint *ResolvedEndpoint
+	var getUserEndpoint *Endpoint
 	for _, ep := range resolved.Endpoints {
 		if ep.FuncName == "GetUser" {
 			getUserEndpoint = ep
@@ -526,7 +526,7 @@ func TestResolver_InlineDeclarations(t *testing.T) {
 	}
 
 	// Find ListUsers endpoint
-	var listUsersEndpoint *ResolvedEndpoint
+	var listUsersEndpoint *Endpoint
 	for _, ep := range resolved.Endpoints {
 		if ep.FuncName == "ListUsers" {
 			listUsersEndpoint = ep
@@ -768,7 +768,7 @@ func TestContentTypePrecedence(t *testing.T) {
 				},
 			}
 
-			resolved, err := resolver.resolveEndpoint(endpoint, map[string]*ResolvedParameter{}, map[string]*ResolvedSchema{}, tt.defaultType)
+			resolved, err := resolver.resolveEndpoint(endpoint, map[string]*ParameterStruct{}, map[string]*Schema{}, tt.defaultType)
 			if err != nil {
 				t.Fatalf("resolveEndpoint() error = %v", err)
 			}
@@ -804,7 +804,7 @@ func TestResolver_PointerImpliesNotRequired(t *testing.T) {
 	}
 
 	// Build field lookup
-	fields := make(map[string]*ResolvedField)
+	fields := make(map[string]*Field)
 	for _, f := range resolved.Fields {
 		fields[f.Name] = f
 	}
@@ -868,7 +868,7 @@ func TestResolver_EmbeddedStructFlattening(t *testing.T) {
 	}
 
 	// Build field lookup
-	fields := make(map[string]*ResolvedField)
+	fields := make(map[string]*Field)
 	for _, f := range resolved.Fields {
 		fields[f.Name] = f
 	}
@@ -909,7 +909,7 @@ func TestResolver_EmbeddedPtrFlattening(t *testing.T) {
 		t.Fatalf("resolveSchema() error = %v", err)
 	}
 
-	fields := make(map[string]*ResolvedField)
+	fields := make(map[string]*Field)
 	for _, f := range resolved.Fields {
 		fields[f.Name] = f
 	}
@@ -943,7 +943,7 @@ func TestResolver_NestedEmbedFlattening(t *testing.T) {
 		t.Fatalf("resolveSchema() error = %v", err)
 	}
 
-	fields := make(map[string]*ResolvedField)
+	fields := make(map[string]*Field)
 	for _, f := range resolved.Fields {
 		fields[f.Name] = f
 	}
@@ -996,7 +996,7 @@ func TestResolver_EmbeddedParameterFlattening(t *testing.T) {
 		t.Fatalf("resolveParameter() error = %v", err)
 	}
 
-	fields := make(map[string]*ResolvedField)
+	fields := make(map[string]*Field)
 	for _, f := range resolved.Fields {
 		fields[f.Name] = f
 	}
@@ -1199,7 +1199,7 @@ func TestApplyAnnotationOverrides_RequiredNullable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resolved := &ResolvedField{
+			resolved := &Field{
 				Required: tt.startRequired,
 				Nullable: tt.startNullable,
 			}

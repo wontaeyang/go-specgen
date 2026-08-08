@@ -1,17 +1,17 @@
 package resolver
 
-// ResolvedPackage contains the fully resolved parsed package with type information
-type ResolvedPackage struct {
+// Package contains the fully resolved parsed package with type information
+type Package struct {
 	// Original parsed package
 	PackageName string
-	API         *ResolvedAPI
-	Schemas     map[string]*ResolvedSchema
-	Parameters  map[string]*ResolvedParameter
-	Endpoints   []*ResolvedEndpoint
+	API         *API
+	Schemas     map[string]*Schema
+	Parameters  map[string]*ParameterStruct
+	Endpoints   []*Endpoint
 }
 
-// ResolvedAPI contains resolved API info
-type ResolvedAPI struct {
+// API contains resolved API info
+type API struct {
 	Title              string
 	Version            string
 	Description        string
@@ -67,13 +67,13 @@ type Tag struct {
 	Description string
 }
 
-// ResolvedSchema contains a schema with resolved type information
-type ResolvedSchema struct {
+// Schema contains a schema with resolved type information
+type Schema struct {
 	Name        string
 	GoTypeName  string
 	Description string
 	Deprecated  bool
-	Fields      []*ResolvedField
+	Fields      []*Field
 
 	// IsGeneric indicates this is a generic struct (has type parameters)
 	// Generic structs are templates and should not be emitted to components
@@ -92,12 +92,12 @@ type ResolvedSchema struct {
 	TypeArg string
 }
 
-// ResolvedParameter contains a parameter struct with resolved type information
-type ResolvedParameter struct {
+// ParameterStruct contains a parameter struct with resolved type information
+type ParameterStruct struct {
 	Name       string
 	Type       string // "path", "query", "header", "cookie"
 	GoTypeName string
-	Fields     []*ResolvedField
+	Fields     []*Field
 }
 
 // Shape is the structural kind of a resolved Go type. It is what decides how
@@ -168,7 +168,7 @@ type TypeRef struct {
 	Elem *TypeRef
 
 	// Fields are an anonymous struct's members when Shape is ShapeObject.
-	Fields []*ResolvedField
+	Fields []*Field
 
 	// Reason describes an unsupported type as a noun phrase ("a channel",
 	// "a struct (Coords) with no @schema annotation"), so it reads correctly in
@@ -198,8 +198,8 @@ func (t *TypeRef) ScalarName() string {
 	return ""
 }
 
-// ResolvedField contains a field with resolved type information
-type ResolvedField struct {
+// Field contains a field with resolved type information
+type Field struct {
 	// From annotation or inferred
 	Name        string
 	GoName      string
@@ -237,8 +237,8 @@ type ResolvedField struct {
 	ExclusiveMaximum *float64
 }
 
-// ResolvedEndpoint contains an endpoint with resolved types
-type ResolvedEndpoint struct {
+// Endpoint contains an endpoint with resolved types
+type Endpoint struct {
 	FuncName     string
 	Method       string
 	Path         string
@@ -248,54 +248,54 @@ type ResolvedEndpoint struct {
 	Tags         []string
 	Deprecated   bool
 	Auth         string
-	Request      *ResolvedRequestBody
-	Responses    map[string]*ResolvedResponse
-	PathParams   []*ResolvedParameter
-	QueryParams  []*ResolvedParameter
-	HeaderParams []*ResolvedParameter
-	CookieParams []*ResolvedParameter
+	Request      *RequestBody
+	Responses    map[string]*Response
+	PathParams   []*ParameterStruct
+	QueryParams  []*ParameterStruct
+	HeaderParams []*ParameterStruct
+	CookieParams []*ParameterStruct
 
 	// Inline declarations (resolved from function body annotations)
-	InlinePathParams   *ResolvedInlineParams
-	InlineQueryParams  *ResolvedInlineParams
-	InlineHeaderParams *ResolvedInlineParams
-	InlineCookieParams *ResolvedInlineParams
-	InlineRequest      *ResolvedInlineBody
-	InlineResponses    map[string]*ResolvedInlineBody // Key is status code
+	InlinePathParams   *InlineParams
+	InlineQueryParams  *InlineParams
+	InlineHeaderParams *InlineParams
+	InlineCookieParams *InlineParams
+	InlineRequest      *InlineBody
+	InlineResponses    map[string]*InlineBody // Key is status code
 }
 
-// ResolvedInlineParams contains resolved inline parameter fields
-type ResolvedInlineParams struct {
-	Fields []*ResolvedField
+// InlineParams contains resolved inline parameter fields
+type InlineParams struct {
+	Fields []*Field
 }
 
-// ResolvedInlineBody contains resolved inline body fields with optional binding
-type ResolvedInlineBody struct {
+// InlineBody contains resolved inline body fields with optional binding
+type InlineBody struct {
 	ContentType string
-	Fields      []*ResolvedField
-	Bind        *ResolvedBindTarget
-	Headers     []*ResolvedParameter // Response headers (for inline responses)
-	Description string               // Response description
+	Fields      []*Field
+	Bind        *BindTarget
+	Headers     []*ParameterStruct // Response headers (for inline responses)
+	Description string             // Response description
 }
 
-// ResolvedRequestBody contains a request body with resolved schema
-type ResolvedRequestBody struct {
+// RequestBody contains a request body with resolved schema
+type RequestBody struct {
 	ContentType string
-	Body        *ResolvedBody
+	Body        *Body
 	Required    bool
 }
 
-// ResolvedResponse contains a response with resolved schema
-type ResolvedResponse struct {
+// Response contains a response with resolved schema
+type Response struct {
 	StatusCode  string
 	Description string
 	ContentType string
-	Body        *ResolvedBody
-	Headers     []*ResolvedParameter
+	Body        *Body
+	Headers     []*ParameterStruct
 }
 
-// ResolvedBody contains the resolved body with optional binding
-type ResolvedBody struct {
+// Body contains the resolved body with optional binding
+type Body struct {
 	// Schema is the schema name as written (e.g., "User", "[]User",
 	// "map[string]User"), kept for validation messages.
 	Schema string
@@ -305,11 +305,11 @@ type ResolvedBody struct {
 
 	// Bind contains the resolved wrapper binding
 	// When non-nil, the body should be wrapped in the specified envelope
-	Bind *ResolvedBindTarget
+	Bind *BindTarget
 }
 
-// ResolvedBindTarget represents a resolved @bind Wrapper.Field annotation
-type ResolvedBindTarget struct {
+// BindTarget represents a resolved @bind Wrapper.Field annotation
+type BindTarget struct {
 	// Wrapper is the wrapper schema name (e.g., "DataResponse")
 	Wrapper string
 
@@ -317,5 +317,5 @@ type ResolvedBindTarget struct {
 	Field string
 
 	// WrapperSchema is the resolved wrapper schema (for inlining)
-	WrapperSchema *ResolvedSchema
+	WrapperSchema *Schema
 }

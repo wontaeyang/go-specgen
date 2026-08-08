@@ -54,7 +54,7 @@ func exclusiveBound(value float64) *base.DynamicValue[bool, float64] {
 }
 
 // Generate generates an OpenAPI spec from a resolved package
-func (g *Generator) Generate(pkg *resolver.ResolvedPackage) (*v3.Document, error) {
+func (g *Generator) Generate(pkg *resolver.Package) (*v3.Document, error) {
 	doc := &v3.Document{
 		Version: g.getOpenAPIVersion(),
 		Info:    g.generateInfo(pkg.API),
@@ -98,7 +98,7 @@ func (g *Generator) RenderJSON(doc *v3.Document) ([]byte, error) {
 }
 
 // generateInfo generates the info section
-func (g *Generator) generateInfo(api *resolver.ResolvedAPI) *base.Info {
+func (g *Generator) generateInfo(api *resolver.API) *base.Info {
 	info := &base.Info{
 		Title:   api.Title,
 		Version: api.Version,
@@ -155,7 +155,7 @@ func (g *Generator) generateTags(tags []*resolver.Tag) []*base.Tag {
 }
 
 // generateComponents generates the components section
-func (g *Generator) generateComponents(pkg *resolver.ResolvedPackage) *v3.Components {
+func (g *Generator) generateComponents(pkg *resolver.Package) *v3.Components {
 	components := &v3.Components{}
 
 	if len(pkg.Schemas) > 0 {
@@ -170,7 +170,7 @@ func (g *Generator) generateComponents(pkg *resolver.ResolvedPackage) *v3.Compon
 }
 
 // generateSchemas generates component schemas
-func (g *Generator) generateSchemas(schemas map[string]*resolver.ResolvedSchema) *orderedmap.Map[string, *base.SchemaProxy] {
+func (g *Generator) generateSchemas(schemas map[string]*resolver.Schema) *orderedmap.Map[string, *base.SchemaProxy] {
 	result := orderedmap.New[string, *base.SchemaProxy]()
 
 	for _, name := range slices.Sorted(maps.Keys(schemas)) {
@@ -187,7 +187,7 @@ func (g *Generator) generateSchemas(schemas map[string]*resolver.ResolvedSchema)
 }
 
 // generateSchema generates a single schema
-func (g *Generator) generateSchema(schema *resolver.ResolvedSchema, allSchemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
+func (g *Generator) generateSchema(schema *resolver.Schema, allSchemas map[string]*resolver.Schema) *base.SchemaProxy {
 	s := newSchema("object")
 
 	if schema.Description != "" {
@@ -211,7 +211,7 @@ func (g *Generator) generateSchema(schema *resolver.ResolvedSchema, allSchemas m
 // the shape. The generator used to have two versions of this — one that could
 // recognize a schema reference and one that could not — so the same field
 // rendered differently depending on which one reached it.
-func (g *Generator) generateFieldSchema(field *resolver.ResolvedField) *base.SchemaProxy {
+func (g *Generator) generateFieldSchema(field *resolver.Field) *base.SchemaProxy {
 	// A $ref is the one shape that cannot simply carry the field's keywords,
 	// so it has its own builder.
 	if field.Type != nil && field.Type.Shape == resolver.ShapeRef {
@@ -278,7 +278,7 @@ func refPath(name string) string {
 // generateRefSchema builds the schema for a field whose type is a named @schema.
 // A bare $ref is emitted when the field has no annotation keywords and is not
 // nullable; otherwise sibling keywords (description, deprecated, ...) are attached.
-func (g *Generator) generateRefSchema(refPath string, field *resolver.ResolvedField) *base.SchemaProxy {
+func (g *Generator) generateRefSchema(refPath string, field *resolver.Field) *base.SchemaProxy {
 	// A $ref cannot also be typed "null", so nullability becomes a union. oneOf
 	// rather than siblings: siblings would intersect the two, not unite them.
 	if field.Nullable {
@@ -306,7 +306,7 @@ func (g *Generator) generateRefSchema(refPath string, field *resolver.ResolvedFi
 // builds an empty schema, runs it through here, and emits a bare $ref when
 // nothing came out, so a keyword added here works on refs without further
 // changes.
-func (g *Generator) addFieldConstraints(schema *base.Schema, field *resolver.ResolvedField) {
+func (g *Generator) addFieldConstraints(schema *base.Schema, field *resolver.Field) {
 	if field.Description != "" {
 		schema.Description = field.Description
 	}
@@ -319,7 +319,7 @@ func (g *Generator) addFieldConstraints(schema *base.Schema, field *resolver.Res
 // Parameters need the split: an OpenAPI parameter carries its own description
 // field, and repeating it inside the parameter's schema would say the same
 // thing twice in the rendered document.
-func (g *Generator) addValueConstraints(schema *base.Schema, field *resolver.ResolvedField) {
+func (g *Generator) addValueConstraints(schema *base.Schema, field *resolver.Field) {
 	if field.Format != "" {
 		schema.Format = field.Format
 	}
@@ -410,7 +410,7 @@ func convertEnumToYAMLNodes(values []string, openAPIType string) []*yaml.Node {
 // Parameters are scalars or arrays of scalars — never objects, never refs — so
 // this needs none of the shape handling generateFieldSchema does. The
 // description is deliberately left off: it belongs on the parameter itself.
-func (g *Generator) generateParameterFieldSchema(field *resolver.ResolvedField) *base.SchemaProxy {
+func (g *Generator) generateParameterFieldSchema(field *resolver.Field) *base.SchemaProxy {
 	schema := g.buildTypeSchema(field.Type)
 	g.addValueConstraints(schema, field)
 
@@ -463,7 +463,7 @@ func (g *Generator) generateSecurity(security [][]*resolver.SecurityRequirement)
 }
 
 // generatePaths generates the paths section
-func (g *Generator) generatePaths(endpoints []*resolver.ResolvedEndpoint, parameters map[string]*resolver.ResolvedParameter, schemas map[string]*resolver.ResolvedSchema) *v3.Paths {
+func (g *Generator) generatePaths(endpoints []*resolver.Endpoint, parameters map[string]*resolver.ParameterStruct, schemas map[string]*resolver.Schema) *v3.Paths {
 	paths := &v3.Paths{
 		PathItems: orderedmap.New[string, *v3.PathItem](),
 	}
@@ -508,7 +508,7 @@ func (g *Generator) generatePaths(endpoints []*resolver.ResolvedEndpoint, parame
 }
 
 // generateOperation generates an operation
-func (g *Generator) generateOperation(endpoint *resolver.ResolvedEndpoint, parameterMap map[string]*resolver.ResolvedParameter, schemas map[string]*resolver.ResolvedSchema) *v3.Operation {
+func (g *Generator) generateOperation(endpoint *resolver.Endpoint, parameterMap map[string]*resolver.ParameterStruct, schemas map[string]*resolver.Schema) *v3.Operation {
 	op := &v3.Operation{}
 
 	if endpoint.Summary != "" {
@@ -533,7 +533,7 @@ func (g *Generator) generateOperation(endpoint *resolver.ResolvedEndpoint, param
 	var params []*v3.Parameter
 
 	named := []struct {
-		refs []*resolver.ResolvedParameter
+		refs []*resolver.ParameterStruct
 		in   string
 	}{
 		{endpoint.PathParams, "path"},
@@ -550,7 +550,7 @@ func (g *Generator) generateOperation(endpoint *resolver.ResolvedEndpoint, param
 	}
 
 	inline := []struct {
-		decl *resolver.ResolvedInlineParams
+		decl *resolver.InlineParams
 		in   string
 	}{
 		{endpoint.InlinePathParams, "path"},
@@ -598,7 +598,7 @@ func (g *Generator) generateOperation(endpoint *resolver.ResolvedEndpoint, param
 // generateParameters generates parameters from resolved fields. A named
 // parameter struct and an in-function one produce identical output; only where
 // the fields came from differs, and that is settled before this point.
-func (g *Generator) generateParameters(fields []*resolver.ResolvedField, in string) []*v3.Parameter {
+func (g *Generator) generateParameters(fields []*resolver.Field, in string) []*v3.Parameter {
 	params := make([]*v3.Parameter, 0, len(fields))
 
 	for _, field := range fields {
@@ -621,7 +621,7 @@ func (g *Generator) generateParameters(fields []*resolver.ResolvedField, in stri
 }
 
 // generateRequestBody generates a request body
-func (g *Generator) generateRequestBody(request *resolver.ResolvedRequestBody, schemas map[string]*resolver.ResolvedSchema) *v3.RequestBody {
+func (g *Generator) generateRequestBody(request *resolver.RequestBody, schemas map[string]*resolver.Schema) *v3.RequestBody {
 	if request.Body == nil {
 		return &v3.RequestBody{}
 	}
@@ -633,7 +633,7 @@ func (g *Generator) generateRequestBody(request *resolver.ResolvedRequestBody, s
 }
 
 // generateInlineRequestBody generates a request body from an inline struct
-func (g *Generator) generateInlineRequestBody(inline *resolver.ResolvedInlineBody, schemas map[string]*resolver.ResolvedSchema) *v3.RequestBody {
+func (g *Generator) generateInlineRequestBody(inline *resolver.InlineBody, schemas map[string]*resolver.Schema) *v3.RequestBody {
 	if inline == nil || len(inline.Fields) == 0 {
 		return &v3.RequestBody{}
 	}
@@ -646,7 +646,7 @@ func (g *Generator) generateInlineRequestBody(inline *resolver.ResolvedInlineBod
 }
 
 // generateResponsesWithInline generates responses merging explicit and inline definitions
-func (g *Generator) generateResponsesWithInline(responses map[string]*resolver.ResolvedResponse, inlineResponses map[string]*resolver.ResolvedInlineBody, schemas map[string]*resolver.ResolvedSchema) *v3.Responses {
+func (g *Generator) generateResponsesWithInline(responses map[string]*resolver.Response, inlineResponses map[string]*resolver.InlineBody, schemas map[string]*resolver.Schema) *v3.Responses {
 	result := &v3.Responses{
 		Codes: orderedmap.New[string, *v3.Response](),
 	}
@@ -698,7 +698,7 @@ func (g *Generator) generateResponsesWithInline(responses map[string]*resolver.R
 // generateResponseHeaders renders a response's header parameters. Returns nil
 // when there are none, so the caller can assign unconditionally and still leave
 // the field absent from the output.
-func generateResponseHeaders(params []*resolver.ResolvedParameter) *orderedmap.Map[string, *v3.Header] {
+func generateResponseHeaders(params []*resolver.ParameterStruct) *orderedmap.Map[string, *v3.Header] {
 	if len(params) == 0 {
 		return nil
 	}
@@ -730,7 +730,7 @@ func mediaContent(contentType string, schema *base.SchemaProxy) *orderedmap.Map[
 }
 
 // inlineContentType is the declared content type, or JSON when none was given.
-func inlineContentType(inline *resolver.ResolvedInlineBody) string {
+func inlineContentType(inline *resolver.InlineBody) string {
 	if inline.ContentType != "" {
 		return inline.ContentType
 	}
@@ -739,7 +739,7 @@ func inlineContentType(inline *resolver.ResolvedInlineBody) string {
 
 // generateInlineBodySchema renders an in-function struct as a body, wrapped in
 // its @bind envelope when it has one.
-func (g *Generator) generateInlineBodySchema(inline *resolver.ResolvedInlineBody, schemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
+func (g *Generator) generateInlineBodySchema(inline *resolver.InlineBody, schemas map[string]*resolver.Schema) *base.SchemaProxy {
 	if inline.Bind != nil {
 		return g.generateInlineWrappedSchema(inline, schemas)
 	}
@@ -747,7 +747,7 @@ func (g *Generator) generateInlineBodySchema(inline *resolver.ResolvedInlineBody
 }
 
 // generateBodySchema generates schema for a body
-func (g *Generator) generateBodySchema(body *resolver.ResolvedBody, schemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
+func (g *Generator) generateBodySchema(body *resolver.Body, schemas map[string]*resolver.Schema) *base.SchemaProxy {
 	if body.Bind != nil {
 		return g.generateWrappedSchema(body, schemas)
 	}
@@ -755,7 +755,7 @@ func (g *Generator) generateBodySchema(body *resolver.ResolvedBody, schemas map[
 }
 
 // generateWrappedSchema generates a schema where the body is wrapped in an envelope
-func (g *Generator) generateWrappedSchema(body *resolver.ResolvedBody, schemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
+func (g *Generator) generateWrappedSchema(body *resolver.Body, schemas map[string]*resolver.Schema) *base.SchemaProxy {
 	bodySchema := func() *base.SchemaProxy {
 		return g.buildTypeProxy(body.Type)
 	}
@@ -768,7 +768,7 @@ func (g *Generator) generateWrappedSchema(body *resolver.ResolvedBody, schemas m
 }
 
 // generateInlineWrappedSchema wraps inline struct fields in a wrapper schema
-func (g *Generator) generateInlineWrappedSchema(inline *resolver.ResolvedInlineBody, schemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
+func (g *Generator) generateInlineWrappedSchema(inline *resolver.InlineBody, schemas map[string]*resolver.Schema) *base.SchemaProxy {
 	bodySchema := func() *base.SchemaProxy {
 		return g.generateInlineSchema(inline.Fields)
 	}
@@ -785,14 +785,14 @@ func (g *Generator) generateInlineWrappedSchema(inline *resolver.ResolvedInlineB
 //
 // The two callers differ only in what the body is — a named schema reference or
 // an inline struct — which is why it arrives as a function.
-func (g *Generator) wrapInEnvelope(wrapper *resolver.ResolvedSchema, boundField string, body func() *base.SchemaProxy) *base.SchemaProxy {
+func (g *Generator) wrapInEnvelope(wrapper *resolver.Schema, boundField string, body func() *base.SchemaProxy) *base.SchemaProxy {
 	schema := newSchema("object")
 
 	if wrapper.Description != "" {
 		schema.Description = wrapper.Description
 	}
 
-	setObjectFields(schema, wrapper.Fields, func(field *resolver.ResolvedField) *base.SchemaProxy {
+	setObjectFields(schema, wrapper.Fields, func(field *resolver.Field) *base.SchemaProxy {
 		if field.GoName == boundField {
 			return body()
 		}
@@ -803,7 +803,7 @@ func (g *Generator) wrapInEnvelope(wrapper *resolver.ResolvedSchema, boundField 
 }
 
 // generateInlineSchema generates an object schema from inline struct fields
-func (g *Generator) generateInlineSchema(fields []*resolver.ResolvedField) *base.SchemaProxy {
+func (g *Generator) generateInlineSchema(fields []*resolver.Field) *base.SchemaProxy {
 	schema := newSchema("object")
 	setObjectFields(schema, fields, g.generateFieldSchema)
 	return base.CreateSchemaProxy(schema)
@@ -816,7 +816,7 @@ func (g *Generator) generateInlineSchema(fields []*resolver.ResolvedField) *base
 // Property order is the field order it is given, which is Go declaration order
 // all the way back to the resolver. Required is emitted only when non-empty, so
 // an all-optional object has no required key rather than an empty list.
-func setObjectFields(schema *base.Schema, fields []*resolver.ResolvedField, fieldSchema func(*resolver.ResolvedField) *base.SchemaProxy) {
+func setObjectFields(schema *base.Schema, fields []*resolver.Field, fieldSchema func(*resolver.Field) *base.SchemaProxy) {
 	if len(fields) == 0 {
 		return
 	}

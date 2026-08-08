@@ -34,7 +34,7 @@ func NewValidator() *Validator {
 }
 
 // Validate validates the resolved package
-func (v *Validator) Validate(pkg *resolver.ResolvedPackage) error {
+func (v *Validator) Validate(pkg *resolver.Package) error {
 	v.errors = make([]error, 0)
 
 	// Validate API
@@ -93,7 +93,7 @@ func (v *Validator) addError(path, message string) {
 }
 
 // validateAPI validates API info
-func (v *Validator) validateAPI(api *resolver.ResolvedAPI) {
+func (v *Validator) validateAPI(api *resolver.API) {
 	if api.Title == "" {
 		v.addError("@api", "missing required @title")
 	}
@@ -149,7 +149,7 @@ func (v *Validator) validateSecurityScheme(name string, scheme *resolver.Securit
 }
 
 // validateSchema validates a schema
-func (v *Validator) validateSchema(name string, schema *resolver.ResolvedSchema) {
+func (v *Validator) validateSchema(name string, schema *resolver.Schema) {
 	path := fmt.Sprintf("@schema[%s]", name)
 
 	if len(schema.Fields) == 0 {
@@ -172,7 +172,7 @@ func (v *Validator) validateSchema(name string, schema *resolver.ResolvedSchema)
 }
 
 // validateParameter validates a parameter struct
-func (v *Validator) validateParameter(name string, param *resolver.ResolvedParameter) {
+func (v *Validator) validateParameter(name string, param *resolver.ParameterStruct) {
 	path := fmt.Sprintf("@%s[%s]", param.Type, name)
 
 	if len(param.Fields) == 0 {
@@ -195,7 +195,7 @@ func (v *Validator) validateParameter(name string, param *resolver.ResolvedParam
 }
 
 // validateField validates a schema field
-func (v *Validator) validateField(path string, field *resolver.ResolvedField) {
+func (v *Validator) validateField(path string, field *resolver.Field) {
 	fieldPath := fmt.Sprintf("%s.%s", path, field.GoName)
 
 	// A type with no OpenAPI representation. The resolver marks it rather than
@@ -279,7 +279,7 @@ func (v *Validator) validateField(path string, field *resolver.ResolvedField) {
 }
 
 // validateParameterField validates a parameter field with type-specific rules
-func (v *Validator) validateParameterField(path, paramType string, field *resolver.ResolvedField) {
+func (v *Validator) validateParameterField(path, paramType string, field *resolver.Field) {
 	fieldPath := fmt.Sprintf("%s.%s", path, field.GoName)
 
 	// Path parameters cannot be pointers/nullable
@@ -357,7 +357,7 @@ func describeShape(t *resolver.TypeRef) string {
 }
 
 // validateEndpoint validates an endpoint
-func (v *Validator) validateEndpoint(endpoint *resolver.ResolvedEndpoint, pkg *resolver.ResolvedPackage) {
+func (v *Validator) validateEndpoint(endpoint *resolver.Endpoint, pkg *resolver.Package) {
 	path := fmt.Sprintf("@endpoint[%s %s]", endpoint.Method, endpoint.Path)
 
 	// Validate method
@@ -451,7 +451,7 @@ func extractPathVariables(path string) []string {
 }
 
 // validatePathParametersWithInline validates path parameters including inline declarations
-func (v *Validator) validatePathParametersWithInline(path string, pathVars []string, params []*resolver.ResolvedParameter, inlineParams *resolver.ResolvedInlineParams) {
+func (v *Validator) validatePathParametersWithInline(path string, pathVars []string, params []*resolver.ParameterStruct, inlineParams *resolver.InlineParams) {
 	// Create map of path variables
 	pathVarMap := make(map[string]bool)
 	for _, varName := range pathVars {
@@ -488,7 +488,7 @@ func (v *Validator) validatePathParametersWithInline(path string, pathVars []str
 }
 
 // validateRequestBody validates a request body
-func (v *Validator) validateRequestBody(path string, request *resolver.ResolvedRequestBody, schemas map[string]*resolver.ResolvedSchema) {
+func (v *Validator) validateRequestBody(path string, request *resolver.RequestBody, schemas map[string]*resolver.Schema) {
 	if request.ContentType == "" {
 		v.addError(path+".@request", "missing @contentType")
 	}
@@ -509,7 +509,7 @@ func (v *Validator) validateRequestBody(path string, request *resolver.ResolvedR
 // validateBodySchemaExists checks that a body naming a schema names one that
 // exists. The body's shape already says which name that is, whatever nesting
 // the annotation was written with.
-func (v *Validator) validateBodySchemaExists(path string, body *resolver.ResolvedBody, schemas map[string]*resolver.ResolvedSchema) {
+func (v *Validator) validateBodySchemaExists(path string, body *resolver.Body, schemas map[string]*resolver.Schema) {
 	ref := body.Type
 	for ref != nil && (ref.Shape == resolver.ShapeArray || ref.Shape == resolver.ShapeMap) {
 		ref = ref.Elem
@@ -525,7 +525,7 @@ func (v *Validator) validateBodySchemaExists(path string, body *resolver.Resolve
 }
 
 // validateResponse validates a response
-func (v *Validator) validateResponse(path, statusCode string, response *resolver.ResolvedResponse, schemas map[string]*resolver.ResolvedSchema) {
+func (v *Validator) validateResponse(path, statusCode string, response *resolver.Response, schemas map[string]*resolver.Schema) {
 	responsePath := fmt.Sprintf("%s.@response[%s]", path, statusCode)
 
 	// Validate status code: 3-digit (200), range (2XX), or "default"
@@ -555,7 +555,7 @@ func isPrimitiveType(typeName string) bool {
 }
 
 // validateParameterConflicts checks for parameter name conflicts across different parameter types
-func (v *Validator) validateParameterConflicts(path string, endpoint *resolver.ResolvedEndpoint) {
+func (v *Validator) validateParameterConflicts(path string, endpoint *resolver.Endpoint) {
 	allParams := make(map[string]string) // name -> type
 
 	// Collect all parameter names with their types
@@ -597,7 +597,7 @@ func (v *Validator) validateParameterConflicts(path string, endpoint *resolver.R
 }
 
 // validateBindTarget validates that a @bind target references a valid wrapper schema and field
-func (v *Validator) validateBindTarget(path string, bind *resolver.ResolvedBindTarget, schemas map[string]*resolver.ResolvedSchema) {
+func (v *Validator) validateBindTarget(path string, bind *resolver.BindTarget, schemas map[string]*resolver.Schema) {
 	bindPath := path + ".@bind"
 
 	// Check wrapper schema exists

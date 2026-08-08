@@ -21,15 +21,15 @@ func TestNewGenerator(t *testing.T) {
 }
 
 func TestGenerator_Generate(t *testing.T) {
-	pkg := &resolver.ResolvedPackage{
-		API: &resolver.ResolvedAPI{
+	pkg := &resolver.Package{
+		API: &resolver.API{
 			Title:   "Test API",
 			Version: "1.0.0",
 		},
-		Schemas: map[string]*resolver.ResolvedSchema{
+		Schemas: map[string]*resolver.Schema{
 			"User": {
 				Name: "User",
-				Fields: []*resolver.ResolvedField{
+				Fields: []*resolver.Field{
 					{
 						Name:     "id",
 						GoName:   "ID",
@@ -39,12 +39,12 @@ func TestGenerator_Generate(t *testing.T) {
 				},
 			},
 		},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
+		Parameters: map[string]*resolver.ParameterStruct{},
+		Endpoints: []*resolver.Endpoint{
 			{
 				Method: "GET",
 				Path:   "/users",
-				Responses: map[string]*resolver.ResolvedResponse{
+				Responses: map[string]*resolver.Response{
 					"200": {StatusCode: "200", Description: "Success"},
 				},
 			},
@@ -83,7 +83,7 @@ func TestGenerator_Generate(t *testing.T) {
 }
 
 func TestGenerator_GenerateInfo(t *testing.T) {
-	api := &resolver.ResolvedAPI{
+	api := &resolver.API{
 		Title:          "Test API",
 		Version:        "1.0.0",
 		Description:    "Test description",
@@ -152,11 +152,11 @@ func TestGenerator_GenerateServers(t *testing.T) {
 }
 
 func TestGenerator_GenerateSchemas(t *testing.T) {
-	schemas := map[string]*resolver.ResolvedSchema{
+	schemas := map[string]*resolver.Schema{
 		"User": {
 			Name:        "User",
 			Description: "User model",
-			Fields: []*resolver.ResolvedField{
+			Fields: []*resolver.Field{
 				{
 					Name:        "id",
 					GoName:      "ID",
@@ -190,18 +190,18 @@ func TestGenerator_GenerateSchemas(t *testing.T) {
 }
 
 func TestGenerator_RenderJSON(t *testing.T) {
-	pkg := &resolver.ResolvedPackage{
-		API: &resolver.ResolvedAPI{
+	pkg := &resolver.Package{
+		API: &resolver.API{
 			Title:   "Test API",
 			Version: "1.0.0",
 		},
-		Schemas:    map[string]*resolver.ResolvedSchema{},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
+		Schemas:    map[string]*resolver.Schema{},
+		Parameters: map[string]*resolver.ParameterStruct{},
+		Endpoints: []*resolver.Endpoint{
 			{
 				Method: "GET",
 				Path:   "/test",
-				Responses: map[string]*resolver.ResolvedResponse{
+				Responses: map[string]*resolver.Response{
 					"200": {StatusCode: "200", Description: "OK"},
 				},
 			},
@@ -250,18 +250,18 @@ func TestGenerator_RenderJSON(t *testing.T) {
 }
 
 func TestGenerator_RenderYAML(t *testing.T) {
-	pkg := &resolver.ResolvedPackage{
-		API: &resolver.ResolvedAPI{
+	pkg := &resolver.Package{
+		API: &resolver.API{
 			Title:   "Test API",
 			Version: "1.0.0",
 		},
-		Schemas:    map[string]*resolver.ResolvedSchema{},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
+		Schemas:    map[string]*resolver.Schema{},
+		Parameters: map[string]*resolver.ParameterStruct{},
+		Endpoints: []*resolver.Endpoint{
 			{
 				Method: "GET",
 				Path:   "/test",
-				Responses: map[string]*resolver.ResolvedResponse{
+				Responses: map[string]*resolver.Response{
 					"200": {StatusCode: "200", Description: "OK"},
 				},
 			},
@@ -301,12 +301,12 @@ func TestGenerator_RenderYAML(t *testing.T) {
 }
 
 func TestGenerator_GeneratePaths(t *testing.T) {
-	endpoints := []*resolver.ResolvedEndpoint{
+	endpoints := []*resolver.Endpoint{
 		{
 			Method:  "GET",
 			Path:    "/users",
 			Summary: "List users",
-			Responses: map[string]*resolver.ResolvedResponse{
+			Responses: map[string]*resolver.Response{
 				"200": {StatusCode: "200", Description: "Success"},
 			},
 		},
@@ -314,14 +314,14 @@ func TestGenerator_GeneratePaths(t *testing.T) {
 			Method:  "POST",
 			Path:    "/users",
 			Summary: "Create user",
-			Responses: map[string]*resolver.ResolvedResponse{
+			Responses: map[string]*resolver.Response{
 				"201": {StatusCode: "201", Description: "Created"},
 			},
 		},
 	}
 
 	gen := NewGenerator("3.1")
-	paths := gen.generatePaths(endpoints, map[string]*resolver.ResolvedParameter{}, map[string]*resolver.ResolvedSchema{})
+	paths := gen.generatePaths(endpoints, map[string]*resolver.ParameterStruct{}, map[string]*resolver.Schema{})
 
 	if paths.PathItems.Len() != 1 {
 		t.Fatalf("Expected 1 path item, got %d", paths.PathItems.Len())
@@ -342,17 +342,17 @@ func TestGenerator_GeneratePaths(t *testing.T) {
 }
 
 func TestGenerator_GenerateOperation(t *testing.T) {
-	endpoint := &resolver.ResolvedEndpoint{
+	endpoint := &resolver.Endpoint{
 		Method:      "GET",
 		Path:        "/users/{id}",
 		Summary:     "Get user",
 		Description: "Get user by ID",
 		OperationID: "getUser",
 		Tags:        []string{"users"},
-		PathParams: []*resolver.ResolvedParameter{
+		PathParams: []*resolver.ParameterStruct{
 			{
 				Name: "UserIDPath",
-				Fields: []*resolver.ResolvedField{
+				Fields: []*resolver.Field{
 					{
 						Name:     "id",
 						GoName:   "ID",
@@ -362,21 +362,21 @@ func TestGenerator_GenerateOperation(t *testing.T) {
 				},
 			},
 		},
-		Responses: map[string]*resolver.ResolvedResponse{
+		Responses: map[string]*resolver.Response{
 			"200": {
 				StatusCode:  "200",
 				Description: "Success",
 				ContentType: "application/json",
-				Body:        &resolver.ResolvedBody{Schema: "User", Type: &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"}},
+				Body:        &resolver.Body{Schema: "User", Type: &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"}},
 			},
 		},
 	}
 
-	paramMap := map[string]*resolver.ResolvedParameter{
+	paramMap := map[string]*resolver.ParameterStruct{
 		"UserIDPath": endpoint.PathParams[0],
 	}
 
-	schemas := map[string]*resolver.ResolvedSchema{
+	schemas := map[string]*resolver.Schema{
 		"User": {Name: "User"},
 	}
 
@@ -405,25 +405,25 @@ func TestGenerator_GenerateOperation(t *testing.T) {
 }
 
 func TestGenerator_HTTPMethodsLowercase(t *testing.T) {
-	endpoints := []*resolver.ResolvedEndpoint{
+	endpoints := []*resolver.Endpoint{
 		{
 			Method: "GET",
 			Path:   "/test",
-			Responses: map[string]*resolver.ResolvedResponse{
+			Responses: map[string]*resolver.Response{
 				"200": {StatusCode: "200", Description: "OK"},
 			},
 		},
 		{
 			Method: "POST",
 			Path:   "/test",
-			Responses: map[string]*resolver.ResolvedResponse{
+			Responses: map[string]*resolver.Response{
 				"201": {StatusCode: "201", Description: "Created"},
 			},
 		},
 	}
 
 	gen := NewGenerator("3.1")
-	paths := gen.generatePaths(endpoints, map[string]*resolver.ResolvedParameter{}, map[string]*resolver.ResolvedSchema{})
+	paths := gen.generatePaths(endpoints, map[string]*resolver.ParameterStruct{}, map[string]*resolver.Schema{})
 
 	testPath := paths.PathItems.GetOrZero("/test")
 	if testPath == nil {
@@ -502,8 +502,8 @@ func TestGenerator_GenerateTags(t *testing.T) {
 func TestGenerator_GenerateWithTags(t *testing.T) {
 	gen := NewGenerator("3.1")
 
-	pkg := &resolver.ResolvedPackage{
-		API: &resolver.ResolvedAPI{
+	pkg := &resolver.Package{
+		API: &resolver.API{
 			Title:   "Test API",
 			Version: "1.0.0",
 			Tags: []*resolver.Tag{
@@ -511,14 +511,14 @@ func TestGenerator_GenerateWithTags(t *testing.T) {
 				{Name: "users", Description: "User operations"},
 			},
 		},
-		Schemas:    map[string]*resolver.ResolvedSchema{},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
+		Schemas:    map[string]*resolver.Schema{},
+		Parameters: map[string]*resolver.ParameterStruct{},
+		Endpoints: []*resolver.Endpoint{
 			{
 				Method: "GET",
 				Path:   "/pets",
 				Tags:   []string{"pets"},
-				Responses: map[string]*resolver.ResolvedResponse{
+				Responses: map[string]*resolver.Response{
 					"200": {StatusCode: "200", Description: "Success"},
 				},
 			},
@@ -562,12 +562,12 @@ func TestGenerator_GenerateBodySchema_Ref(t *testing.T) {
 	// Test body without bind - should use $ref
 	gen := NewGenerator("3.1")
 
-	body := &resolver.ResolvedBody{
+	body := &resolver.Body{
 		Schema: "User",
 		Type:   &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"},
 	}
 
-	schemas := map[string]*resolver.ResolvedSchema{}
+	schemas := map[string]*resolver.Schema{}
 
 	result := gen.generateBodySchema(body, schemas)
 
@@ -584,25 +584,25 @@ func TestGenerator_GenerateBodySchema_Wrapped(t *testing.T) {
 	// Test body with bind - should be wrapped
 	gen := NewGenerator("3.1")
 
-	wrapperSchema := &resolver.ResolvedSchema{
+	wrapperSchema := &resolver.Schema{
 		Name: "DataResponse",
-		Fields: []*resolver.ResolvedField{
+		Fields: []*resolver.Field{
 			{Name: "status", GoName: "Status", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}, Required: true},
 			{Name: "data", GoName: "Data", Type: &resolver.TypeRef{Shape: resolver.ShapeObject}, Required: true},
 		},
 	}
 
-	body := &resolver.ResolvedBody{
+	body := &resolver.Body{
 		Schema: "User",
 		Type:   &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"},
-		Bind: &resolver.ResolvedBindTarget{
+		Bind: &resolver.BindTarget{
 			Wrapper:       "DataResponse",
 			Field:         "Data",
 			WrapperSchema: wrapperSchema,
 		},
 	}
 
-	schemas := map[string]*resolver.ResolvedSchema{
+	schemas := map[string]*resolver.Schema{
 		"DataResponse": wrapperSchema,
 	}
 
@@ -699,7 +699,7 @@ func TestGenerator_BuildTypeProxy_Primitive(t *testing.T) {
 // renderRefField renders a $ref field through generateFieldSchemaWithRefs and
 // returns the YAML so sibling keywords (which live on the proxy, not the built
 // schema) can be asserted.
-func renderRefField(t *testing.T, version string, field *resolver.ResolvedField) string {
+func renderRefField(t *testing.T, version string, field *resolver.Field) string {
 	t.Helper()
 	gen := NewGenerator(version)
 	proxy := gen.generateFieldSchema(field)
@@ -711,7 +711,7 @@ func renderRefField(t *testing.T, version string, field *resolver.ResolvedField)
 }
 
 func TestGenerator_RefField_BareWhenNoSiblings(t *testing.T) {
-	field := &resolver.ResolvedField{Name: "home_address", GoName: "HomeAddress", GoType: "Address",
+	field := &resolver.Field{Name: "home_address", GoName: "HomeAddress", GoType: "Address",
 		Type: &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "Address"}}
 	got := renderRefField(t, "3.1", field)
 
@@ -724,7 +724,7 @@ func TestGenerator_RefField_BareWhenNoSiblings(t *testing.T) {
 }
 
 func TestGenerator_RefField_Deprecated_31Siblings(t *testing.T) {
-	field := &resolver.ResolvedField{
+	field := &resolver.Field{
 		Name: "home_address", GoName: "HomeAddress", GoType: "Address",
 		Type:        &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "Address"},
 		Description: "Home address", Deprecated: true,
@@ -747,7 +747,7 @@ func TestGenerator_RefField_Deprecated_31Siblings(t *testing.T) {
 }
 
 func TestGenerator_RefField_NullableDeprecated_31OneOf(t *testing.T) {
-	field := &resolver.ResolvedField{
+	field := &resolver.Field{
 		Name: "work_address", GoName: "WorkAddress", GoType: "Address",
 		Type:        &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "Address"},
 		Description: "Work address", Deprecated: true, Nullable: true,
@@ -769,29 +769,29 @@ func TestGenerator_RefField_NullableDeprecated_31OneOf(t *testing.T) {
 func TestGenerator_GenerateInlineWrappedSchema(t *testing.T) {
 	gen := NewGenerator("3.1")
 
-	wrapperSchema := &resolver.ResolvedSchema{
+	wrapperSchema := &resolver.Schema{
 		Name: "DataResponse",
-		Fields: []*resolver.ResolvedField{
+		Fields: []*resolver.Field{
 			{Name: "status", GoName: "Status", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}, Required: true},
 			{Name: "data", GoName: "Data", Type: &resolver.TypeRef{Shape: resolver.ShapeObject}, Required: true},
 		},
 	}
 
 	// Create an inline body with bind
-	inline := &resolver.ResolvedInlineBody{
+	inline := &resolver.InlineBody{
 		ContentType: "application/json",
-		Fields: []*resolver.ResolvedField{
+		Fields: []*resolver.Field{
 			{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}, Required: true},
 			{Name: "email", GoName: "Email", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}, Required: true},
 		},
-		Bind: &resolver.ResolvedBindTarget{
+		Bind: &resolver.BindTarget{
 			Wrapper:       "DataResponse",
 			Field:         "Data",
 			WrapperSchema: wrapperSchema,
 		},
 	}
 
-	schemas := map[string]*resolver.ResolvedSchema{
+	schemas := map[string]*resolver.Schema{
 		"DataResponse": wrapperSchema,
 	}
 
@@ -827,9 +827,9 @@ func TestGenerator_GenerateInlineWrappedSchema_NoBind(t *testing.T) {
 	gen := NewGenerator("3.1")
 
 	// Create an inline body without bind - should fall back to inline schema
-	inline := &resolver.ResolvedInlineBody{
+	inline := &resolver.InlineBody{
 		ContentType: "application/json",
-		Fields: []*resolver.ResolvedField{
+		Fields: []*resolver.Field{
 			{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}, Required: true},
 		},
 		Bind: nil,
@@ -859,7 +859,7 @@ func TestGenerator_GenerateInlineWrappedSchema_NoBind(t *testing.T) {
 func TestGenerator_GenerateFieldSchema_ArrayEnum(t *testing.T) {
 	gen := NewGenerator("3.1")
 
-	field := &resolver.ResolvedField{
+	field := &resolver.Field{
 		Name:   "tags",
 		GoName: "Tags",
 		Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
@@ -902,7 +902,7 @@ func TestGenerator_GenerateFieldSchema_ArrayEnum(t *testing.T) {
 func TestGenerator_GenerateFieldSchema_IntegerEnum(t *testing.T) {
 	gen := NewGenerator("3.1")
 
-	field := &resolver.ResolvedField{
+	field := &resolver.Field{
 		Name:   "priority",
 		GoName: "Priority",
 		Type:   &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "integer"},
@@ -932,7 +932,7 @@ func TestGenerator_GenerateFieldSchema_IntegerEnum(t *testing.T) {
 func TestGenerator_GenerateParameterFieldSchema_ArrayEnum(t *testing.T) {
 	gen := NewGenerator("3.1")
 
-	field := &resolver.ResolvedField{
+	field := &resolver.Field{
 		Name:   "status",
 		GoName: "Status",
 		Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
@@ -964,7 +964,7 @@ func TestGenerator_GenerateParameterFieldSchema_ArrayEnum(t *testing.T) {
 func TestGenerator_Version31Nullable(t *testing.T) {
 	gen := NewGenerator("3.1")
 
-	field := &resolver.ResolvedField{
+	field := &resolver.Field{
 		Name:     "nickname",
 		GoName:   "Nickname",
 		Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
@@ -1003,7 +1003,7 @@ func TestGenerator_Version31Nullable(t *testing.T) {
 func TestGenerator_Version32Nullable(t *testing.T) {
 	gen := NewGenerator("3.2")
 
-	field := &resolver.ResolvedField{
+	field := &resolver.Field{
 		Name:     "nickname",
 		GoName:   "Nickname",
 		Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
@@ -1033,7 +1033,7 @@ func TestGenerator_ExclusiveMinMax_31(t *testing.T) {
 
 	exMin := 0.0
 	exMax := 100.0
-	field := &resolver.ResolvedField{
+	field := &resolver.Field{
 		Name:             "score",
 		GoName:           "Score",
 		Type:             &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "number"},
@@ -1068,7 +1068,7 @@ func TestGenerator_ExclusiveMinMax_31(t *testing.T) {
 func TestGenerator_ReadOnly(t *testing.T) {
 	gen := NewGenerator("3.1")
 
-	field := &resolver.ResolvedField{
+	field := &resolver.Field{
 		Name:     "id",
 		GoName:   "ID",
 		Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
@@ -1090,7 +1090,7 @@ func TestGenerator_ReadOnly(t *testing.T) {
 func TestGenerator_WriteOnly(t *testing.T) {
 	gen := NewGenerator("3.1")
 
-	field := &resolver.ResolvedField{
+	field := &resolver.Field{
 		Name:      "password",
 		GoName:    "Password",
 		Type:      &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
@@ -1111,7 +1111,7 @@ func TestGenerator_WriteOnly(t *testing.T) {
 
 func TestGenerator_NullableSchemaRef_31(t *testing.T) {
 	gen := NewGenerator("3.1")
-	field := &resolver.ResolvedField{
+	field := &resolver.Field{
 		Name:     "address",
 		GoName:   "Address",
 		GoType:   "Address",
@@ -1154,7 +1154,7 @@ func TestGenerator_NullableSchemaRef_31(t *testing.T) {
 
 func TestGenerator_NonNullableSchemaRef(t *testing.T) {
 	gen := NewGenerator("3.1")
-	field := &resolver.ResolvedField{
+	field := &resolver.Field{
 		Name:     "address",
 		GoName:   "Address",
 		GoType:   "Address",
