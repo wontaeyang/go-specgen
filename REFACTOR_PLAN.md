@@ -31,6 +31,23 @@ All confirmed empirically. None except #4 touches a golden.
 | 8 | `,required` detection | `strings.Contains(tag, ",required")` on the whole raw tag | reads the kind-specific tag via `reflect.StructTag` |
 | 9 | Embedded fields | see below | mirrors `encoding/json` |
 | 10 | Undefined endpoint tag | check is guarded by `len(api.Tags) > 0`, so an API with no tags never runs it | always checked |
+| 11 | Schema refs from inline structs | the ref-unaware generator path emits `type: string` for a `@schema`-typed field | `$ref`, same as everywhere else |
+
+### Bug 11 in detail
+
+`generateFieldSchemaWithRefs` knows what a schema is; `generateFieldSchema` does
+not. Everything reached through the second — in-function `@request`/`@response`
+structs, and the non-bound fields of a `@bind` wrapper — renders a `@schema`-typed
+field as `type: string`, because the resolver's catch-all (bug #3) leaves
+`OpenAPIType` as `"string"` and nothing on that path looks at `GoType`.
+
+`cmd/specgen/testdata/features/inline_ref` shows one field rendering both ways in
+a single document: `Envelope.ProducedBy` is `$ref: Author` under
+`components.schemas`, and `type: string` where the same schema is inlined as a
+`@bind` wrapper.
+
+The fork disappears at C5, where `TypeRef` makes a reference a shape rather than
+something rediscovered by string matching.
 
 ### Bug 1 in detail
 
@@ -248,13 +265,15 @@ from one pipeline pass.
   joins the shared path it currently bypasses.
 - **C4** Generator local dedup: delete `generateInlineParameters`, extract the duplicated
   header block, parameterize the wrapped-schema and request-body pairs, consolidate
-  constraint emission, remove the ref-aware/ref-unaware fork.
+  constraint emission, collapse the four object-schema builders. The ref-aware /
+  ref-unaware fork stays for now — removing it changes output (bug #11), so it moves
+  to C5 where `TypeRef` makes it unnecessary.
 
 **Phase 2 — IR reshape**
 
 - **C5** `TypeRef` replaces the boolean spread; one recursive field resolver replaces
   all four paths; generator consumes structure instead of parsing type strings.
-  Fixes bug #1. Generator loses its `schemas` map, `isSchemaReference`,
+  Fixes bugs #1 and #11. Generator loses its `schemas` map, `isSchemaReference`,
   `extractTypeName`, `isPrimitive`, `goTypeToPrimitive`.
 - **C6** Merged, ordered `Parameters` and `Responses`; validator drops its inline
   special-case. Both ordering contracts land here.

@@ -1,0 +1,85 @@
+openapi: 3.1.0
+info:
+    title: Inline Ref Fixture
+    description: Named schema types referenced from inline structs.
+    version: 1.0.0
+paths:
+    /posts:
+        post:
+            summary: Create a post
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                title:
+                                    type: string
+                                    minLength: 1
+                                    description: Post title
+                                author:
+                                    type: string
+                                    description: Post author
+                                contributors:
+                                    type: array
+                                    items:
+                                        type: string
+                                    description: Contributing authors
+                            required:
+                                - title
+                                - author
+                                - contributors
+                required: true
+            responses:
+                "201":
+                    description: Response for status 201
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    data:
+                                        type: object
+                                        properties:
+                                            id:
+                                                type: string
+                                                format: uuid
+                                                description: Post identifier
+                                            author:
+                                                type: string
+                                                description: Post author
+                                        required:
+                                            - id
+                                            - author
+                                    produced_by:
+                                        type: string
+                                        description: Who produced this response
+                                required:
+                                    - data
+                                    - produced_by
+components:
+    schemas:
+        Author:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: Author identifier
+                name:
+                    type: string
+                    description: Author display name
+            required:
+                - id
+                - name
+        Envelope:
+            type: object
+            properties:
+                data:
+                    description: The wrapped payload
+                produced_by:
+                    $ref: '#/components/schemas/Author'
+                    description: Who produced this response
+            required:
+                - data
+                - produced_by
