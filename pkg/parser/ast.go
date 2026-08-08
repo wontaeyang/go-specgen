@@ -62,7 +62,11 @@ func harvestFieldComments(fset *token.FileSet, structType *ast.StructType) map[s
 			harvested.Comment = extractCommentBlock(fset, field.Doc)
 		}
 
-		comments[field.Names[0].Name] = harvested
+		// One *ast.Field with several Names is several fields -- "X, Y float64"
+		// is two *types.Var, and the comment above them describes both.
+		for _, name := range field.Names {
+			comments[name.Name] = harvested
+		}
 	}
 
 	if len(comments) == 0 {
