@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/wontaeyang/go-specgen/pkg/annotation"
@@ -635,4 +636,77 @@ func TestParseAnnotationBlock_NestedInlineResponse(t *testing.T) {
 	if desc200.Value != "User found successfully" {
 		t.Errorf("resp200 @description.Value = %q, want %q", desc200.Value, "User found successfully")
 	}
+}
+
+// TestParseAnnotationBlock_MultilineTermination covers what ends a multiline
+// value. The rule is positional, not name-based: a line starting with an
+// unescaped @ ends the value whatever the name is, and \@ is how a description
+// writes a literal @ at the start of a line.
+//
+// The unknown-name case used to be read as prose, so a misspelled annotation was
+// reported as a bare @ in the description. Escaping it, as that message advised,
+// put the typo in the generated spec.
+func TestParseAnnotationBlock_MultilineTermination(t *testing.T) {
+	schemaNode := annotation.Schema.GetChild("@schema")
+
+	t.Run("known annotation ends the value", func(t *testing.T) {
+		lines := []string{
+			"@schema {",
+			"  @description A widget",
+			"  @deprecated",
+			"}",
+		}
+
+		parsed, err := ParseAnnotationBlock(lines, "@schema", schemaNode)
+		if err != nil {
+			t.Fatalf("ParseAnnotationBlock() error = %v", err)
+		}
+
+		if got := parsed.GetChildValue("@description"); got != "A widget" {
+			t.Errorf("@description = %q, want %q", got, "A widget")
+		}
+		if !parsed.HasChild("@deprecated") {
+			t.Error("@deprecated was swallowed into the description")
+		}
+	})
+
+	t.Run("unknown annotation ends the value and is reported", func(t *testing.T) {
+		lines := []string{
+			"@schema {",
+			"  @description A widget",
+			"  @bogusStructRule yes",
+			"}",
+		}
+
+		_, err := ParseAnnotationBlock(lines, "@schema", schemaNode)
+		if err == nil {
+			t.Fatal("expected an error for the unknown annotation")
+		}
+		if !strings.Contains(err.Error(), "unknown annotation @bogusStructRule") {
+			t.Errorf("error = %q, want it to name the unknown annotation", err)
+		}
+	})
+
+	t.Run("escaped @ continues the value", func(t *testing.T) {
+		lines := []string{
+			"@schema {",
+			"  @description Contact us at",
+			"  \\@support for help",
+			"  @deprecated",
+			"}",
+		}
+
+		parsed, err := ParseAnnotationBlock(lines, "@schema", schemaNode)
+		if err != nil {
+			t.Fatalf("ParseAnnotationBlock() error = %v", err)
+		}
+
+		want := "Contact us at\n@support for help"
+		if got := parsed.GetChildValue("@description"); got != want {
+			t.Errorf("@description = %q, want %q", got, want)
+		}
+		if !parsed.HasChild("@deprecated") {
+			t.Error("@deprecated after an escaped line was swallowed")
+		}
+	})
 }

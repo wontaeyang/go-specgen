@@ -343,13 +343,16 @@ func parseChildren(lines []string, parentNode *annotation.Def, result *ParsedAnn
 					continue
 				}
 
-				// Check if this is a sibling annotation (unescaped @ at start)
+				// A line starting with an unescaped @ ends the value, whether or
+				// not this grammar knows the name. Continuing on an unknown one
+				// would read a misspelled annotation as prose, and the only
+				// complaint would be about the bare @ — advice whose fix, \@,
+				// publishes the typo in the description. Ending here instead
+				// sends the name to the unknown-annotation check below, which
+				// says what is actually wrong. A description that really does
+				// begin a line with @ writes it as \@.
 				if StartsWithUnescapedAt(nextLine) {
-					nextAnnotationName := extractAnnotationName(nextLine)
-					if parentNode.HasChild(nextAnnotationName) {
-						// This is a sibling, stop collecting
-						break
-					}
+					break
 				}
 
 				// This is a continuation line
