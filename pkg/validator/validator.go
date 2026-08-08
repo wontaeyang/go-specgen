@@ -2,7 +2,9 @@ package validator
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/wontaeyang/go-specgen/pkg/resolver"
@@ -44,14 +46,17 @@ func (v *Validator) Validate(pkg *resolver.Package) error {
 		v.validateAPI(pkg.API)
 	}
 
-	// Validate schemas
-	for name, schema := range pkg.Schemas {
-		v.validateSchema(name, schema)
+	// Schemas and Parameters are maps because five call sites look types up by
+	// name. Iterating them in name order here is what makes the accumulated
+	// error list reproducible: expected_error.txt is compared byte-for-byte, so
+	// a fixture whose errors span two schemas would otherwise pass only some of
+	// the time, and the diff would read as a regression in the message text.
+	for _, name := range slices.Sorted(maps.Keys(pkg.Schemas)) {
+		v.validateSchema(name, pkg.Schemas[name])
 	}
 
-	// Validate parameters
-	for name, param := range pkg.Parameters {
-		v.validateParameter(name, param)
+	for _, name := range slices.Sorted(maps.Keys(pkg.Parameters)) {
+		v.validateParameter(name, pkg.Parameters[name])
 	}
 
 	// Validate endpoints

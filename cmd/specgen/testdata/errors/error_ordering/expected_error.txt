@@ -1,0 +1,7 @@
+validate: 5 validation errors:
+  1. @schema[Alpha].Count: minimum cannot be greater than maximum
+  2. @schema[Mid].Label: uniqueItems only valid for array types
+  3. @schema[Zeta].Token: readOnly and writeOnly cannot both be true
+  4. @query[AreaQuery].Origin: query parameters must be a scalar or a list of scalars, but Origin is the schema Alpha
+  5. @query[ZoneQuery].Corner: query parameters must be a scalar or a list of scalars, but Corner is the schema Alpha
+
