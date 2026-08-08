@@ -543,74 +543,87 @@ func canBeEmpty(fieldType types.Type) bool {
 	}
 }
 
-// resolveFieldWithParamType resolves a field for a parameter with the appropriate struct tag
-// Returns nil, nil if the field should be skipped (e.g., json:"-" for schema fields or unexported fields)
+// parameterKinds are the struct tags that can name a parameter.
+var parameterKinds = []string{"path", "query", "header", "cookie"}
+
+// resolveFieldWithParamType resolves one field of a parameter struct.
+//
+// Naming mirrors encoding/json, so there is one naming rule across the whole
+// codebase rather than one for bodies and another for parameters:
+//
+//	query:"limit"    the parameter is named limit
+//	query:"-"        the field is skipped
+//	query:"-,"       the parameter is literally named "-", as in encoding/json
+//	(no query tag)   the parameter is named by the Go field
+//
+// A field tagged for a different kind is the exception, and an error. A @query
+// struct describes query parameters; a field carrying only path:"tenant_id" is
+// either a mistake or a struct doing double duty, and either way the parameter
+// specgen emits is not the one the handler reads.
 func (r *Resolver) resolveFieldWithParamType(field *types.Var, tag string, annotation *parser.Field, paramType string) (*Field, error) {
-	// Skip unexported (private) fields - they cannot be serialized
+	// Unexported fields cannot be bound from a request.
 	if !field.Exported() {
 		return nil, nil
 	}
 
-	// Extract name from the appropriate struct tag based on parameter type
-	var tagName string
-	switch paramType {
-	case "path":
-		tagName = extractTagName(tag, "path")
-	case "query":
-		tagName = extractTagName(tag, "query")
-	case "header":
-		tagName = extractTagName(tag, "header")
-	case "cookie":
-		tagName = extractTagName(tag, "cookie")
-	default:
-		// For schemas, use tag fallback chain (json -> xml -> Go field name)
-		tagName = resolveFieldNameFromTag(tag, field.Name())
-		if tagName == "" {
-			// Field should be skipped (e.g., json:"-")
-			return nil, nil
-		}
-	}
+	structTag := reflect.StructTag(tag)
+	value, tagged := structTag.Lookup(paramType)
 
-	// For parameter types, handle "-" and empty as fallback to Go field name
-	if tagName == "-" || tagName == "" {
-		tagName = field.Name()
+	name, options, hasOptions := strings.Cut(value, ",")
+
+	switch {
+	case !tagged:
+		if other := otherParameterKind(structTag, paramType); other != "" {
+			return nil, fmt.Errorf(
+				"field %s is tagged %q but sits in a @%s struct; tag it %q or move it",
+				field.Name(), other, paramType, paramType)
+		}
+		name = field.Name()
+
+	case name == "-" && !hasOptions:
+		return nil, nil
+
+	case name == "":
+		// query:",required" names nothing, so the Go field name applies.
+		name = field.Name()
 	}
 
 	resolved := &Field{
-		Name:   tagName,
+		Name:   name,
 		GoName: field.Name(),
 		GoType: field.Type().String(),
-	}
+		Type:   r.resolveTypeRef(field.Type()),
 
-	// Check if field is required based on parameter type.
-	// Path parameters are always required. Query, header, and cookie parameters
-	// are optional by default and only required if the tag contains ",required".
-	// Schema/JSON fields use the omitempty/omitzero logic.
-	switch paramType {
-	case "path":
-		resolved.Required = true
-	case "query", "header", "cookie":
-		resolved.Required = strings.Contains(tag, ",required")
-	default:
-		resolved.Required = !omitsWhenEmpty(tag, field.Type())
-	}
+		// Path parameters are part of the URL, so they are always required.
+		// The rest are optional unless the tag opts in — read from this kind's
+		// own options, not from the raw tag, where a ",required" belonging to
+		// some other tag used to count.
+		Required: paramType == "path" || slices.Contains(strings.Split(options, ","), "required"),
 
-	resolved.Type = r.resolveTypeRef(field.Type())
+		// Parameters serialize as plain strings, which cannot represent null,
+		// so pointer-ness never implies nullable — a pointer only lets the
+		// handler distinguish absent from zero. @nullable can still opt in.
+		Nullable: false,
+	}
 	resolved.Format = resolved.Type.Format
-
-	// Parameters serialize as plain strings, which cannot represent null,
-	// so pointer-ness never implies nullable — a pointer only lets the
-	// handler distinguish absent from zero. @nullable true can still opt in.
-	switch paramType {
-	case "path", "query", "header", "cookie":
-		resolved.Nullable = false
-	default:
-		resolved.Nullable = isNullable(field.Type())
-	}
 
 	applyAnnotationOverrides(resolved, annotation)
 
 	return resolved, nil
+}
+
+// otherParameterKind reports a parameter tag on this field that names a
+// different kind than the struct it is in, or "" if there is none.
+func otherParameterKind(tag reflect.StructTag, paramType string) string {
+	for _, kind := range parameterKinds {
+		if kind == paramType {
+			continue
+		}
+		if _, ok := tag.Lookup(kind); ok {
+			return kind
+		}
+	}
+	return ""
 }
 
 // applyAnnotationOverrides applies @field annotation values onto a resolved field

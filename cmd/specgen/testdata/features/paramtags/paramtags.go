@@ -33,6 +33,9 @@ type TagMatrix struct {
 	// @field { @description Skipped, mirroring encoding/json }
 	Internal *string `query:"-"`
 
+	// @field { @description Literally named "-", using json's escape }
+	Dash *string `query:"-,"`
+
 	// @field { @description No query tag, so the Go field name is used }
 	Cursor *string
 

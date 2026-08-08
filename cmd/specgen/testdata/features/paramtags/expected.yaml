@@ -20,9 +20,9 @@ paths:
                   required: true
                   schema:
                     type: string
-                - name: Internal
+                - name: '-'
                   in: query
-                  description: Skipped, mirroring encoding/json
+                  description: Literally named "-", using json's escape
                   required: false
                   schema:
                     type: string
@@ -35,7 +35,7 @@ paths:
                 - name: note
                   in: query
                   description: Only the json tag carries ",required"
-                  required: true
+                  required: false
                   schema:
                     type: string
                 - name: per_page

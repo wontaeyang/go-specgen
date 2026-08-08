@@ -3,10 +3,7 @@
 //
 // A @query struct describes query parameters and nothing else. A field carrying
 // only a path: tag is either a mistake or a struct doing double duty, and
-// either way the emitted parameter would not match what the binder reads. It is
-// meant to be an error.
-//
-// This fixture moves to testdata/errors when that lands.
+// either way the emitted parameter would not match what the binder reads.
 //
 //	@api {
 //	  @title Wrong Parameter Kind Fixture
