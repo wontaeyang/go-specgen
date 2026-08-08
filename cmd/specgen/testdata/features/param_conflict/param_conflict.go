@@ -2,9 +2,9 @@
 // (bug #6).
 //
 // OpenAPI keys parameter uniqueness on (name, in), so a path "id" alongside a
-// query "id" is legal and unambiguous. specgen keys on the name alone and
-// rejects it, so this fixture currently lives here rather than under features/.
-// It moves when the conflict rule is corrected.
+// query "id" is legal and unambiguous: they address different things and the
+// document says which is which. specgen used to key on the name alone and
+// reject this.
 //
 //	@api {
 //	  @title Parameter Conflict Fixture

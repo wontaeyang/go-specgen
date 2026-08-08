@@ -398,10 +398,10 @@ func (v *Validator) validateEndpoint(endpoint *resolver.Endpoint, pkg *resolver.
 	// Validate no parameter name conflicts
 	v.validateParameterConflicts(path, endpoint)
 
-	// Validate tags reference defined API-level tags
-	if len(pkg.API.Tags) > 0 && len(endpoint.Tags) > 0 {
-		v.validateEndpointTags(path, endpoint.Tags, pkg.API.Tags)
-	}
+	// Validate tags reference defined API-level tags. Deliberately not guarded
+	// on the API having declared any: an API with no @tag blocks is exactly the
+	// case where every endpoint tag is undefined.
+	v.validateEndpointTags(path, endpoint.Tags, pkg.API.Tags)
 }
 
 // validatePath validates the path format
@@ -545,21 +545,25 @@ func (v *Validator) validateResponse(path string, response *resolver.Response, s
 	}
 }
 
-// validateParameterConflicts checks for parameter name conflicts.
+// validateParameterConflicts checks for duplicate parameters.
 //
-// Walking the merged list means in-function parameters are checked too. The
-// four-way version this replaces read only the named declarations, so a handler
-// could declare an inline @query x alongside a named @path x and hear nothing.
+// OpenAPI identifies a parameter by (name, location), not by name: a path "id"
+// and a query "id" are two different parameters and both are legal. Keying on
+// the name alone rejected that, which is legal input specgen refused to
+// describe.
+//
+// The duplicates that do matter are two declarations of the same name in the
+// same location, since the emitted document would list one parameter twice.
 func (v *Validator) validateParameterConflicts(path string, endpoint *resolver.Endpoint) {
-	seen := make(map[string]string) // name -> location it was first seen in
+	type key struct{ name, in string }
 
+	seen := make(map[key]bool)
 	for _, param := range endpoint.Parameters {
-		name := param.Field.Name
-		if previous, exists := seen[name]; exists {
-			v.addError(path, fmt.Sprintf(
-				"parameter name conflict: %s appears in both %s and %s parameters", name, previous, param.In))
+		k := key{param.Field.Name, param.In}
+		if seen[k] {
+			v.addError(path, fmt.Sprintf("duplicate %s parameter: %s", param.In, param.Field.Name))
 		}
-		seen[name] = param.In
+		seen[k] = true
 	}
 }
 

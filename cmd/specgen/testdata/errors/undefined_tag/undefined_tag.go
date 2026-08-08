@@ -1,11 +1,8 @@
 // Package undefined_tag cites an endpoint tag that the API never defines.
 //
-// The validator has a rule for exactly this, but it is guarded by
-// "len(pkg.API.Tags) > 0", so it only runs once at least one tag has been
-// defined. An API that defines none — like this one — skips the check entirely,
-// and the undefined tag reaches the spec.
-//
-// This fixture moves to testdata/errors when the guard is dropped.
+// The check used to be guarded by "len(pkg.API.Tags) > 0", so an API that
+// declared no tags — exactly the case where every endpoint tag is undefined —
+// skipped it, and the tag reached the spec.
 //
 //	@api {
 //	  @title Undefined Tag Fixture
