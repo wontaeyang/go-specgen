@@ -115,14 +115,14 @@ tool github.com/wontaeyang/go-specgen/cmd/specgen@v1.0.0
 Then run:
 
 ```bash
-go tool specgen -package ./handlers -output openapi.yaml
+go tool specgen -package ./handlers -yaml openapi.yaml
 ```
 
 ### Using go install
 
 ```bash
 go install github.com/wontaeyang/go-specgen/cmd/specgen@latest
-specgen -package ./handlers -output openapi.yaml
+specgen -package ./handlers -yaml openapi.yaml
 ```
 
 ### Build from source
@@ -142,24 +142,28 @@ specgen [options]
 
 Options:
   -package string    Path to Go package (default ".")
-  -output string     Output file path (default "openapi.yaml")
-  -format string     Output format: json or yaml (default "yaml")
-  -openapi string    OpenAPI version: 3.0, 3.1, or 3.2 (default "3.0")
+  -yaml string       Write the spec as YAML to this path
+  -json string       Write the spec as JSON to this path
+  -openapi string    OpenAPI version: 3.1 or 3.2 (default "3.1")
   -version           Show version
   -help              Show help
 ```
 
+At least one of `-yaml` or `-json` is required. The spec is written only to the
+paths you name — there is no default output file. Passing both renders both from
+a single pass, so the two files can never disagree.
+
 **Examples:**
 
 ```bash
-# Generate from current directory
-specgen
+# Both formats from one run
+specgen -package ./api -yaml openapi.yaml -json openapi.json
 
-# Generate JSON from specific package
-specgen -package ./api/handlers -format json -output openapi.json
+# YAML only, into a directory that may not exist yet
+specgen -package ./api -yaml docs/openapi.yaml
 
-# Generate OpenAPI 3.1
-specgen -openapi 3.1
+# OpenAPI 3.2 (identical output apart from the version string)
+specgen -package ./api -openapi 3.2 -yaml openapi.yaml
 ```
 
 ---
@@ -194,8 +198,20 @@ Go types map to OpenAPI types automatically:
 | `time.Time` | `string` | `date-time` |
 | `url.URL` | `string` | `uri` |
 | `[]T` | `array` | items: T |
+| `[N]T` | `array` | items: T |
+| `[]byte` | `string` | `byte` |
+| `map[string]T` | `object` | additionalProperties: T |
 | `*T` | nullable T | - |
 | `any` | `{}` | any JSON value |
+
+Containers nest to any depth, and every level keeps its own type and format:
+`map[string][]time.Time` is an object whose `additionalProperties` is an array
+whose `items` are `date-time` strings.
+
+A Go type with no OpenAPI representation is an error, not a guess. Channels,
+functions, complex numbers and `uintptr` are rejected — `encoding/json` refuses
+to marshal them too, so there is nothing truthful to emit. A field whose type is
+a struct without `@schema` is rejected the same way.
 
 Custom types resolve to their underlying type:
 
@@ -242,9 +258,12 @@ rather than encoded as `null`, so the field is optional and non-nullable.
 | Parameter type | Default | Required when |
 |----------------|---------|---------------|
 | `path` | Always required | Always |
-| `query` | Optional | Tag contains `,required` (e.g., `query:"q,required"`) |
-| `header` | Optional | Tag contains `,required` |
-| `cookie` | Optional | Tag contains `,required` |
+| `query` | Optional | The `query` tag has the `required` option (e.g., `query:"q,required"`) |
+| `header` | Optional | The `header` tag has the `required` option |
+| `cookie` | Optional | The `cookie` tag has the `required` option |
+
+The option is read from the tag matching the parameter's own kind. A `,required`
+sitting in some other tag on the same field has no effect.
 
 **Overrides** — `@required` and `@nullable` on `@field` let you decouple the OpenAPI contract from Go's type/tag defaults when they don't match what you want to expose:
 
@@ -277,23 +296,36 @@ When omitted, behavior falls back to the Go-type rules in the tables above.
 
 ### Embedded Structs
 
-Embedded (anonymous) struct fields are flattened into the parent schema or parameter:
+Embedded (anonymous) fields follow `encoding/json` exactly:
 
 ```go
 type BaseModel struct {
-    ID        string `json:"id"`
-    CreatedAt string `json:"created_at"`
+    // @field { @description Identifier }
+    ID string `json:"id"`
 }
 
+type Meta struct{ Revision int `json:"revision"` }
+type Hidden struct{ Secret string `json:"secret"` }
+type Label string
+
 // @schema
-type User struct {
-    BaseModel                    // Fields flattened into User
-    Name  string `json:"name"`
-    Email string `json:"email"`
+type Document struct {
+    BaseModel                 // untagged struct    -> fields flattened into Document
+    Meta      `json:"meta"`   // tagged struct      -> nested under "meta"
+    Hidden    `json:"-"`      // tagged "-"         -> omitted entirely
+    Label                     // untagged non-struct -> field named "Label"
+
+    Title string `json:"title"`
 }
 ```
 
-The embedded struct does not need a `@schema` annotation — its fields are inlined directly.
+An untagged embedded struct does not need `@schema` — its fields are flattened
+in, and they bring their own `@field` annotations with them. A *tagged* embedded
+struct becomes a nested field, so it does need `@schema` in order to be
+referenced.
+
+Embedded `time.Time` and the other standard-library types that serialize as
+scalars are not flattened; they stay single fields.
 
 ### Schema References
 
@@ -654,18 +686,69 @@ Only `@description` supports multi-line values:
 
 ### Parameter Rules
 
-**Path (`@path`):** Always required, simple types only, no arrays/objects.
+**Path (`@path`):** Always required, scalars only, no arrays.
 
-**Query (`@query`):** Optional by default, use `,required` tag to mark required (e.g., `query:"q,required"`). Arrays allowed for repeated params.
+**Query (`@query`):** Optional by default; `query:"q,required"` marks it required. Arrays allowed, for repeated parameters.
 
-**Header (`@header`):** Optional by default, use `,required` tag to mark required. No arrays/objects.
+**Header (`@header`):** Optional by default; `header:"X-Key,required"` marks it required. No arrays.
 
-**Cookie (`@cookie`):** Optional by default, use `,required` tag to mark required. No arrays/objects.
+**Cookie (`@cookie`):** Optional by default; `cookie:"session,required"` marks it required. No arrays.
+
+**Naming** mirrors `encoding/json`, so one rule covers parameters and bodies alike:
+
+| Tag | Parameter |
+|-----|-----------|
+| `query:"limit"` | named `limit` |
+| `query:"-"` | skipped |
+| `query:"-,"` | named `-` |
+| no `query` tag | named by the Go field |
+
+Field names are never transformed: what you write is what the spec says.
+
+A parameter is a scalar or a list of scalars, and nothing else. `net/http` hands
+parameters over as `map[string][]string`, so there is no structured value to
+decode into — a struct-typed parameter field is an error, and `deepObject` is not
+supported. A field tagged for a different kind than the struct it sits in
+(`path:"x"` inside a `@query` struct) is an error too, rather than being renamed.
+
+### Where the spec and `encoding/json` differ
+
+specgen describes what `encoding/json` puts on the wire, so most of the time the
+two agree by construction. These are the places they deliberately do not:
+
+| | `encoding/json` | specgen |
+|---|---|---|
+| nil slice / nil map | writes `null` | not nullable — a handler returning one nearly always means "empty", and `@nullable true` opts in |
+| pointer parameter | n/a | never nullable: a parameter is text in a URL or header, which cannot carry `null`. The pointer only lets the handler tell absent from zero |
+| generic template | marshals normally | not emitted to `components/schemas` — a template is not a type. Aliases that instantiate it are emitted |
+| unmarshalable type | fails at runtime | rejected at generation time |
+
+And two things specgen does *not* do, deliberately:
+
+- **No name transformation.** An untagged field is named exactly as it is
+  declared in Go. There is no snake_case conversion anywhere in the pipeline.
+- **No `deepObject`.** Structured parameters have no `net/http` model, so they
+  are an error rather than a guess at an encoding.
+
+### Errors
+
+specgen fails rather than emitting a spec it cannot stand behind. The cases:
+
+- a type with no OpenAPI representation (channel, function, complex, `uintptr`)
+- a field whose type is a struct without `@schema`
+- a parameter that is not a scalar or a list of scalars
+- a parameter field tagged for a different kind than its struct
+- a body naming a schema that does not exist
+- an endpoint tag with no API-level `@tag`
+- the same parameter name twice in the same location
+- constraints that contradict each other, or apply to the wrong type
+
+Validation errors accumulate, so one run reports all of them.
 
 ### Limitations
 
 - **JSON only** - Field names parsed from `json` struct tags
-- **OpenAPI 3.x** - Supports 3.0, 3.1, 3.2 (not OpenAPI 2.0/Swagger)
+- **OpenAPI 3.1+** - Supports 3.1 and 3.2 (not 3.0, not OpenAPI 2.0/Swagger)
 
 ### Requirements
 
