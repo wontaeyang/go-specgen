@@ -318,14 +318,12 @@ func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*
 
 		fieldAnnotation := findAnnotation(annotations, field.Name())
 
-		// Resolve field type. A field that cannot resolve is recorded and
-		// skipped rather than ending the struct, so a type mistake repeated
-		// across several fields is reported once per field instead of once.
-		resolvedField, err := r.resolveField(field, tag, fieldAnnotation)
-		if err != nil {
-			r.errs.Addf(r.path+"."+field.Name(), "%s", err)
-			continue
-		}
+		// Nothing here can fail: a type with no OpenAPI representation still
+		// resolves, to ShapeUnsupported, and the validator is what reports it.
+		// The parameter-struct loop does accumulate, because its own field
+		// resolution genuinely errors -- see resolveParameterFields.
+		resolvedField := r.resolveField(field, tag, fieldAnnotation)
+
 		// Skip fields that should be omitted (e.g., json:"-")
 		if resolvedField == nil {
 			continue
@@ -514,9 +512,11 @@ func (r *Resolver) resolveParameterFields(structType *types.Struct, annotations 
 
 		fieldAnnotation := findAnnotation(annotations, field.Name())
 
-		// Resolve field type. Recorded and skipped, for the same reason as in
-		// resolveSchemaFields: mis-tagging one field of a parameter struct
-		// usually means mis-tagging several.
+		// Recorded and skipped rather than ending the struct: mis-tagging one
+		// field of a parameter struct usually means mis-tagging several, and
+		// reporting them one run at a time is the case accumulation is for.
+		// Unlike resolveSchemaFields, this one really can fail — a field tagged
+		// for one parameter kind inside a struct declared as another.
 		resolvedField, err := r.resolveFieldWithParamType(field, tag, fieldAnnotation, paramType)
 		if err != nil {
 			r.errs.Addf(r.path+"."+field.Name(), "%s", err)
@@ -546,17 +546,25 @@ func (r *Resolver) flattenEmbeddedParamField(field *types.Var, annotations []*pa
 
 // resolveField resolves a single struct field.
 //
-// Returns nil, nil when the field should not appear at all: unexported, or
-// tagged json:"-".
-func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser.Field) (*Field, error) {
+// Returns nil when the field should not appear at all: unexported, or tagged
+// json:"-".
+//
+// There is no error to return. Every Go type resolves to some shape, and the
+// one that has no OpenAPI representation resolves to ShapeUnsupported carrying
+// the reason — which the validator reports, where a reader sees the type named
+// alongside every other problem in the package. Its sibling
+// resolveFieldWithParamType does error, because a field tagged for one
+// parameter kind inside a struct declared as another is a contradiction in the
+// annotation rather than a fact about the type.
+func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser.Field) *Field {
 	// Unexported fields cannot be serialized.
 	if !field.Exported() {
-		return nil, nil
+		return nil
 	}
 
 	fieldName := resolveFieldNameFromTag(tag, field.Name())
 	if fieldName == "" {
-		return nil, nil
+		return nil
 	}
 
 	typeRef := r.resolveTypeRef(field.Type(), annotationFields(annotation))
@@ -577,7 +585,7 @@ func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser
 
 	applyAnnotationOverrides(resolved, annotation)
 
-	return resolved, nil
+	return resolved
 }
 
 // findAnnotation returns the @field annotation written on a Go field, or nil.
@@ -617,8 +625,8 @@ func (r *Resolver) resolveAnonymousFields(structType *types.Struct, annotations 
 			continue
 		}
 
-		resolved, err := r.resolveField(field, tag, findAnnotation(annotations, field.Name()))
-		if err != nil || resolved == nil {
+		resolved := r.resolveField(field, tag, findAnnotation(annotations, field.Name()))
+		if resolved == nil {
 			continue
 		}
 		fields = append(fields, resolved)

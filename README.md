@@ -670,16 +670,30 @@ All block annotations use curly braces `{ }` for grouping. Blocks can be written
 
 | Escape | Result | Use case |
 |--------|--------|----------|
-| `\{`   | `{`    | Regex quantifiers, JSON examples |
-| `\}`   | `}`    | Regex quantifiers, JSON examples |
+| `\{`   | `{`    | A literal brace in a value — JSON examples and defaults |
+| `\}`   | `}`    | A literal brace in a value — JSON examples and defaults |
 | `\@`   | `@`    | Email addresses; a description line that starts with `@` |
 | `\\`   | `\`    | Literal backslash |
 
 ```go
-// @field { @pattern ^[A-Z]\{2\}$ }           // Regex: ^[A-Z]{2}$
 // @field { @description Contact admin\@example.com }
 // @field { @example \{"name": "John"\} }    // JSON example
 ```
+
+**`@pattern` is the exception.** A regex is a language with its own brace rules,
+so `@pattern` is the one annotation whose value is passed through verbatim —
+write the regex exactly as you mean it, escaping nothing:
+
+```go
+// @field { @pattern ^[A-Z]{2}$ }             // quantifier, as written
+// @field { @pattern ^a}b$ }                  // unpaired brace is fine
+// @field { @pattern [{] }                    // so is a literal one
+```
+
+Escaping a `@pattern` changes it: `^[A-Z]\{2\}$` reaches the spec with the
+backslashes intact, where `\{2\}` matches a literal `{2}` rather than repeating
+the previous character twice. `examples/rawvalue/` pins this — every regex there
+is written twice, inline and as a block, and the two forms must agree.
 
 ### Multi-line Descriptions
 
@@ -767,6 +781,7 @@ specgen fails rather than emitting a spec it cannot stand behind. The cases:
 - an endpoint tag with no API-level `@tag`
 - the same parameter name twice in the same location
 - constraints that contradict each other, or apply to the wrong type
+- an annotation on a declaration that cannot carry it (see below)
 
 Every stage accumulates, so one run reports every mistake it can reach rather
 than stopping at the first:
@@ -790,6 +805,48 @@ at the first name it does not recognize — `{ @desc Line items @min 1 }` report
 then resolve, then validate. The resolver never sees a package that failed to
 parse, so a run reports everything wrong at one stage rather than across all
 three.
+
+### Annotations in the wrong place
+
+The annotation that opens a doc comment decides what the declaration is, and each
+kind of declaration accepts its own:
+
+```
+package doc        @api
+type               @schema @path @query @header @cookie
+func               @endpoint
+struct field       @field
+in a func body     @path @query @header @cookie @request @response
+```
+
+Writing a real annotation somewhere it cannot mean anything is an error, because
+there is exactly one thing you meant:
+
+```
+Error: parse: 2 parse errors:
+  1. type Widget: @summary cannot annotate a type; valid here: @cookie, @header, @path, @query, @schema
+  2. func ListWidgets: @schema cannot annotate a func; valid here: @endpoint
+```
+
+A name that appears in no annotation at all is reported instead, and the run
+continues:
+
+```
+$ specgen -package ./api -yaml openapi.yaml
+specgen: func ListWidgets: @endpoin is not an annotation; it was skipped
+Wrote openapi.yaml
+```
+
+It cannot be an error, because a doc comment is also ordinary documentation and
+nothing distinguishes `@endpoin` from an `@author` line in a package that never
+asked specgen for an opinion. But a misspelled `@endpoint` costs a whole
+operation, so it is not silent either. Write `\@` for a doc comment that really
+does begin a line with `@`.
+
+Only the *opening* annotation is subject to this. Names written inside a block
+are checked against the grammar and always error, and a comment that discusses an
+annotation in prose before declaring the real one is fine — what matters is
+whether any line claims the declaration, not what the first line says.
 
 ### Limitations
 

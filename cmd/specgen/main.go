@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 )
@@ -10,6 +11,13 @@ import (
 const version = "1.0.0"
 
 func main() {
+	// The pipeline reports a skipped declaration through the log package, which
+	// writes to stderr and leaves stdout to the "Wrote <path>" lines. A date and
+	// a time on a message about a comment in a source file would be noise, so
+	// the line reads as a CLI message rather than a server one.
+	log.SetFlags(0)
+	log.SetPrefix("specgen: ")
+
 	packagePath := flag.String("package", ".", "Path to the Go package to parse")
 	yamlPath := flag.String("yaml", "", "Write the spec as YAML to this path")
 	jsonPath := flag.String("json", "", "Write the spec as JSON to this path")

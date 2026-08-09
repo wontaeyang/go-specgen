@@ -1,0 +1,5 @@
+parse: 3 parse errors:
+  1. type Widget: @summary cannot annotate a type; valid here: @cookie, @header, @path, @query, @schema
+  2. func ListWidgets: @schema cannot annotate a func; valid here: @endpoint
+  3. field Widget.ID: @description cannot annotate a field; valid here: @field
+

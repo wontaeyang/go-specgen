@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"log"
 	"path/filepath"
 	"strings"
 
@@ -188,6 +189,11 @@ type TypeDeclInfo struct {
 	IsGeneric   bool   // Has type parameters (e.g., type Foo[T any] struct{})
 	IsTypeAlias bool   // Is a type alias (e.g., type Bar = Foo[Baz])
 	AliasOf     string // For type aliases, the aliased type (e.g., "Foo[Baz]")
+
+	// Local marks a type declared inside a function body. Such a type is an
+	// in-function declaration, so the annotations legal on it are the
+	// in-function ones rather than the ones legal on a package-level type.
+	Local bool
 }
 
 // ExtractComments extracts all comment blocks from a Go package
@@ -253,6 +259,17 @@ func ExtractComments(packagePath string) (*PackageComments, error) {
 			}
 		}
 
+		// A type declared inside a function body is reached by ast.Inspect just
+		// like a package-level one, and is indistinguishable from it by name
+		// alone. It matters because such a type is an in-function declaration —
+		// examples/closure writes `type request struct` under an @request — and
+		// the annotations legal on it are not the ones legal on a package-level
+		// type.
+		topLevel := make(map[ast.Decl]bool, len(file.Decls))
+		for _, decl := range file.Decls {
+			topLevel[decl] = true
+		}
+
 		// Traverse AST nodes
 		ast.Inspect(file, func(n ast.Node) bool {
 			if extractErr != nil {
@@ -277,6 +294,7 @@ func ExtractComments(packagePath string) (*PackageComments, error) {
 								Name:        typeName,
 								IsGeneric:   isGeneric,
 								IsTypeAlias: isTypeAlias,
+								Local:       !topLevel[node],
 							}
 
 							// For type aliases, extract the aliased type
@@ -322,7 +340,7 @@ func ExtractComments(packagePath string) (*PackageComments, error) {
 				}
 				// Extract inline declarations from function body
 				if node.Body != nil {
-					inlines, err := extractFuncInlines(fset, pkg.TypesInfo, node.Body)
+					inlines, err := extractFuncInlines(fset, pkg.TypesInfo, funcName, node.Body)
 					if err != nil {
 						extractErr = fmt.Errorf("in function %s: %w", funcName, err)
 						return false
@@ -440,6 +458,26 @@ func (cb *CommentBlock) HasAnnotation(annotation string) bool {
 	return false
 }
 
+// firstAnnotationName is the annotation a comment block opens with, or "" when
+// the block is ordinary documentation.
+//
+// Only the first one matters. It is the line that decides what the declaration
+// is; everything after it is inside a block, where parseChildren checks each
+// name against the grammar already. A line beginning \@ is prose, since that is
+// how a literal @ is written everywhere else in the syntax.
+func firstAnnotationName(cb *CommentBlock) string {
+	if cb == nil {
+		return ""
+	}
+
+	for _, line := range cb.Lines {
+		if name := extractAnnotationName(line); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
 // GetAnnotationLines returns all lines that are part of an annotation
 // This includes the annotation line and any continuation lines
 func (cb *CommentBlock) GetAnnotationLines() []string {
@@ -547,7 +585,10 @@ func collectGenDecls(body *ast.BlockStmt) []*ast.GenDecl {
 // @response annotations. Only @response is repeatable (keyed by status code);
 // a duplicate in any other category — or a duplicate status code for @response —
 // is an error. Users needing composition should reference named @schema types.
-func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.BlockStmt) (*FuncInlineInfo, error) {
+//
+// funcName is only for messages: a declaration inside a handler has no name a
+// reader could find it by on its own.
+func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, funcName string, body *ast.BlockStmt) (*FuncInlineInfo, error) {
 	if body == nil {
 		return nil, nil
 	}
@@ -568,19 +609,38 @@ func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.Bl
 			continue
 		}
 
-		annotation, statusCode := detectInlineAnnotation(commentBlock.Lines)
-		if !isInlineAnnotation(annotation) {
+		// detectInlineAnnotation answers "" for a name no in-function grammar
+		// defines, which is the whole of what it can say about @quer. What the
+		// user actually wrote is the only thing that can be reported, so an
+		// unclaimed comment is asked again, lexically.
+		inlineName, statusCode := detectInlineAnnotation(commentBlock.Lines)
+		if inlineName == "" {
+			written := firstAnnotationName(commentBlock)
+			if written == "" {
+				// Ordinary documentation on a local variable.
+				continue
+			}
+
+			// The error is wrapped with "in function <name>" by the caller, so
+			// it names only the declaration. The log line has no such wrapper
+			// and carries the function itself.
+			if annotation.IsKnown(written) {
+				return nil, fmt.Errorf("%s cannot annotate %q; a declaration in a function body takes: %s",
+					written, declaredName(genDecl), strings.Join(annotation.InFunction(), ", "))
+			}
+
+			log.Printf("%s: %s is not an annotation; it was skipped", declarationSubject(funcName, genDecl), written)
 			continue
 		}
 
-		ident, structType, err := inlineStructDecl(genDecl, annotation)
+		ident, structType, err := inlineStructDecl(genDecl, inlineName)
 		if err != nil {
 			return nil, err
 		}
 
 		inline := &InlineStructInfo{
 			VarName:       ident.Name,
-			Annotation:    annotation,
+			Annotation:    inlineName,
 			Comment:       commentBlock,
 			Ident:         ident,
 			StatusCode:    statusCode,
@@ -590,7 +650,7 @@ func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.Bl
 		// Store based on annotation type. @query/@path/@header/@cookie are
 		// repeatable per schema — append. @request is single-slot. @response is
 		// keyed by status code; a duplicate status code is an error.
-		switch annotation {
+		switch inlineName {
 		case "query":
 			result.Query = append(result.Query, inline)
 		case "path":
@@ -622,17 +682,29 @@ func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.Bl
 	return result, nil
 }
 
-// isInlineAnnotation reports whether name is one of the annotations that can be
-// written inside a function body. detectInlineAnnotation answers with any
-// top-level grammar name it finds, so a comment carrying @schema or @field
-// above a local declaration reaches here too — those belong on a package-level
-// declaration and are none of this function's business.
-func isInlineAnnotation(name string) bool {
-	switch name {
-	case "query", "path", "header", "cookie", "request", "response":
-		return true
+// declarationSubject names a declaration inside a handler, for a message. The
+// function is half of it: a var called "filters" is not findable on its own.
+func declarationSubject(funcName string, genDecl *ast.GenDecl) string {
+	subject := "declaration in " + funcName
+	if name := declaredName(genDecl); name != "" {
+		subject = fmt.Sprintf("declaration %s.%s", funcName, name)
 	}
-	return false
+	return subject
+}
+
+// declaredName is the first name a declaration binds, or "" when it binds none.
+func declaredName(genDecl *ast.GenDecl) string {
+	for _, spec := range genDecl.Specs {
+		switch s := spec.(type) {
+		case *ast.ValueSpec:
+			if len(s.Names) > 0 {
+				return s.Names[0].Name
+			}
+		case *ast.TypeSpec:
+			return s.Name.Name
+		}
+	}
+	return ""
 }
 
 // inlineStructDecl reads the one struct an in-function annotation is attached

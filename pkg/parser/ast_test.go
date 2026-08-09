@@ -611,7 +611,7 @@ func TestExtractFuncInlines_MustDefineStruct(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			body := parseHandlerBody(t, tt.body)
 
-			_, err := extractFuncInlines(token.NewFileSet(), nil, body)
+			_, err := extractFuncInlines(token.NewFileSet(), nil, "H", body)
 			if err == nil {
 				t.Fatalf("expected an error, got none")
 			}
@@ -637,7 +637,7 @@ func TestExtractFuncInlines_AcceptsStructDefinitions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			body := parseHandlerBody(t, tt.body)
 
-			inlines, err := extractFuncInlines(token.NewFileSet(), nil, body)
+			inlines, err := extractFuncInlines(token.NewFileSet(), nil, "H", body)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

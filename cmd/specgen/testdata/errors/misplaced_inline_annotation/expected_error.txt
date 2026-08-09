@@ -1,0 +1,1 @@
+parse: failed to extract comments: in function GetWidget: @schema cannot annotate "resp"; a declaration in a function body takes: @cookie, @header, @path, @query, @request, @response

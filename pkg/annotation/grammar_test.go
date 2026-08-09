@@ -1,6 +1,7 @@
 package annotation
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -604,5 +605,85 @@ func TestSchema_Server(t *testing.T) {
 func TestSchema_Integrity(t *testing.T) {
 	if err := Schema.Validate(); err != nil {
 		t.Errorf("Schema integrity validation failed: %v", err)
+	}
+}
+
+// TestTargetIntegrity is what keeps Target from drifting. An annotation added
+// to a root without one would be written on nothing, silently — the failure
+// mode of the per-pass lists Target replaced. Declaration's children take no
+// Target: that grammar covers exactly one context, so membership is the answer.
+func TestTargetIntegrity(t *testing.T) {
+	if err := Schema.ValidateTargets(true); err != nil {
+		t.Errorf("Schema targets: %v", err)
+	}
+	if err := Declaration.ValidateTargets(false); err != nil {
+		t.Errorf("Declaration targets: %v", err)
+	}
+}
+
+// TestWrittenOn pins the sets the parser derives instead of holding its own
+// copy of. Every top-level name lands under exactly one declaration.
+func TestWrittenOn(t *testing.T) {
+	want := map[Target][]string{
+		OnPackage: {"@api"},
+		OnType:    {"@cookie", "@header", "@path", "@query", "@schema"},
+		OnFunc:    {"@endpoint"},
+		OnField:   {"@field"},
+	}
+
+	var total int
+	for target, names := range want {
+		got := WrittenOn(target)
+		if !slices.Equal(got, names) {
+			t.Errorf("WrittenOn(%v) = %v, want %v", target, got, names)
+		}
+		total += len(names)
+	}
+
+	if total != len(Schema.Children) {
+		t.Errorf("the targets cover %d names but Schema has %d children; one is written on nothing",
+			total, len(Schema.Children))
+	}
+}
+
+func TestInFunction(t *testing.T) {
+	want := []string{"@cookie", "@header", "@path", "@query", "@request", "@response"}
+
+	if got := InFunction(); !slices.Equal(got, want) {
+		t.Errorf("InFunction() = %v, want %v", got, want)
+	}
+}
+
+// TestIsKnown covers the question no single grammar node answers: whether a
+// name means anything anywhere. It is what separates an annotation in the wrong
+// place, which is a mistake with one correct reading, from a name that is
+// indistinguishable from prose.
+func TestIsKnown(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"@api", true},
+		{"@endpoint", true},
+		{"@schema", true},
+		{"@field", true},
+		{"@summary", true},   // nested: a child of @endpoint
+		{"@minLength", true}, // nested: a child of @field
+		{"@request", true},   // top level in Declaration only
+		{"@bind", true},      // nested two levels down
+		{"@endpoin", false},  // typo
+		{"@schemaa", false},  // typo
+		{"@route", false},    // plausible, but not this grammar
+		{"@author", false},   // prose
+		{"root", false},      // the tree's own name is not an annotation
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsKnown(tt.name); got != tt.want {
+				t.Errorf("IsKnown(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
 	}
 }

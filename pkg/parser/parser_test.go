@@ -1,6 +1,9 @@
 package parser
 
 import (
+	"bytes"
+	"log"
+	"os"
 	"strings"
 	"testing"
 
@@ -1410,5 +1413,55 @@ func TestExpandContentType(t *testing.T) {
 				t.Errorf("ExpandContentType(%q) = %q, want %q", tt.shortName, result, tt.expected)
 			}
 		})
+	}
+}
+
+// TestParse_LogsSkippedAnnotations covers the declarations specgen passes over
+// because their doc comment opens with a name it does not recognize.
+//
+// These are reported rather than raised. A name the grammar has never heard of
+// cannot be told apart from prose, so failing the run would reject a package
+// that merely documents itself with a line starting @ — but saying nothing is
+// how a misspelled @endpoint used to cost a whole operation in silence.
+func TestParse_LogsSkippedAnnotations(t *testing.T) {
+	var out bytes.Buffer
+
+	flags, prefix := log.Flags(), log.Prefix()
+	log.SetOutput(&out)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(os.Stderr)
+		log.SetFlags(flags)
+		log.SetPrefix(prefix)
+	})
+
+	if _, err := Parse("./testdata/skipped"); err != nil {
+		t.Fatalf("Parse() error = %v; the package is meant to generate", err)
+	}
+
+	logged := out.String()
+
+	// Order is not meaningful: these are written as each declaration is passed
+	// over, across two stages of the parser.
+	want := []string{
+		"type Widget: @schemaa is not an annotation; it was skipped",
+		"func ListWidgets: @endpoin is not an annotation; it was skipped",
+		"field Widget.ID: @fild is not an annotation; it was skipped",
+		"declaration ListGadgets.filters: @quer is not an annotation; it was skipped",
+	}
+	for _, line := range want {
+		if !strings.Contains(logged, line) {
+			t.Errorf("missing from the log:\n  %s\ngot:\n%s", line, logged)
+		}
+	}
+
+	// Everything the package documents in prose must stay quiet: Gadget names
+	// @schema only after discussing it, Helper carries no @ at all, and Escaped
+	// opens with \@ — the escape the rest of the syntax uses for a literal @.
+	for _, quiet := range []string{"type Gadget", "func Helper", "func Escaped", "@author"} {
+		if strings.Contains(logged, quiet) {
+			t.Errorf("%q should not be reported; got:\n%s", quiet, logged)
+		}
 	}
 }

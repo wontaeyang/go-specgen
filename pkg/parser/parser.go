@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"log"
 	"maps"
 	"slices"
 	"strconv"
@@ -62,6 +63,11 @@ func (p *parser) parse() (*Package, error) {
 		Endpoints:   make([]*Endpoint, 0),
 	}
 
+	// Runs first so a misplaced or misspelled annotation is reported against
+	// the declaration that carries it, before the passes that would each pass
+	// over it in silence.
+	p.checkDeclarationAnnotations()
+
 	p.parseAPI(result)
 	p.parseSchemas(result)
 
@@ -82,6 +88,87 @@ func (p *parser) parse() (*Package, error) {
 	}
 
 	return result, nil
+}
+
+// checkDeclarationAnnotations reports doc comments that open with a name the
+// declaration cannot carry.
+//
+// Nothing else asks this question. parseChildren checks every name written
+// *inside* a block against the grammar, but the name that opens a comment is
+// only ever compared for equality against the one annotation each pass is
+// looking for -- parseSchemas asks "is this @schema?", parseParameters asks "is
+// this @path?", and a comment that is neither is simply not theirs. So
+// @endpoin, matching none of them, used to cost a whole operation in silence.
+//
+// The two outcomes differ because the mistakes do. A name the grammar defines
+// somewhere is unambiguously an annotation in the wrong place, so it fails. A
+// name the grammar has never heard of cannot be told apart from prose -- an
+// "@author Bob" in a package that never asked specgen for an opinion looks
+// exactly like a typo -- so it is reported and the run continues. Write \@ for
+// a doc comment that really does begin a line with @.
+func (p *parser) checkDeclarationAnnotations() {
+	for _, name := range slices.Sorted(maps.Keys(p.comments.StructComments)) {
+		// A type declared inside a handler is an in-function declaration, and
+		// extractFuncInlines has already had its say about it.
+		if info := p.comments.TypeInfo[name]; info != nil && info.Local {
+			continue
+		}
+		p.checkDeclarationAnnotation(annotation.OnType, name, p.comments.StructComments[name])
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(p.comments.FunctionComments)) {
+		p.checkDeclarationAnnotation(annotation.OnFunc, name, p.comments.FunctionComments[name])
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(p.comments.FieldComments)) {
+		p.checkFieldAnnotations(name, p.comments.FieldComments[name])
+	}
+}
+
+// checkFieldAnnotations walks a struct's field comments, and the comments on
+// the fields of any anonymous struct nested in them, the way
+// harvestFieldComments collected them.
+func (p *parser) checkFieldAnnotations(subject string, fields map[string]*FieldComments) {
+	for _, name := range slices.Sorted(maps.Keys(fields)) {
+		field := fields[name]
+		p.checkDeclarationAnnotation(annotation.OnField, subject+"."+name, field.Comment)
+
+		if field.Fields != nil {
+			p.checkFieldAnnotations(subject+"."+name, field.Fields)
+		}
+	}
+}
+
+// checkDeclarationAnnotation applies the rule above to one comment.
+func (p *parser) checkDeclarationAnnotation(target annotation.Target, name string, comment *CommentBlock) {
+	valid := annotation.WrittenOn(target)
+	// Claimed by an annotation that belongs here, so there is nothing to
+	// report -- and the question is whether any line claims it, not whether the
+	// first one does. A doc comment is free to discuss an annotation in prose
+	// before writing the real one: testdata/errors/brace_in_value opens by
+	// explaining @pattern and declares @schema four lines further down.
+	for _, valid := range valid {
+		if comment.HasAnnotation(valid) {
+			return
+		}
+	}
+
+	// Nothing claimed it. Whatever it opens with is what the user meant to
+	// annotate it with.
+	written := firstAnnotationName(comment)
+	if written == "" {
+		return
+	}
+
+	subject := target.String() + " " + name
+
+	if annotation.IsKnown(written) {
+		p.errs.Addf(subject, "%s cannot annotate a %s; valid here: %s",
+			written, target, strings.Join(valid, ", "))
+		return
+	}
+
+	log.Printf("%s: %s is not an annotation; it was skipped", subject, written)
 }
 
 // parseStructFields is the single entry point for @field parsing. It visits
@@ -734,36 +821,31 @@ func ExpandContentType(shortName string) string {
 	return shortName
 }
 
-// parseBody parses @body annotation from a request/response block
-// Returns nil if no body is defined
-// New syntax: @body User @bind DataResponse.Data
-// The @body value is the schema (User, []User, map[string]User)
-// The @bind is optional and specifies the wrapper (Wrapper.Field format)
+// parseBody reads the body of a @request or @response block, or nil when the
+// block declares none — a 204, say.
+//
+// The schema name arrives as the @body annotation's metadata, because @body
+// carries its value on its own opening line: @body User, @body []User,
+// @body map[string]User. @bind is a sibling rather than a child, so a wrapped
+// body is written @body User @bind DataResponse.Data.
+//
+// There is no @schema fallback. One used to sit here, advertising a legacy
+// spelling that had already stopped working: @schema is not a child of @request
+// or @response in either grammar, so parseChildren rejects it with "unknown
+// annotation @schema in @response" before this function is ever reached.
 func parseBody(parsed *ParsedAnnotation) *Body {
-	// Check for @body annotation
-	if bodyParsed := parsed.Children["@body"]; bodyParsed != nil {
-		body := &Body{
-			Schema: bodyParsed.Metadata, // Schema name is in metadata (e.g., "User", "[]User")
-		}
-
-		// Parse @bind annotation (sibling of @body in the response/request block)
-		// New syntax: @bind DataResponse.Data
-		if bindParsed := parsed.Children["@bind"]; bindParsed != nil {
-			body.Bind = ParseBindTarget(bindParsed.Value)
-		}
-
-		return body
+	bodyParsed := parsed.Children["@body"]
+	if bodyParsed == nil {
+		return nil
 	}
 
-	// Fallback to @schema annotation (legacy style, but keeping for simplicity)
-	if schema := parsed.GetChildValue("@schema"); schema != "" {
-		return &Body{
-			Schema: schema,
-			Bind:   nil,
-		}
+	body := &Body{Schema: bodyParsed.Metadata}
+
+	if bindParsed := parsed.Children["@bind"]; bindParsed != nil {
+		body.Bind = ParseBindTarget(bindParsed.Value)
 	}
 
-	return nil
+	return body
 }
 
 // ParseBindTarget parses a @bind value into a BindTarget

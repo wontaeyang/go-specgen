@@ -50,6 +50,54 @@ func (k Kind) String() string {
 	}
 }
 
+// Target is the declaration a top-level annotation is written on.
+//
+// Kind says what shape an annotation takes; Children say what may appear inside
+// it. Neither says what it may be written *on*, and that is a fact the grammar
+// has as much claim to as the other two: @field describes a struct field and
+// @endpoint a function, and putting either in the other's place means nothing.
+// It used to live implicitly in whichever parser pass went looking for the
+// name, which is one copy per pass and no copy the grammar could check.
+//
+// Only the doc-comment root needs it. A declaration inside a function body is
+// governed by the Declaration grammar, so membership in that tree is already
+// the answer.
+type Target int
+
+const (
+	// Nested is an annotation only ever written inside a block, never on a
+	// declaration of its own. It is the zero value because most annotations
+	// are children.
+	Nested Target = iota
+
+	// OnPackage is written on the package doc comment: @api.
+	OnPackage
+
+	// OnType is written on a type: @schema and the parameter markers.
+	OnType
+
+	// OnFunc is written on a function: @endpoint.
+	OnFunc
+
+	// OnField is written on a struct field: @field.
+	OnField
+)
+
+// String returns the declaration a Target names, as it appears in a message.
+func (t Target) String() string {
+	switch t {
+	case OnPackage:
+		return "package"
+	case OnType:
+		return "type"
+	case OnFunc:
+		return "func"
+	case OnField:
+		return "field"
+	}
+	return "nested"
+}
+
 // Def is one annotation's entry in the grammar.
 type Def struct {
 	// Name is the annotation name (e.g., "@api", "@field")
@@ -57,6 +105,10 @@ type Def struct {
 
 	// Kind is the shape this annotation takes
 	Kind Kind
+
+	// Target is the declaration this annotation is written on, for the
+	// annotations written on one. Children leave it at Nested.
+	Target Target
 
 	// Required indicates if this annotation must be present
 	Required bool
@@ -120,6 +172,37 @@ func (n *Def) InitializeParents() {
 		child.Parent = n
 		child.InitializeParents()
 	}
+}
+
+// ValidateTargets checks that every child of a root carries a Target and no
+// annotation below one does.
+//
+// It is what keeps the field from drifting: an annotation added to a root
+// without a Target would be written on nothing, silently, which is exactly the
+// failure the hardcoded per-pass lists it replaced used to have. Called on a
+// root rather than recursively from Validate, since only a root knows that its
+// own children are the top-level ones.
+func (n *Def) ValidateTargets(rootHasTargets bool) error {
+	for _, child := range n.Children {
+		if rootHasTargets && child.Target == Nested {
+			return &GrammarError{
+				Node:    child.Name,
+				Message: "top-level annotation must name the declaration it is written on",
+			}
+		}
+		if !rootHasTargets && child.Target != Nested {
+			return &GrammarError{
+				Node:    child.Name,
+				Message: "only a top-level annotation names a declaration",
+			}
+		}
+
+		if err := child.ValidateTargets(false); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Validate checks that the grammar tree is internally consistent. It says

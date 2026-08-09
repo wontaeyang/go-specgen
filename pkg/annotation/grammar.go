@@ -1,5 +1,10 @@
 package annotation
 
+import (
+	"maps"
+	"slices"
+)
+
 // There are two grammars because the two contexts genuinely differ.
 //
 // Schema covers annotations written in doc comments, above a type or a
@@ -16,6 +21,7 @@ var Schema = &Def{
 		"@api": {
 			Name:     "@api",
 			Kind:     Block,
+			Target:   OnPackage,
 			Required: true,
 			Children: map[string]*Def{
 				"@title": {
@@ -158,6 +164,7 @@ var Schema = &Def{
 		"@endpoint": {
 			Name:        "@endpoint",
 			Kind:        Block,
+			Target:      OnFunc,
 			HasMetadata: true,
 			Children: map[string]*Def{
 				"@operationID": {
@@ -259,8 +266,9 @@ var Schema = &Def{
 			},
 		},
 		"@field": {
-			Name: "@field",
-			Kind: Block,
+			Name:   "@field",
+			Kind:   Block,
+			Target: OnField,
 			Children: map[string]*Def{
 				"@description": {
 					Name:              "@description",
@@ -347,8 +355,9 @@ var Schema = &Def{
 			},
 		},
 		"@schema": {
-			Name: "@schema",
-			Kind: Block,
+			Name:   "@schema",
+			Kind:   Block,
+			Target: OnType,
 			Children: map[string]*Def{
 				"@description": {
 					Name:              "@description",
@@ -361,22 +370,10 @@ var Schema = &Def{
 				},
 			},
 		},
-		"@path": {
-			Name: "@path",
-			Kind: Marker,
-		},
-		"@query": {
-			Name: "@query",
-			Kind: Marker,
-		},
-		"@header": {
-			Name: "@header",
-			Kind: Marker,
-		},
-		"@cookie": {
-			Name: "@cookie",
-			Kind: Marker,
-		},
+		"@path":   {Name: "@path", Kind: Marker, Target: OnType},
+		"@query":  {Name: "@query", Kind: Marker, Target: OnType},
+		"@header": {Name: "@header", Kind: Marker, Target: OnType},
+		"@cookie": {Name: "@cookie", Kind: Marker, Target: OnType},
 	},
 }
 
@@ -441,4 +438,59 @@ var Declaration = &Def{
 func init() {
 	Schema.InitializeParents()
 	Declaration.InitializeParents()
+
+	collectNames(Schema, knownNames)
+	collectNames(Declaration, knownNames)
+}
+
+// knownNames is every annotation name either grammar defines, at any depth.
+//
+// It answers a question no single node can: whether a name means anything at
+// all. A caller that finds @summary above a type knows it is not valid there
+// from its own list of what is; this says whether the user wrote a real
+// annotation in the wrong place or a name that exists nowhere, which is the
+// difference between a mistake worth failing on and one worth reporting.
+var knownNames = map[string]bool{}
+
+// collectNames walks a grammar tree, recording every name in it.
+func collectNames(node *Def, into map[string]bool) {
+	for name, child := range node.Children {
+		into[name] = true
+		collectNames(child, into)
+	}
+}
+
+// IsKnown reports whether name is an annotation either grammar defines, in any
+// position. It says nothing about whether the name is legal where it was
+// written.
+func IsKnown(name string) bool { return knownNames[name] }
+
+// WrittenOn is every annotation that may open the doc comment of a declaration
+// of this kind, in name order.
+//
+// Callers used to hold this as a list of their own, one per pass, which is the
+// arrangement pkg/annotation exists to prevent: adding an annotation is meant
+// to be an edit to grammar.go and nothing else.
+func WrittenOn(target Target) []string {
+	var names []string
+	for name, def := range Schema.Children {
+		if def.Target == target {
+			names = append(names, name)
+		}
+	}
+
+	slices.Sort(names)
+	return names
+}
+
+// InFunction is every annotation that may open the doc comment of a
+// declaration inside a function body, in name order.
+//
+// It needs no Target: the Declaration grammar covers exactly that context, so
+// being a child of its root is already the answer.
+func InFunction() []string {
+	names := slices.Collect(maps.Keys(Declaration.Children))
+
+	slices.Sort(names)
+	return names
 }
