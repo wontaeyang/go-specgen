@@ -25,9 +25,9 @@ func Helper() {}
 // \@author is escaped, so this is prose rather than an annotation.
 func Escaped() {}
 
-// @endpoint GET /gadgets {
-//   @response 200 { @description ok @body Gadget }
-// }
+//	@endpoint GET /gadgets {
+//	  @response 200 { @description ok @body Gadget }
+//	}
 func ListGadgets() {
 	// @quer
 	var filters struct {

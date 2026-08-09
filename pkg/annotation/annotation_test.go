@@ -187,13 +187,18 @@ func TestDef_Validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "valid block annotation without children (can be empty)",
+			// A block is the shape that nests. One declaring nothing to nest
+			// should be a Marker, a Flag or a Value instead. This case used to
+			// assert the opposite, because the check it exercises carried an
+			// "&& !CanBeEmpty()" that made it unreachable -- a node with no
+			// children has no required children either, so it could never fire.
+			name: "invalid: block annotation without children",
 			node: &Def{
 				Name: "@test",
 				Kind: Block,
-				// No children, so CanBeEmpty() returns true
 			},
-			wantErr: false,
+			wantErr: true,
+			errMsg:  "block annotations must have children",
 		},
 		{
 			name: "valid block annotation with optional children",
@@ -277,6 +282,38 @@ func TestDef_Validate(t *testing.T) {
 						t.Errorf("GrammarError.Message = %q, want %q", ve.Message, tt.errMsg)
 					}
 				}
+			}
+		})
+	}
+}
+
+// TestGrammarsAreValid runs the self-checks against the grammars they exist for.
+//
+// Validate and ValidateTargets describe themselves as run by the package's own
+// tests, and until now nothing ran them on Schema or Declaration -- every case
+// built a synthetic Def instead. A self-check nothing points at the real subject
+// cannot catch the edit it was written for, which is an @annotation added to
+// grammar.go in a shape the rest of the parser cannot read.
+func TestGrammarsAreValid(t *testing.T) {
+	grammars := []struct {
+		name string
+		root *Def
+	}{
+		{"Schema", Schema},
+		{"Declaration", Declaration},
+	}
+
+	for _, g := range grammars {
+		t.Run(g.name, func(t *testing.T) {
+			if err := g.root.Validate(); err != nil {
+				t.Errorf("%s.Validate() = %v, want nil", g.name, err)
+			}
+
+			// Only the doc-comment grammar's children are written on a
+			// declaration; membership in Declaration is already the answer for
+			// the in-function ones, so they carry no Target.
+			if err := g.root.ValidateTargets(g.root == Schema); err != nil {
+				t.Errorf("%s.ValidateTargets() = %v, want nil", g.name, err)
 			}
 		})
 	}

@@ -118,9 +118,11 @@ func (v *Validator) validateAPI(api *resolver.API) {
 		v.addError("@api", "missing required @version")
 	}
 
-	// Validate security schemes
-	for name, scheme := range api.SecuritySchemes {
-		v.validateSecurityScheme(name, scheme)
+	// Validate security schemes, in name order for the reason Validate gives:
+	// this is a map, and an unsorted range put the errors from two bad schemes
+	// in a different order run to run.
+	for _, name := range slices.Sorted(maps.Keys(api.SecuritySchemes)) {
+		v.validateSecurityScheme(name, api.SecuritySchemes[name])
 	}
 
 	// Validate security requirements reference existing schemes
@@ -504,8 +506,14 @@ func (v *Validator) validateRequestBody(path string, request *resolver.RequestBo
 	}
 
 	// An in-function @request is its own body, so only the named form can be
-	// missing one.
+	// missing one. What it can be instead is empty, and a request body carrying
+	// no fields describes nothing -- unlike a response, where carrying nothing is
+	// how 204 is spelled. That case used to reach the generator and render as
+	// "requestBody: {}", a Request Body Object with no content.
 	if request.Inline != nil {
+		if len(request.Inline.Fields) == 0 {
+			v.addError(path+".@request", "the struct under this @request has no fields; a request body needs at least one, or drop the @request")
+		}
 		if request.Inline.Bind != nil {
 			v.validateBindTarget(path+".@request", request.Inline.Bind, schemas)
 		}

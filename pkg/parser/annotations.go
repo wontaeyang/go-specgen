@@ -79,7 +79,7 @@ func startsWithRawValue(line string, node *annotation.Def) bool {
 	if node == nil {
 		return false
 	}
-	child := node.GetChild(extractAnnotationName(line))
+	child := node.GetChild(ExtractAnnotationName(line))
 	return child != nil && child.RawValue
 }
 
@@ -324,7 +324,7 @@ func parseChildren(lines []string, parentNode *annotation.Def, result *ParsedAnn
 			return fmt.Errorf("%q is not an annotation; every line inside %s must begin with @, and only @description continues onto the next line", line, parentNode.Name)
 		}
 
-		annotationName := extractAnnotationName(line)
+		annotationName := ExtractAnnotationName(line)
 
 		// Get schema node for this annotation
 		childNode := parentNode.GetChild(annotationName)
@@ -484,10 +484,17 @@ func parseInlineChildren(content string, parentNode *annotation.Def, result *Par
 	return nil
 }
 
-// extractAnnotationName extracts the annotation name from a line
+// ExtractAnnotationName extracts the annotation name from a line, or "" when
+// the line does not open with one.
 // Example: "@field {" -> "@field"
 // Example: "@title My API" -> "@title"
-func extractAnnotationName(line string) string {
+//
+// Exported because it draws the boundary between an annotation's name and its
+// value, and every place that has to tell one name from another needs the same
+// boundary -- including the resolver, which locates an in-function block by name
+// and used to do it with a prefix match. That made @requestor claim @request's
+// place, which is the mistake HasAnnotation was fixed for one call earlier.
+func ExtractAnnotationName(line string) string {
 	line = strings.TrimSpace(line)
 	if !strings.HasPrefix(line, "@") {
 		return ""

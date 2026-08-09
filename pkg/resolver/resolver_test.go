@@ -293,6 +293,63 @@ func TestOmitsWhenEmpty(t *testing.T) {
 			fieldType: types.NewArray(types.Typ[types.Float64], 0),
 			want:      true,
 		},
+
+		// The options belong to a serialization tag. Another tag carrying the
+		// same word means something of its own -- validator's omitempty is a
+		// validation rule -- and used to mark the field optional from across
+		// the raw tag string.
+		{
+			name:      "omitempty in a foreign tag does not omit",
+			tag:       `json:"name" validate:"omitempty"`,
+			fieldType: types.Typ[types.String],
+			want:      false,
+		},
+		{
+			name:      "omitzero in a foreign tag does not omit",
+			tag:       `json:"name" db:"omitzero"`,
+			fieldType: types.Typ[types.String],
+			want:      false,
+		},
+		{
+			name:      "omitempty in the json tag still omits alongside other tags",
+			tag:       `json:"name,omitempty" validate:"required"`,
+			fieldType: types.Typ[types.String],
+			want:      true,
+		},
+		{
+			name:      "a field literally named omitempty does not omit",
+			tag:       `json:"omitempty"`,
+			fieldType: types.Typ[types.String],
+			want:      false,
+		},
+		{
+			name:      "no serialization tag does not omit",
+			tag:       `validate:"omitempty"`,
+			fieldType: types.Typ[types.String],
+			want:      false,
+		},
+
+		// encoding/xml names fields here too. Both options are honored under
+		// every supported tag, so xml:",omitzero" omits even though
+		// encoding/xml does not implement the option itself.
+		{
+			name:      "omitempty on an xml-only field omits",
+			tag:       `xml:"name,omitempty"`,
+			fieldType: types.Typ[types.String],
+			want:      true,
+		},
+		{
+			name:      "omitzero on an xml-only field omits",
+			tag:       `xml:"name,omitzero"`,
+			fieldType: types.Typ[types.String],
+			want:      true,
+		},
+		{
+			name:      "json wins over xml when both are present",
+			tag:       `json:"name" xml:"name,omitempty"`,
+			fieldType: types.Typ[types.String],
+			want:      false,
+		},
 	}
 
 	for _, tt := range tests {

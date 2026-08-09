@@ -409,7 +409,7 @@ func hasAPIAnnotation(cg *ast.CommentGroup) bool {
 		// near-miss is a real annotation family rather than a typo: apidoc's
 		// @apiVersion and @apiParam both begin with @api, and either could win
 		// this scan and be handed to parseAPI as the API block.
-		if extractAnnotationName(text) == "@api" {
+		if ExtractAnnotationName(text) == "@api" {
 			return true
 		}
 	}
@@ -442,7 +442,7 @@ func (pc *PackageComments) GetFunctionComment(funcName string) *CommentBlock {
 // The name has to match whole. This is what classifies a declaration — a struct
 // carrying @path becomes a path-parameter struct here, before any grammar is
 // consulted — so a prefix match let @headers register as @header, and the
-// declaration was read as something the user never wrote. extractAnnotationName
+// declaration was read as something the user never wrote. ExtractAnnotationName
 // draws the boundary the rest of the parser draws, which is why it is borrowed
 // rather than restated.
 func (cb *CommentBlock) HasAnnotation(annotation string) bool {
@@ -451,7 +451,7 @@ func (cb *CommentBlock) HasAnnotation(annotation string) bool {
 	}
 
 	for _, line := range cb.Lines {
-		if extractAnnotationName(line) == annotation {
+		if ExtractAnnotationName(line) == annotation {
 			return true
 		}
 	}
@@ -471,7 +471,7 @@ func firstAnnotationName(cb *CommentBlock) string {
 	}
 
 	for _, line := range cb.Lines {
-		if name := extractAnnotationName(line); name != "" {
+		if name := ExtractAnnotationName(line); name != "" {
 			return name
 		}
 	}

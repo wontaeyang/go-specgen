@@ -285,18 +285,21 @@ func (r *Resolver) resolveSchema(schema *parser.Schema) (*Schema, error) {
 	}
 
 	// Resolve each field (including embedded struct flattening)
-	fields, err := r.resolveSchemaFields(structType, schema.Fields, nil)
-	if err != nil {
-		return nil, err
-	}
-	resolved.Fields = fields
+	resolved.Fields = r.resolveSchemaFields(structType, schema.Fields, nil)
 
 	return resolved, nil
 }
 
 // resolveSchemaFields resolves fields from a struct type, flattening embedded structs.
 // visited tracks type names to prevent infinite recursion from circular embedding.
-func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*parser.Field, visited map[string]bool) ([]*Field, error) {
+//
+// There is no error to return. A type with no OpenAPI representation still
+// resolves, to ShapeUnsupported carrying the reason, and the validator reports
+// it from there. Its parameter-struct twin returns none either, for a different
+// reason: its field errors are real, but they accumulate into r.errs and the
+// loop continues, so neither ever handed one back. Both used to, and every
+// caller carried an "if err != nil" that could not fire.
+func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*parser.Field, visited map[string]bool) []*Field {
 	if visited == nil {
 		visited = make(map[string]bool)
 	}
@@ -308,21 +311,11 @@ func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*
 		tag := structType.Tag(i)
 
 		if field.Anonymous() && flattensEmbedded(field, tag, SupportedTags...) {
-			embeddedFields, err := r.flattenEmbeddedField(field, annotations, visited)
-			if err != nil {
-				return nil, err
-			}
-			fields = append(fields, embeddedFields...)
+			fields = append(fields, r.flattenEmbeddedField(field, annotations, visited)...)
 			continue
 		}
 
-		fieldAnnotation := findAnnotation(annotations, field.Name())
-
-		// Nothing here can fail: a type with no OpenAPI representation still
-		// resolves, to ShapeUnsupported, and the validator is what reports it.
-		// The parameter-struct loop does accumulate, because its own field
-		// resolution genuinely errors -- see resolveParameterFields.
-		resolvedField := r.resolveField(field, tag, fieldAnnotation)
+		resolvedField := r.resolveField(field, tag, findAnnotation(annotations, field.Name()))
 
 		// Skip fields that should be omitted (e.g., json:"-")
 		if resolvedField == nil {
@@ -332,7 +325,7 @@ func (r *Resolver) resolveSchemaFields(structType *types.Struct, annotations []*
 		fields = append(fields, resolvedField)
 	}
 
-	return fields, nil
+	return fields
 }
 
 // flattensEmbedded reports whether an embedded field's own fields should be
@@ -416,11 +409,11 @@ func unwrapEmbeddedStruct(t types.Type, visited map[string]bool) (st *types.Stru
 }
 
 // flattenEmbeddedField resolves an embedded struct field and returns its flattened fields.
-func (r *Resolver) flattenEmbeddedField(field *types.Var, annotations []*parser.Field, visited map[string]bool) ([]*Field, error) {
+func (r *Resolver) flattenEmbeddedField(field *types.Var, annotations []*parser.Field, visited map[string]bool) []*Field {
 	embeddedStruct, cleanup := unwrapEmbeddedStruct(field.Type(), visited)
 	defer cleanup()
 	if embeddedStruct == nil {
-		return nil, nil
+		return nil
 	}
 
 	return r.resolveSchemaFields(embeddedStruct, r.embeddedAnnotations(field, annotations), visited)
@@ -480,17 +473,13 @@ func (r *Resolver) resolveParameter(param *parser.Parameter) (*ParameterStruct, 
 	}
 
 	// Resolve each field (including embedded struct flattening)
-	fields, err := r.resolveParameterFields(structType, param.Fields, string(param.Type), nil)
-	if err != nil {
-		return nil, err
-	}
-	resolved.Fields = fields
+	resolved.Fields = r.resolveParameterFields(structType, param.Fields, string(param.Type), nil)
 
 	return resolved, nil
 }
 
 // resolveParameterFields resolves fields from a parameter struct, flattening embedded structs.
-func (r *Resolver) resolveParameterFields(structType *types.Struct, annotations []*parser.Field, paramType string, visited map[string]bool) ([]*Field, error) {
+func (r *Resolver) resolveParameterFields(structType *types.Struct, annotations []*parser.Field, paramType string, visited map[string]bool) []*Field {
 	if visited == nil {
 		visited = make(map[string]bool)
 	}
@@ -502,11 +491,7 @@ func (r *Resolver) resolveParameterFields(structType *types.Struct, annotations 
 		tag := structType.Tag(i)
 
 		if field.Anonymous() && flattensEmbedded(field, tag, paramType) {
-			embeddedFields, err := r.flattenEmbeddedParamField(field, annotations, paramType, visited)
-			if err != nil {
-				return nil, err
-			}
-			fields = append(fields, embeddedFields...)
+			fields = append(fields, r.flattenEmbeddedParamField(field, annotations, paramType, visited)...)
 			continue
 		}
 
@@ -516,7 +501,9 @@ func (r *Resolver) resolveParameterFields(structType *types.Struct, annotations 
 		// field of a parameter struct usually means mis-tagging several, and
 		// reporting them one run at a time is the case accumulation is for.
 		// Unlike resolveSchemaFields, this one really can fail — a field tagged
-		// for one parameter kind inside a struct declared as another.
+		// for one parameter kind inside a struct declared as another — but the
+		// failure lands in r.errs rather than coming back up, which is why this
+		// function returns no error of its own.
 		resolvedField, err := r.resolveFieldWithParamType(field, tag, fieldAnnotation, paramType)
 		if err != nil {
 			r.errs.Addf(r.path+"."+field.Name(), "%s", err)
@@ -530,15 +517,15 @@ func (r *Resolver) resolveParameterFields(structType *types.Struct, annotations 
 		fields = append(fields, resolvedField)
 	}
 
-	return fields, nil
+	return fields
 }
 
 // flattenEmbeddedParamField resolves an embedded struct field for parameters.
-func (r *Resolver) flattenEmbeddedParamField(field *types.Var, annotations []*parser.Field, paramType string, visited map[string]bool) ([]*Field, error) {
+func (r *Resolver) flattenEmbeddedParamField(field *types.Var, annotations []*parser.Field, paramType string, visited map[string]bool) []*Field {
 	embeddedStruct, cleanup := unwrapEmbeddedStruct(field.Type(), visited)
 	defer cleanup()
 	if embeddedStruct == nil {
-		return nil, nil
+		return nil
 	}
 
 	return r.resolveParameterFields(embeddedStruct, r.embeddedAnnotations(field, annotations), paramType, visited)
@@ -617,11 +604,7 @@ func (r *Resolver) resolveAnonymousFields(structType *types.Struct, annotations 
 		tag := structType.Tag(i)
 
 		if field.Anonymous() {
-			embedded, err := r.flattenEmbeddedField(field, nil, nil)
-			if err != nil {
-				continue
-			}
-			fields = append(fields, embedded...)
+			fields = append(fields, r.flattenEmbeddedField(field, nil, nil)...)
 			continue
 		}
 
@@ -635,16 +618,58 @@ func (r *Resolver) resolveAnonymousFields(structType *types.Struct, annotations 
 	return fields
 }
 
-// omitsWhenEmpty reports whether the JSON tag actually drops the field for
+// omitsWhenEmpty reports whether the json tag actually drops the field for
 // empty/zero values of the given type. omitzero omits any zero value,
 // including zero structs. omitempty follows encoding/json's isEmptyValue,
 // which never considers structs empty (and arrays only at length zero), so
 // such fields always appear on the wire despite the tag.
+//
+// The options are read from a serialization tag, not from the raw tag text. A
+// field is routinely tagged for other packages too, and `validate:"omitempty"`
+// is go-playground/validator's spelling of a validation rule rather than a
+// serialization one. Scanning the whole tag let any of those silently mark the
+// field optional -- the same mistake ",required" used to make in
+// resolveFieldWithParamType.
+//
+// Which tag governs follows SupportedTags, in the order resolveFieldNameFromTag
+// walks it, so the tag that decides the field's name is the one that decides
+// whether it appears at all. The first tag present wins even when it carries no
+// options: `json:"a" xml:"b,omitempty"` is a field encoding/json always writes.
+//
+// Both keywords are honored under every supported tag, including encoding/xml,
+// which implements omitempty but not omitzero. Reading it there is deliberate:
+// someone who writes `xml:",omitzero"` is stating the field is absent when zero,
+// and a schema that agrees stays right if encoding/xml gains the option later,
+// where a special case would quietly disagree with the annotation today. Adding
+// a tag to SupportedTags then means one edit rather than one edit plus a table
+// of which options that encoder happens to implement.
 func omitsWhenEmpty(tag string, fieldType types.Type) bool {
-	if strings.Contains(tag, "omitzero") {
-		return true
+	structTag := reflect.StructTag(tag)
+
+	for _, key := range SupportedTags {
+		value, tagged := structTag.Lookup(key)
+		if !tagged {
+			continue
+		}
+
+		options := tagOptions(value)
+		if slices.Contains(options, "omitzero") {
+			return true
+		}
+		return slices.Contains(options, "omitempty") && canBeEmpty(fieldType)
 	}
-	return strings.Contains(tag, "omitempty") && canBeEmpty(fieldType)
+
+	return false
+}
+
+// tagOptions returns the comma-separated options of a struct tag value --
+// everything after the name -- or nil when it carries only a name.
+func tagOptions(value string) []string {
+	_, options, hasOptions := strings.Cut(value, ",")
+	if !hasOptions {
+		return nil
+	}
+	return strings.Split(options, ",")
 }
 
 // canBeEmpty mirrors encoding/json's isEmptyValue: reports whether some value
@@ -1178,12 +1203,7 @@ func (r *Resolver) mergeInlineParams(infos []*parser.InlineStructInfo, paramType
 			return nil, fmt.Errorf("failed to resolve inline %s params %q: %w", paramType, info.VarName, err)
 		}
 
-		fields, err := r.resolveParameterFields(structType, info.Fields, paramType, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve inline %s params %q: %w", paramType, info.VarName, err)
-		}
-
-		merged = append(merged, fields...)
+		merged = append(merged, r.resolveParameterFields(structType, info.Fields, paramType, nil)...)
 	}
 
 	return merged, nil
@@ -1200,13 +1220,8 @@ func (r *Resolver) resolveInlineBody(info *parser.InlineStructInfo, parsed *pars
 		return nil, err
 	}
 
-	fields, err := r.resolveSchemaFields(structType, info.Fields, nil)
-	if err != nil {
-		return nil, err
-	}
-
 	resolved := &InlineBody{
-		Fields: fields,
+		Fields: r.resolveSchemaFields(structType, info.Fields, nil),
 	}
 
 	// Use parsed annotation (already validated by inline parser)
@@ -1219,9 +1234,14 @@ func (r *Resolver) resolveInlineBody(info *parser.InlineStructInfo, parsed *pars
 		// Description
 		resolved.Description = parsed.GetChildValue("@description")
 
-		// Bind
-		if bindValue := parsed.GetChildValue("@bind"); bindValue != "" {
-			bindTarget := parser.ParseBindTarget(bindValue)
+		// Bind. Keyed on the annotation being present rather than on its value
+		// being non-empty, so a bare @bind is the same error here as a malformed
+		// one -- both name no target, and skipping either dropped it in silence.
+		if parsed.HasChild("@bind") {
+			bindTarget, err := parser.ParseBindTarget(parsed.GetChildValue("@bind"))
+			if err != nil {
+				return nil, err
+			}
 			resolved.Bind = r.resolveBindTarget(bindTarget, schemas)
 		}
 

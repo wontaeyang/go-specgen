@@ -623,19 +623,42 @@ func (p *parser) parseEndpoints(result *Package) {
 
 		// Parse request
 		if request := parsed.Children["@request"]; request != nil {
+			body, err := parseBody(request)
+			if err != nil {
+				p.errs.Wrap(path+".@request", err)
+			}
+
 			endpoint.Request = &RequestBody{
 				ContentType: ExpandContentType(request.GetChildValue("@contentType")),
-				Body:        parseBody(request),
+				Body:        body,
 			}
 		}
 
-		// Parse responses
+		// Parse responses.
+		//
+		// @response repeats so that one endpoint can describe several status
+		// codes, not so that one status code can be described twice. There is no
+		// merge rule for the second: it replaced the first, and the operation
+		// lost a response with nothing said. The in-function form has always
+		// rejected this -- see extractFuncInlines -- so leaving the doc-comment
+		// form silent made the same mistake an error in one syntax and a shrug
+		// in the other.
 		for _, responseParsed := range parsed.GetRepeatedChildren("@response") {
 			statusCode := responseParsed.Metadata
+			if _, taken := endpoint.Responses[statusCode]; taken {
+				p.errs.Addf(path, "@response %s is declared twice; each status code can have only one response", statusCode)
+				continue
+			}
+
+			body, err := parseBody(responseParsed)
+			if err != nil {
+				p.errs.Wrap(fmt.Sprintf("%s.@response[%s]", path, statusCode), err)
+			}
+
 			resp := &Response{
 				StatusCode:   statusCode,
 				ContentType:  ExpandContentType(responseParsed.GetChildValue("@contentType")),
-				Body:         parseBody(responseParsed),
+				Body:         body,
 				Description:  responseParsed.GetChildValue("@description"),
 				HeaderParams: extractRepeatedReferences(responseParsed, "@header"),
 			}
@@ -833,31 +856,56 @@ func ExpandContentType(shortName string) string {
 // spelling that had already stopped working: @schema is not a child of @request
 // or @response in either grammar, so parseChildren rejects it with "unknown
 // annotation @schema in @response" before this function is ever reached.
-func parseBody(parsed *ParsedAnnotation) *Body {
+func parseBody(parsed *ParsedAnnotation) (*Body, error) {
 	bodyParsed := parsed.Children["@body"]
 	if bodyParsed == nil {
-		return nil
+		// @bind says which field of an envelope the body binds into, so it has
+		// nothing to say without one. Returning early here dropped it: a 204
+		// carrying a stray @bind rendered as an ordinary bodyless response and
+		// the run exited 0. A @request in the same state is caught downstream by
+		// "missing @body", but a @response is not -- a response with no body is
+		// legitimate, so nothing else was ever going to ask.
+		if parsed.HasChild("@bind") {
+			return nil, fmt.Errorf("@bind has no @body to bind into; add a @body, or drop the @bind from a message that carries none")
+		}
+		return nil, nil
 	}
 
 	body := &Body{Schema: bodyParsed.Metadata}
 
 	if bindParsed := parsed.Children["@bind"]; bindParsed != nil {
-		body.Bind = ParseBindTarget(bindParsed.Value)
+		bind, err := ParseBindTarget(bindParsed.Value)
+		if err != nil {
+			return nil, err
+		}
+		body.Bind = bind
 	}
 
-	return body
+	return body, nil
 }
 
-// ParseBindTarget parses a @bind value into a BindTarget
-// Format: "Wrapper.Field" (e.g., "DataResponse.Data")
-func ParseBindTarget(value string) *BindTarget {
-	parts := strings.SplitN(strings.TrimSpace(value), ".", 2)
-	if len(parts) != 2 {
-		return nil
+// ParseBindTarget parses a @bind value into a BindTarget.
+//
+// The format is "Wrapper.Field" -- the envelope schema, and the field of it the
+// body binds into, as in "DataResponse.Data".
+//
+// Anything else is an error rather than a nil. nil is what "no @bind was
+// written" looks like to everything downstream, so returning it for a malformed
+// one dropped the annotation and said nothing: @bind DataResponse emitted the
+// bare body, unwrapped, and exited 0. Every other way to get @bind wrong -- a
+// wrapper that does not exist, a field the wrapper does not have -- is already
+// reported by validateBindTarget, so this was the one mistake that stayed
+// quiet, and it is the one a typo produces.
+//
+// Only the first dot separates: "A.B.C" binds field "B.C" of wrapper "A", which
+// is what a nested target would have to mean.
+func ParseBindTarget(value string) (*BindTarget, error) {
+	wrapper, field, found := strings.Cut(strings.TrimSpace(value), ".")
+	wrapper, field = strings.TrimSpace(wrapper), strings.TrimSpace(field)
+
+	if !found || wrapper == "" || field == "" {
+		return nil, fmt.Errorf("@bind %q is not a Wrapper.Field target; name the envelope schema and the field the body binds into, as in @bind DataResponse.Data", value)
 	}
 
-	return &BindTarget{
-		Wrapper: strings.TrimSpace(parts[0]),
-		Field:   strings.TrimSpace(parts[1]),
-	}
+	return &BindTarget{Wrapper: wrapper, Field: field}, nil
 }

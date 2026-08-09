@@ -1,0 +1,6 @@
+validate: 4 validation errors:
+  1. @api.@securityScheme[alpha]: apiKey security scheme missing @in
+  2. @api.@securityScheme[alpha]: apiKey security scheme missing @name
+  3. @api.@securityScheme[middle]: unknown security scheme type: bogus
+  4. @api.@securityScheme[zebra]: http security scheme missing @scheme
+

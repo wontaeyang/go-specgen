@@ -1269,13 +1269,17 @@ func TestParseBindTarget(t *testing.T) {
 		{"DataResponse.Data", "DataResponse", "Data"},
 		{"Wrapper.Items", "Wrapper", "Items"},
 		{"Response.Payload", "Response", "Payload"},
+		{"  Padded.Field  ", "Padded", "Field"},
+
+		// Only the first dot separates, so a nested target keeps its dots.
+		{"Wrapper.Outer.Inner", "Wrapper", "Outer.Inner"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			bind := ParseBindTarget(tt.input)
-			if bind == nil {
-				t.Fatal("ParseBindTarget returned nil")
+			bind, err := ParseBindTarget(tt.input)
+			if err != nil {
+				t.Fatalf("ParseBindTarget(%q) returned error: %v", tt.input, err)
 			}
 
 			if bind.Wrapper != tt.wantWrapper {
@@ -1288,21 +1292,30 @@ func TestParseBindTarget(t *testing.T) {
 	}
 }
 
+// A @bind that names no target is an error, not a nil. nil is indistinguishable
+// from "no @bind was written", so returning it dropped the annotation and let
+// the run exit 0 with an unwrapped body.
 func TestParseBindTarget_Invalid(t *testing.T) {
-	tests := []string{
-		"NoSeparator",
-		"",
-		"OnlyWrapper.",
-		".OnlyField",
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"no separator", "NoSeparator"},
+		{"empty", ""},
+		{"blank", "   "},
+		{"wrapper only", "OnlyWrapper."},
+		{"field only", ".OnlyField"},
+		{"separator only", "."},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt, func(t *testing.T) {
-			bind := ParseBindTarget(tt)
-			// Should return nil or empty for invalid input
-			if bind != nil && bind.Wrapper != "" && bind.Field != "" {
-				t.Errorf("Expected nil or empty bind for invalid input %q, got Wrapper=%q Field=%q",
-					tt, bind.Wrapper, bind.Field)
+		t.Run(tt.name, func(t *testing.T) {
+			bind, err := ParseBindTarget(tt.input)
+			if err == nil {
+				t.Fatalf("ParseBindTarget(%q) = %+v, want an error", tt.input, bind)
+			}
+			if bind != nil {
+				t.Errorf("ParseBindTarget(%q) returned a target alongside its error: %+v", tt.input, bind)
 			}
 		})
 	}
@@ -1436,7 +1449,13 @@ func TestParse_LogsSkippedAnnotations(t *testing.T) {
 		log.SetPrefix(prefix)
 	})
 
-	if _, err := Parse("./testdata/skipped"); err != nil {
+	// The package lives under examples/ rather than in this package's testdata:
+	// it is meant to generate, so the golden harness renders it and pins what
+	// survives the skipping -- Widget and /widgets are absent from examples/
+	// skipped/skipped.yaml precisely because @schemaa and @endpoin were passed
+	// over. What a golden cannot see is the log, which is the whole point of the
+	// rule, so that half is asserted here.
+	if _, err := Parse("../../examples/skipped"); err != nil {
 		t.Fatalf("Parse() error = %v; the package is meant to generate", err)
 	}
 

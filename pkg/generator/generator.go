@@ -584,10 +584,16 @@ func (g *Generator) generateParameters(parameters []*resolver.Parameter) []*v3.P
 }
 
 // generateRequestBody generates a request body, from either @request form.
+//
+// Nil when there is no schema to carry, so the operation has no requestBody key
+// at all. It used to return an empty &v3.RequestBody{}, which rendered as
+// "requestBody: {}" -- a Request Body Object with no content, which the spec
+// does not allow. The validator rejects the annotation that got here, so this is
+// the belt to its braces rather than the only guard.
 func (g *Generator) generateRequestBody(request *resolver.RequestBody) *v3.RequestBody {
 	schema := g.bodySchema(request.Body, request.Inline)
 	if schema == nil {
-		return &v3.RequestBody{}
+		return nil
 	}
 
 	return &v3.RequestBody{
@@ -663,14 +669,6 @@ func mediaContent(contentType string, schema *base.SchemaProxy) *orderedmap.Map[
 	content := orderedmap.New[string, *v3.MediaType]()
 	content.Set(contentType, &v3.MediaType{Schema: schema})
 	return content
-}
-
-// inlineContentType is the declared content type, or JSON when none was given.
-func inlineContentType(inline *resolver.InlineBody) string {
-	if inline.ContentType != "" {
-		return inline.ContentType
-	}
-	return "application/json"
 }
 
 // generateInlineBodySchema renders an in-function struct as a body, wrapped in

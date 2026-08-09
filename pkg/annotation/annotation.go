@@ -225,8 +225,15 @@ func (n *Def) Validate() error {
 		}
 	}
 
-	// Block annotations should have children (unless they can be empty)
-	if n.Kind == Block && len(n.Children) == 0 && !n.CanBeEmpty() {
+	// A block is the shape that nests, so one declaring nothing to nest is a
+	// definition that means nothing -- it should be a Marker, a Flag or a Value.
+	//
+	// The condition used to carry "&& !n.CanBeEmpty()", which made it
+	// unreachable: CanBeEmpty asks whether any child is required, so a node with
+	// no children at all always answers yes, and the check could never fire.
+	// CanBeEmpty is about what a user may write in a comment; this is about what
+	// grammar.go may declare, and the two questions only looked alike.
+	if n.Kind == Block && len(n.Children) == 0 {
 		return &GrammarError{
 			Node:    n.Name,
 			Message: "block annotations must have children",

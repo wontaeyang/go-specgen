@@ -2,7 +2,6 @@ package resolver
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/wontaeyang/go-specgen/pkg/annotation"
 	"github.com/wontaeyang/go-specgen/pkg/parser"
@@ -37,13 +36,15 @@ func extractInlineBlockContent(lines []string, annotationType string) []string {
 		return nil
 	}
 
-	prefix := "@" + annotationType
+	name := "@" + annotationType
 
-	// Find the line with the annotation
+	// Matched whole, not by prefix. The name is what decides which block this
+	// is, so a prefix match let a longer name claim a shorter one's place --
+	// @requestor opening a comment would have been read as the @request block.
+	// ExtractAnnotationName draws the boundary the parser draws everywhere else.
 	startIndex := -1
 	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, prefix) {
+		if parser.ExtractAnnotationName(line) == name {
 			startIndex = i
 			break
 		}

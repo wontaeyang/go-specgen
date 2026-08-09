@@ -563,9 +563,9 @@ func TestExtractAnnotationName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractAnnotationName(tt.line)
+			got := ExtractAnnotationName(tt.line)
 			if got != tt.expected {
-				t.Errorf("extractAnnotationName(%q) = %q, want %q", tt.line, got, tt.expected)
+				t.Errorf("ExtractAnnotationName(%q) = %q, want %q", tt.line, got, tt.expected)
 			}
 		})
 	}
