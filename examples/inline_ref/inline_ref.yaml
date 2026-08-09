@@ -32,7 +32,7 @@ paths:
                 required: true
             responses:
                 "201":
-                    description: Response for status 201
+                    description: Created
                     content:
                         application/json:
                             schema:

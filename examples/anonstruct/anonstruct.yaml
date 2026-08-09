@@ -15,7 +15,7 @@ paths:
                 required: true
             responses:
                 "200":
-                    description: Response for status 200
+                    description: OK
                     content:
                         application/json:
                             schema:

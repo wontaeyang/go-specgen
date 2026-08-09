@@ -376,10 +376,12 @@ func describeShape(t *resolver.TypeRef) string {
 func (v *Validator) validateEndpoint(endpoint *resolver.Endpoint, pkg *resolver.Package) {
 	path := endpointPath(endpoint)
 
-	// Validate method
+	// Validate method. These are the eight operations the Path Item Object
+	// defines, which is also what the generator's switch emits — the list used
+	// to be Swagger 2.0's seven, leaving the generator's TRACE arm unreachable.
 	validMethods := map[string]bool{
 		"GET": true, "POST": true, "PUT": true, "PATCH": true,
-		"DELETE": true, "HEAD": true, "OPTIONS": true,
+		"DELETE": true, "HEAD": true, "OPTIONS": true, "TRACE": true,
 	}
 	if !validMethods[endpoint.Method] {
 		v.addError(path, fmt.Sprintf("invalid HTTP method: %s", endpoint.Method))
@@ -408,16 +410,24 @@ func (v *Validator) validateEndpoint(endpoint *resolver.Endpoint, pkg *resolver.
 	}
 
 	for _, response := range endpoint.Responses {
-		v.validateResponse(path, response, pkg.Schemas)
+		v.validateResponse(path, response, pkg.Schemas, pkg.Parameters)
 	}
+
+	// Validate parameter struct references resolve
+	v.validateParameterRefs(path, endpoint.ParamRefs, pkg.Parameters)
 
 	// Validate no parameter name conflicts
 	v.validateParameterConflicts(path, endpoint)
 
 	// Validate tags reference defined API-level tags. Deliberately not guarded
 	// on the API having declared any: an API with no @tag blocks is exactly the
-	// case where every endpoint tag is undefined.
-	v.validateEndpointTags(path, endpoint.Tags, pkg.API.Tags)
+	// case where every endpoint tag is undefined. The nil API is guarded, since
+	// Validate records that and keeps going rather than returning.
+	var apiTags []*resolver.Tag
+	if pkg.API != nil {
+		apiTags = pkg.API.Tags
+	}
+	v.validateEndpointTags(path, endpoint.Tags, apiTags)
 }
 
 // validatePath validates the path format
@@ -532,8 +542,33 @@ func (v *Validator) validateBodySchemaExists(path string, body *resolver.Body, s
 	}
 }
 
+// validateParameterRefs checks that every @path/@query/@header/@cookie
+// reference names a parameter struct that exists.
+//
+// The resolver keeps the reference whether or not it resolved, for the same
+// reason a @body keeps an unknown schema name: dropping it would let a typo
+// silently remove every parameter it was carrying, and the tool would exit 0
+// with a document that describes the wrong operation.
+func (v *Validator) validateParameterRefs(path string, refs []resolver.ParamRef, params map[string]*resolver.ParameterStruct) {
+	for _, ref := range refs {
+		if _, ok := params[ref.Name]; !ok {
+			v.addError(path, fmt.Sprintf("@%s references unknown parameter struct: %s", ref.In, ref.Name))
+		}
+	}
+}
+
+// validateResponseHeaderRefs checks a response's @header references the same
+// way, in whichever form declared them.
+func (v *Validator) validateResponseHeaderRefs(path string, refs []string, params map[string]*resolver.ParameterStruct) {
+	for _, ref := range refs {
+		if _, ok := params[ref]; !ok {
+			v.addError(path, fmt.Sprintf("@header references unknown parameter struct: %s", ref))
+		}
+	}
+}
+
 // validateResponse validates a response
-func (v *Validator) validateResponse(path string, response *resolver.Response, schemas map[string]*resolver.Schema) {
+func (v *Validator) validateResponse(path string, response *resolver.Response, schemas map[string]*resolver.Schema, params map[string]*resolver.ParameterStruct) {
 	statusCode := response.StatusCode
 	responsePath := fmt.Sprintf("%s.@response[%s]", path, statusCode)
 
@@ -541,6 +576,10 @@ func (v *Validator) validateResponse(path string, response *resolver.Response, s
 	if statusCode != "default" && !regexp.MustCompile(`^[1-5](\d{2}|XX)$`).MatchString(statusCode) {
 		v.addError(responsePath, fmt.Sprintf("invalid status code: %s", statusCode))
 	}
+
+	// Both response forms can carry @header, so this precedes the inline
+	// early-return below.
+	v.validateResponseHeaderRefs(responsePath, response.HeaderRefs, params)
 
 	// An in-function @response is its own body, so there is no schema name to
 	// check — only the envelope it may be bound into.

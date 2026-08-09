@@ -1212,3 +1212,34 @@ func TestApplyAnnotationOverrides_RequiredNullable(t *testing.T) {
 		})
 	}
 }
+
+// TestResponseDescription covers the fallback both response forms share. A
+// named @response used to render an empty description here while an in-function
+// one rendered "Response for status N".
+func TestResponseDescription(t *testing.T) {
+	tests := []struct {
+		name       string
+		declared   string
+		statusCode string
+		want       string
+	}{
+		{"@description wins", "User found", "200", "User found"},
+		{"@description wins over a phrase that exists", "Created the widget", "201", "Created the widget"},
+		{"200", "", "200", "OK"},
+		{"201", "", "201", "Created"},
+		{"204", "", "204", "No Content"},
+		{"404", "", "404", "Not Found"},
+		{"422", "", "422", "Unprocessable Entity"},
+		{"default has no phrase", "", "default", "Default response"},
+		{"a range has no phrase", "", "4XX", "Response for status 4XX"},
+		{"an unassigned code has no phrase", "", "299", "Response for status 299"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := responseDescription(tt.declared, tt.statusCode); got != tt.want {
+				t.Errorf("responseDescription(%q, %q) = %q, want %q", tt.declared, tt.statusCode, got, tt.want)
+			}
+		})
+	}
+}

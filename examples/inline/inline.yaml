@@ -37,7 +37,7 @@ paths:
                     type: string
             responses:
                 "200":
-                    description: Response for status 200
+                    description: OK
                     content:
                         application/json:
                             schema:
@@ -137,7 +137,7 @@ paths:
                 required: true
             responses:
                 "201":
-                    description: Response for status 201
+                    description: Created
                     content:
                         application/json:
                             schema:
@@ -229,7 +229,7 @@ paths:
                     type: boolean
             responses:
                 "200":
-                    description: Response for status 200
+                    description: OK
                     content:
                         application/json:
                             schema:
@@ -278,7 +278,7 @@ paths:
                                     - total_cents
                                     - items
                 "404":
-                    description: Response for status 404
+                    description: Not Found
                     content:
                         application/json:
                             schema:
@@ -340,7 +340,7 @@ paths:
                         - inactive
             responses:
                 "200":
-                    description: Response for status 200
+                    description: OK
                     content:
                         application/json:
                             schema:
@@ -393,7 +393,7 @@ paths:
                 required: true
             responses:
                 "201":
-                    description: Response for status 201
+                    description: Created
                     content:
                         application/json:
                             schema:
@@ -406,7 +406,7 @@ paths:
                                 required:
                                     - id
                 "400":
-                    description: Response for status 400
+                    description: Bad Request
                     content:
                         application/json:
                             schema:
@@ -459,7 +459,7 @@ paths:
                     type: string
             responses:
                 "200":
-                    description: Response for status 200
+                    description: OK
                     content:
                         application/json:
                             schema:
@@ -500,7 +500,7 @@ paths:
                     format: uuid
             responses:
                 "200":
-                    description: Response for status 200
+                    description: OK
                     content:
                         application/json:
                             schema:

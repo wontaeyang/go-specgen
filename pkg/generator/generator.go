@@ -67,7 +67,7 @@ func (g *Generator) Generate(pkg *resolver.Package) (*v3.Document, error) {
 		doc.Tags = g.generateTags(pkg.API.Tags)
 	}
 
-	doc.Paths = g.generatePaths(pkg.Endpoints, pkg.Schemas)
+	doc.Paths = g.generatePaths(pkg.Endpoints)
 	doc.Components = g.generateComponents(pkg)
 
 	if len(pkg.API.Security) > 0 {
@@ -179,14 +179,14 @@ func (g *Generator) generateSchemas(schemas map[string]*resolver.Schema) *ordere
 			continue
 		}
 
-		result.Set(name, g.generateSchema(schema, schemas))
+		result.Set(name, g.generateSchema(schema))
 	}
 
 	return result
 }
 
 // generateSchema generates a single schema
-func (g *Generator) generateSchema(schema *resolver.Schema, allSchemas map[string]*resolver.Schema) *base.SchemaProxy {
+func (g *Generator) generateSchema(schema *resolver.Schema) *base.SchemaProxy {
 	s := newSchema("object")
 
 	if schema.Description != "" {
@@ -462,7 +462,7 @@ func (g *Generator) generateSecurity(security [][]*resolver.SecurityRequirement)
 }
 
 // generatePaths generates the paths section
-func (g *Generator) generatePaths(endpoints []*resolver.Endpoint, schemas map[string]*resolver.Schema) *v3.Paths {
+func (g *Generator) generatePaths(endpoints []*resolver.Endpoint) *v3.Paths {
 	paths := &v3.Paths{
 		PathItems: orderedmap.New[string, *v3.PathItem](),
 	}
@@ -475,7 +475,7 @@ func (g *Generator) generatePaths(endpoints []*resolver.Endpoint, schemas map[st
 			pathMap[endpoint.Path] = &v3.PathItem{}
 		}
 
-		operation := g.generateOperation(endpoint, schemas)
+		operation := g.generateOperation(endpoint)
 
 		// Set operation on the appropriate method
 		switch strings.ToLower(endpoint.Method) {
@@ -507,7 +507,7 @@ func (g *Generator) generatePaths(endpoints []*resolver.Endpoint, schemas map[st
 }
 
 // generateOperation generates an operation
-func (g *Generator) generateOperation(endpoint *resolver.Endpoint, schemas map[string]*resolver.Schema) *v3.Operation {
+func (g *Generator) generateOperation(endpoint *resolver.Endpoint) *v3.Operation {
 	op := &v3.Operation{}
 
 	if endpoint.Summary != "" {
@@ -531,10 +531,10 @@ func (g *Generator) generateOperation(endpoint *resolver.Endpoint, schemas map[s
 	op.Parameters = g.generateParameters(endpoint.Parameters)
 
 	if endpoint.Request != nil {
-		op.RequestBody = g.generateRequestBody(endpoint.Request, schemas)
+		op.RequestBody = g.generateRequestBody(endpoint.Request)
 	}
 
-	op.Responses = g.generateResponses(endpoint.Responses, schemas)
+	op.Responses = g.generateResponses(endpoint.Responses)
 
 	// Add security
 	if endpoint.Auth != "" {
@@ -584,8 +584,8 @@ func (g *Generator) generateParameters(parameters []*resolver.Parameter) []*v3.P
 }
 
 // generateRequestBody generates a request body, from either @request form.
-func (g *Generator) generateRequestBody(request *resolver.RequestBody, schemas map[string]*resolver.Schema) *v3.RequestBody {
-	schema := g.bodySchema(request.Body, request.Inline, schemas)
+func (g *Generator) generateRequestBody(request *resolver.RequestBody) *v3.RequestBody {
+	schema := g.bodySchema(request.Body, request.Inline)
 	if schema == nil {
 		return &v3.RequestBody{}
 	}
@@ -598,7 +598,7 @@ func (g *Generator) generateRequestBody(request *resolver.RequestBody, schemas m
 
 // generateResponses renders the operation's responses in the order the resolver
 // put them in.
-func (g *Generator) generateResponses(responses []*resolver.Response, schemas map[string]*resolver.Schema) *v3.Responses {
+func (g *Generator) generateResponses(responses []*resolver.Response) *v3.Responses {
 	result := &v3.Responses{
 		Codes: orderedmap.New[string, *v3.Response](),
 	}
@@ -609,7 +609,7 @@ func (g *Generator) generateResponses(responses []*resolver.Response, schemas ma
 			Headers:     generateResponseHeaders(response.Headers),
 		}
 
-		if schema := g.bodySchema(response.Body, response.Inline, schemas); schema != nil && response.ContentType != "" {
+		if schema := g.bodySchema(response.Body, response.Inline); schema != nil && response.ContentType != "" {
 			resp.Content = mediaContent(response.ContentType, schema)
 		}
 
@@ -621,12 +621,12 @@ func (g *Generator) generateResponses(responses []*resolver.Response, schemas ma
 
 // bodySchema renders whichever of the two body forms is present, or nil when a
 // message carries no body at all — a 204, or an @endpoint with no @request.
-func (g *Generator) bodySchema(named *resolver.Body, inline *resolver.InlineBody, schemas map[string]*resolver.Schema) *base.SchemaProxy {
+func (g *Generator) bodySchema(named *resolver.Body, inline *resolver.InlineBody) *base.SchemaProxy {
 	switch {
 	case named != nil && named.Schema != "":
-		return g.generateBodySchema(named, schemas)
+		return g.generateBodySchema(named)
 	case inline != nil && len(inline.Fields) > 0:
-		return g.generateInlineBodySchema(inline, schemas)
+		return g.generateInlineBodySchema(inline)
 	}
 	return nil
 }
@@ -675,23 +675,23 @@ func inlineContentType(inline *resolver.InlineBody) string {
 
 // generateInlineBodySchema renders an in-function struct as a body, wrapped in
 // its @bind envelope when it has one.
-func (g *Generator) generateInlineBodySchema(inline *resolver.InlineBody, schemas map[string]*resolver.Schema) *base.SchemaProxy {
+func (g *Generator) generateInlineBodySchema(inline *resolver.InlineBody) *base.SchemaProxy {
 	if inline.Bind != nil {
-		return g.generateInlineWrappedSchema(inline, schemas)
+		return g.generateInlineWrappedSchema(inline)
 	}
 	return g.generateInlineSchema(inline.Fields)
 }
 
 // generateBodySchema generates schema for a body
-func (g *Generator) generateBodySchema(body *resolver.Body, schemas map[string]*resolver.Schema) *base.SchemaProxy {
+func (g *Generator) generateBodySchema(body *resolver.Body) *base.SchemaProxy {
 	if body.Bind != nil {
-		return g.generateWrappedSchema(body, schemas)
+		return g.generateWrappedSchema(body)
 	}
 	return g.buildTypeProxy(body.Type)
 }
 
 // generateWrappedSchema generates a schema where the body is wrapped in an envelope
-func (g *Generator) generateWrappedSchema(body *resolver.Body, schemas map[string]*resolver.Schema) *base.SchemaProxy {
+func (g *Generator) generateWrappedSchema(body *resolver.Body) *base.SchemaProxy {
 	bodySchema := func() *base.SchemaProxy {
 		return g.buildTypeProxy(body.Type)
 	}
@@ -704,7 +704,7 @@ func (g *Generator) generateWrappedSchema(body *resolver.Body, schemas map[strin
 }
 
 // generateInlineWrappedSchema wraps inline struct fields in a wrapper schema
-func (g *Generator) generateInlineWrappedSchema(inline *resolver.InlineBody, schemas map[string]*resolver.Schema) *base.SchemaProxy {
+func (g *Generator) generateInlineWrappedSchema(inline *resolver.InlineBody) *base.SchemaProxy {
 	bodySchema := func() *base.SchemaProxy {
 		return g.generateInlineSchema(inline.Fields)
 	}

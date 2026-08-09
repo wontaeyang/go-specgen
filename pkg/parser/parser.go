@@ -653,23 +653,43 @@ func convertParsedField(fieldName string, parsed *ParsedAnnotation) (*Field, err
 		field.UniqueItems = true
 	}
 
-	if req := parsed.GetChildValue("@required"); req != "" {
-		val, err := strconv.ParseBool(req)
+	if parsed.HasChild("@required") {
+		val, err := parseOverride("@required", parsed.GetChildValue("@required"))
 		if err != nil {
-			return nil, fmt.Errorf("@required value %q is not a valid boolean (use true or false)", req)
+			return nil, err
 		}
 		field.Required = &val
 	}
 
-	if null := parsed.GetChildValue("@nullable"); null != "" {
-		val, err := strconv.ParseBool(null)
+	if parsed.HasChild("@nullable") {
+		val, err := parseOverride("@nullable", parsed.GetChildValue("@nullable"))
 		if err != nil {
-			return nil, fmt.Errorf("@nullable value %q is not a valid boolean (use true or false)", null)
+			return nil, err
 		}
 		field.Nullable = &val
 	}
 
 	return field, nil
+}
+
+// parseOverride reads a @required or @nullable value.
+//
+// Both carry true|false because both override something specgen already
+// inferred from the Go type and its json tag, and turning an inference off is
+// the reason they are not plain flags. But every other modifier inside @field —
+// @deprecated, @readOnly, @writeOnly, @uniqueItems — is written bare, so a bare
+// one here means the same thing it means there: true. Treating it as absent
+// instead made the annotation a no-op with nothing said.
+func parseOverride(name, value string) (bool, error) {
+	if value == "" {
+		return true, nil
+	}
+
+	val, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s value %q is not a valid boolean (use true or false)", name, value)
+	}
+	return val, nil
 }
 
 // extractRepeatedReferences extracts references from repeated children annotations

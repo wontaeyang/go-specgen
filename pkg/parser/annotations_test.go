@@ -775,6 +775,74 @@ func TestParseAnnotationBlock_MultilineTermination(t *testing.T) {
 	})
 }
 
+// TestParseAnnotationBlock_StrayLine covers text inside a block that is not an
+// annotation. It used to be skipped, so prose written inside the braces — or a
+// single-line value wrapped onto a second line — disappeared without a word.
+func TestParseAnnotationBlock_StrayLine(t *testing.T) {
+	schemaNode := annotation.Schema.GetChild("@schema")
+	fieldNode := annotation.Schema.GetChild("@field")
+
+	tests := []struct {
+		name  string
+		node  *annotation.Def
+		lines []string
+		want  string
+	}{
+		{
+			name: "prose inside a block",
+			node: schemaNode,
+			lines: []string{
+				"@schema {",
+				"  @deprecated",
+				"  this line is prose",
+				"}",
+			},
+			want: `"this line is prose" is not an annotation`,
+		},
+		{
+			name: "single-line value wrapped onto the next line",
+			node: fieldNode,
+			lines: []string{
+				"@field {",
+				"  @format A Very Long",
+				"    Wrapped Value",
+				"}",
+			},
+			want: `"Wrapped Value" is not an annotation`,
+		},
+		{
+			name: "blank lines are still skipped",
+			node: schemaNode,
+			lines: []string{
+				"@schema {",
+				"",
+				"  @description A widget",
+				"",
+				"}",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseAnnotationBlock(tt.lines, tt.node.Name, tt.node)
+
+			if tt.want == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected an error for the stray line")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
 // The tests below cover a block written on one line. They used to call a second
 // entry point of their own, which extracted the block by a different rule than
 // the multi-line path and disagreed with it. Both forms now go through

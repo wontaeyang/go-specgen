@@ -321,7 +321,7 @@ func TestGenerator_GeneratePaths(t *testing.T) {
 	}
 
 	gen := NewGenerator("3.1")
-	paths := gen.generatePaths(endpoints, map[string]*resolver.Schema{})
+	paths := gen.generatePaths(endpoints)
 
 	if paths.PathItems.Len() != 1 {
 		t.Fatalf("Expected 1 path item, got %d", paths.PathItems.Len())
@@ -368,12 +368,8 @@ func TestGenerator_GenerateOperation(t *testing.T) {
 		},
 	}
 
-	schemas := map[string]*resolver.Schema{
-		"User": {Name: "User"},
-	}
-
 	gen := NewGenerator("3.1")
-	op := gen.generateOperation(endpoint, schemas)
+	op := gen.generateOperation(endpoint)
 
 	if op.Summary != "Get user" {
 		t.Errorf("Summary = %v, want Get user", op.Summary)
@@ -415,7 +411,7 @@ func TestGenerator_HTTPMethodsLowercase(t *testing.T) {
 	}
 
 	gen := NewGenerator("3.1")
-	paths := gen.generatePaths(endpoints, map[string]*resolver.Schema{})
+	paths := gen.generatePaths(endpoints)
 
 	testPath := paths.PathItems.GetOrZero("/test")
 	if testPath == nil {
@@ -559,9 +555,7 @@ func TestGenerator_GenerateBodySchema_Ref(t *testing.T) {
 		Type:   &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"},
 	}
 
-	schemas := map[string]*resolver.Schema{}
-
-	result := gen.generateBodySchema(body, schemas)
+	result := gen.generateBodySchema(body)
 
 	if !result.IsReference() {
 		t.Error("Expected schema reference")
@@ -594,11 +588,7 @@ func TestGenerator_GenerateBodySchema_Wrapped(t *testing.T) {
 		},
 	}
 
-	schemas := map[string]*resolver.Schema{
-		"DataResponse": wrapperSchema,
-	}
-
-	result := gen.generateBodySchema(body, schemas)
+	result := gen.generateBodySchema(body)
 
 	// Should not be a reference (wrapped schema is inlined)
 	if result.IsReference() {
@@ -783,11 +773,7 @@ func TestGenerator_GenerateInlineWrappedSchema(t *testing.T) {
 		},
 	}
 
-	schemas := map[string]*resolver.Schema{
-		"DataResponse": wrapperSchema,
-	}
-
-	result := gen.generateInlineWrappedSchema(inline, schemas)
+	result := gen.generateInlineWrappedSchema(inline)
 
 	schema, err := result.BuildSchema()
 	if err != nil {
@@ -827,7 +813,7 @@ func TestGenerator_GenerateInlineWrappedSchema_NoBind(t *testing.T) {
 		Bind: nil,
 	}
 
-	result := gen.generateInlineWrappedSchema(inline, nil)
+	result := gen.generateInlineWrappedSchema(inline)
 
 	schema, err := result.BuildSchema()
 	if err != nil {

@@ -261,8 +261,22 @@ type Endpoint struct {
 	// Parameters are every parameter the operation accepts, in emission order.
 	Parameters []*Parameter
 
+	// ParamRefs are the @path/@query/@header/@cookie references as written,
+	// whether or not they named a parameter struct that exists. Kept for the
+	// same reason Body.Schema keeps an unknown schema name: a reference to
+	// something that was never declared is the validator's to report, and it
+	// cannot report a name the resolver threw away.
+	ParamRefs []ParamRef
+
 	// Responses are every response, sorted by status code.
 	Responses []*Response
+}
+
+// ParamRef is one parameter-struct reference on an endpoint: the name as
+// written and the location the annotation put it in.
+type ParamRef struct {
+	Name string
+	In   string
 }
 
 // Parameter is one OpenAPI parameter: a resolved field plus where it goes.
@@ -284,6 +298,9 @@ type InlineBody struct {
 	Bind        *BindTarget
 	Headers     []*ParameterStruct // Response headers (for inline responses)
 	Description string             // Response description
+
+	// HeaderRefs are the @header references as written. See Endpoint.ParamRefs.
+	HeaderRefs []string
 }
 
 // RequestBody contains a request body with resolved schema
@@ -314,6 +331,10 @@ type Response struct {
 	Inline *InlineBody
 
 	Headers []*ParameterStruct
+
+	// HeaderRefs are the @header references as written, from whichever form
+	// declared this response. See Endpoint.ParamRefs.
+	HeaderRefs []string
 }
 
 // Body contains the resolved body with optional binding

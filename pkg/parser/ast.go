@@ -387,7 +387,11 @@ func hasAPIAnnotation(cg *ast.CommentGroup) bool {
 		text := strings.TrimPrefix(c.Text, "//")
 		text = strings.TrimPrefix(text, "/*")
 		text = strings.TrimSpace(text)
-		if strings.HasPrefix(text, "@api") {
+		// Whole-name match, for the reason HasAnnotation gives. Here the
+		// near-miss is a real annotation family rather than a typo: apidoc's
+		// @apiVersion and @apiParam both begin with @api, and either could win
+		// this scan and be handed to parseAPI as the API block.
+		if extractAnnotationName(text) == "@api" {
 			return true
 		}
 	}
@@ -414,14 +418,22 @@ func (pc *PackageComments) GetFunctionComment(funcName string) *CommentBlock {
 	return pc.FunctionComments[funcName]
 }
 
-// HasAnnotation checks if a comment block contains an annotation
+// HasAnnotation reports whether the block writes the named annotation on a line
+// of its own.
+//
+// The name has to match whole. This is what classifies a declaration — a struct
+// carrying @path becomes a path-parameter struct here, before any grammar is
+// consulted — so a prefix match let @headers register as @header, and the
+// declaration was read as something the user never wrote. extractAnnotationName
+// draws the boundary the rest of the parser draws, which is why it is borrowed
+// rather than restated.
 func (cb *CommentBlock) HasAnnotation(annotation string) bool {
 	if cb == nil {
 		return false
 	}
 
 	for _, line := range cb.Lines {
-		if strings.HasPrefix(line, annotation) {
+		if extractAnnotationName(line) == annotation {
 			return true
 		}
 	}
@@ -557,38 +569,13 @@ func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.Bl
 		}
 
 		annotation, statusCode := detectInlineAnnotation(commentBlock.Lines)
-		if annotation == "" {
+		if !isInlineAnnotation(annotation) {
 			continue
 		}
 
-		// Extract struct from var or type declaration
-		var ident *ast.Ident
-		var structType *ast.StructType
-
-		if genDecl.Tok == token.VAR {
-			// var x struct { ... }
-			for _, spec := range genDecl.Specs {
-				if vs, ok := spec.(*ast.ValueSpec); ok && len(vs.Names) > 0 {
-					ident = vs.Names[0]
-					if st, ok := vs.Type.(*ast.StructType); ok {
-						structType = st
-					}
-				}
-			}
-		} else if genDecl.Tok == token.TYPE {
-			// type X struct { ... }
-			for _, spec := range genDecl.Specs {
-				if ts, ok := spec.(*ast.TypeSpec); ok {
-					ident = ts.Name
-					if st, ok := ts.Type.(*ast.StructType); ok {
-						structType = st
-					}
-				}
-			}
-		}
-
-		if ident == nil || structType == nil {
-			continue
+		ident, structType, err := inlineStructDecl(genDecl, annotation)
+		if err != nil {
+			return nil, err
 		}
 
 		inline := &InlineStructInfo{
@@ -633,6 +620,75 @@ func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.Bl
 		return nil, nil
 	}
 	return result, nil
+}
+
+// isInlineAnnotation reports whether name is one of the annotations that can be
+// written inside a function body. detectInlineAnnotation answers with any
+// top-level grammar name it finds, so a comment carrying @schema or @field
+// above a local declaration reaches here too — those belong on a package-level
+// declaration and are none of this function's business.
+func isInlineAnnotation(name string) bool {
+	switch name {
+	case "query", "path", "header", "cookie", "request", "response":
+		return true
+	}
+	return false
+}
+
+// inlineStructDecl reads the one struct an in-function annotation is attached
+// to.
+//
+// The annotation goes on the declaration that *defines* the struct, never on
+// one that names a struct defined elsewhere: `var f Filters` puts its @query on
+// Filters itself, and @endpoint references it by name. So the only thing
+// accepted here is a struct literal, in either the var or the type spelling —
+// `type request struct { ... }` inside a handler defines its struct just as
+// much as `var request struct { ... }` does.
+//
+// One annotation, one struct. A grouped declaration under a single annotation
+// has no single subject; the loop that used to walk one kept whichever spec
+// came last and dropped the rest without a word.
+func inlineStructDecl(genDecl *ast.GenDecl, annotation string) (*ast.Ident, *ast.StructType, error) {
+	keyword := strings.ToLower(genDecl.Tok.String())
+
+	if len(genDecl.Specs) != 1 {
+		return nil, nil, fmt.Errorf("@%s annotates a group of %d declarations; an in-function @%s takes one struct, so give each its own declaration and its own @%s",
+			annotation, len(genDecl.Specs), annotation, annotation)
+	}
+
+	switch spec := genDecl.Specs[0].(type) {
+	case *ast.ValueSpec:
+		if len(spec.Names) != 1 {
+			return nil, nil, fmt.Errorf("@%s annotates a declaration of %d variables; an in-function @%s takes one struct, so give each its own declaration and its own @%s",
+				annotation, len(spec.Names), annotation, annotation)
+		}
+		st, ok := spec.Type.(*ast.StructType)
+		if !ok {
+			return nil, nil, notAStructDefinition(annotation, keyword, spec.Names[0].Name, spec.Type)
+		}
+		return spec.Names[0], st, nil
+
+	case *ast.TypeSpec:
+		st, ok := spec.Type.(*ast.StructType)
+		if !ok {
+			return nil, nil, notAStructDefinition(annotation, keyword, spec.Name.Name, spec.Type)
+		}
+		return spec.Name, st, nil
+	}
+
+	return nil, nil, fmt.Errorf("@%s must annotate a var or type declaration", annotation)
+}
+
+// notAStructDefinition reports a declaration that carries an in-function
+// annotation without defining the struct it describes.
+func notAStructDefinition(annotation, keyword, name string, declared ast.Expr) error {
+	advice := fmt.Sprintf("write \"%s %s struct { ... }\" here, or annotate the struct where it is defined and reference it from @endpoint",
+		keyword, name)
+
+	if declared == nil {
+		return fmt.Errorf("@%s on %q declares no type; an in-function @%s must define its struct: %s", annotation, name, annotation, advice)
+	}
+	return fmt.Errorf("@%s on %q declares %s rather than defining a struct; %s", annotation, name, formatTypeExpr(declared), advice)
 }
 
 // detectInlineAnnotation reports which in-function annotation a comment block

@@ -538,6 +538,24 @@ func TestParser_ConvertParsedField_RequiredNullableOverrides(t *testing.T) {
 			wantRequired: boolPtr(false),
 			wantNullable: boolPtr(true),
 		},
+		{
+			name: "bare @required means true",
+			annotation: &ParsedAnnotation{
+				Children: map[string]*ParsedAnnotation{
+					"@required": {Value: ""},
+				},
+			},
+			wantRequired: boolPtr(true),
+		},
+		{
+			name: "bare @nullable means true",
+			annotation: &ParsedAnnotation{
+				Children: map[string]*ParsedAnnotation{
+					"@nullable": {Value: ""},
+				},
+			},
+			wantNullable: boolPtr(true),
+		},
 	}
 
 	for _, tt := range tests {

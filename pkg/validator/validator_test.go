@@ -58,23 +58,37 @@ func TestValidator_Validate_ValidPackage(t *testing.T) {
 	}
 }
 
+// TestValidator_Validate_MissingAPI checks that a nil API is recorded and the
+// rest of the package still gets validated. The endpoint is what makes it a
+// real test: validateEndpoint reads the API's tags, and reading them without a
+// guard turned this case into a panic instead of the error it promises.
 func TestValidator_Validate_MissingAPI(t *testing.T) {
 	pkg := &resolver.Package{
 		PackageName: "test",
 		API:         nil,
 		Schemas:     map[string]*resolver.Schema{},
 		Parameters:  map[string]*resolver.ParameterStruct{},
-		Endpoints:   []*resolver.Endpoint{},
+		Endpoints: []*resolver.Endpoint{
+			{
+				Method:    "GET",
+				Path:      "/widgets",
+				Tags:      []string{"widgets"},
+				Responses: []*resolver.Response{{StatusCode: "200"}},
+			},
+		},
 	}
 
 	v := NewValidator()
 	err := v.Validate(pkg)
 	if err == nil {
-		t.Error("Validate() should error when API is missing")
+		t.Fatal("Validate() should error when API is missing")
 	}
 
 	if !strings.Contains(err.Error(), "@api") {
 		t.Errorf("Error should mention @api, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "undefined tag: widgets") {
+		t.Errorf("Error should report the endpoint's tag as undefined, got: %v", err)
 	}
 }
 
@@ -650,6 +664,19 @@ func TestValidator_ValidateEndpoint(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			// The eighth Path Item operation, and the one the generator could
+			// emit but the validator used to reject.
+			name: "TRACE is a valid method",
+			endpoint: &resolver.Endpoint{
+				Method: "TRACE",
+				Path:   "/users",
+				Responses: []*resolver.Response{
+					{StatusCode: "200"},
+				},
+			},
+			wantErr: false,
+		},
+		{
 			name: "invalid method",
 			endpoint: &resolver.Endpoint{
 				Method: "INVALID",
@@ -983,6 +1010,87 @@ func TestValidator_ValidateResponseStatusCode(t *testing.T) {
 			}
 			if !tt.wantErr && err != nil && strings.Contains(err.Error(), "invalid status code") {
 				t.Errorf("unexpected 'invalid status code' error for %q: %v", tt.statusCode, err)
+			}
+		})
+	}
+}
+
+func TestValidator_ValidateParameterRefs(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint *resolver.Endpoint
+		want     string
+	}{
+		{
+			name: "known reference",
+			endpoint: &resolver.Endpoint{
+				Method:    "GET",
+				Path:      "/test",
+				ParamRefs: []resolver.ParamRef{{Name: "ListQuery", In: "query"}},
+				Responses: []*resolver.Response{{StatusCode: "200"}},
+			},
+		},
+		{
+			name: "unknown endpoint reference",
+			endpoint: &resolver.Endpoint{
+				Method:    "GET",
+				Path:      "/test",
+				ParamRefs: []resolver.ParamRef{{Name: "Missing", In: "query"}},
+				Responses: []*resolver.Response{{StatusCode: "200"}},
+			},
+			want: "@query references unknown parameter struct: Missing",
+		},
+		{
+			name: "unknown named response header reference",
+			endpoint: &resolver.Endpoint{
+				Method: "GET",
+				Path:   "/test",
+				Responses: []*resolver.Response{
+					{StatusCode: "200", HeaderRefs: []string{"Missing"}},
+				},
+			},
+			want: "@header references unknown parameter struct: Missing",
+		},
+		{
+			name: "unknown inline response header reference",
+			endpoint: &resolver.Endpoint{
+				Method: "GET",
+				Path:   "/test",
+				Responses: []*resolver.Response{
+					{
+						StatusCode: "200",
+						HeaderRefs: []string{"Missing"},
+						Inline:     &resolver.InlineBody{HeaderRefs: []string{"Missing"}},
+					},
+				},
+			},
+			want: "@header references unknown parameter struct: Missing",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pkg := &resolver.Package{
+				API:     &resolver.API{Title: "Test", Version: "1.0.0"},
+				Schemas: map[string]*resolver.Schema{},
+				Parameters: map[string]*resolver.ParameterStruct{
+					"ListQuery": {Name: "ListQuery", Type: "query", Fields: []*resolver.Field{
+						{Name: "limit", GoName: "Limit", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "integer"}},
+					}},
+				},
+				Endpoints: []*resolver.Endpoint{tt.endpoint},
+			}
+
+			err := NewValidator().Validate(pkg)
+
+			if tt.want == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("expected %q, got: %v", tt.want, err)
 			}
 		})
 	}

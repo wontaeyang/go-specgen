@@ -292,6 +292,10 @@ type UpdateUserPatch struct {
 }
 ```
 
+Both take `true` or `false`. Written bare — `@required`, `@nullable` — they mean
+`true`, the same as every other modifier inside `@field`. The explicit value is
+there for the `false` case, which is the one Go's defaults cannot express.
+
 When omitted, behavior falls back to the Go-type rules in the tables above.
 
 ### Embedded Structs
@@ -524,7 +528,7 @@ The `@api` block can appear directly above the `package` keyword or as a standal
   @body Schema   Schema reference
   @bind Wrapper.Field   Wrap body in response envelope
   @header Name   Response header struct reference (repeatable)
-  @description   Response description
+  @description   Response description (defaults to the reason phrase)
 }
 ```
 
@@ -536,6 +540,13 @@ CODE can be a specific status (`200`, `404`), a range (`2XX`, `4XX`, `5XX`), or 
 @response 5XX { @body Error @description Server error }
 @response default { @body Error }
 ```
+
+The Response Object requires a description, so one is always emitted. Without
+`@description` it is the status code's reason phrase — `200` becomes `OK`, `201`
+becomes `Created`, `204` becomes `No Content`. A range or `default` names no
+single status and so has no phrase; those describe what they cover instead
+(`Response for status 4XX`, `Default response`). Both response forms — the named
+one above and the in-function one — use the same fallback.
 
 **Content type support:**
 
@@ -572,8 +583,8 @@ CODE can be a specific status (`200`, `404`), a range (`2XX`, `4XX`, `5XX`), or 
   @deprecated         Mark as deprecated
   @readOnly           Mark as read-only
   @writeOnly          Mark as write-only
-  @required           Override required (true|false)
-  @nullable           Override nullable (true|false)
+  @required           Override required (true|false, bare means true)
+  @nullable           Override nullable (true|false, bare means true)
 }
 ```
 

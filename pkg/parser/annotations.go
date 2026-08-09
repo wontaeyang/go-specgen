@@ -315,19 +315,16 @@ func parseChildren(lines []string, parentNode *annotation.Def, result *ParsedAnn
 			continue
 		}
 
-		// Find annotation
+		// Every line inside a block is an annotation. A continuation line is
+		// consumed below, by the child that supports one, so anything still
+		// here is text the block has no place for -- prose written inside the
+		// braces, or a single-line value someone wrapped onto a second line.
+		// Skipping it dropped what the user wrote and said nothing.
 		if !strings.HasPrefix(line, "@") {
-			// Not an annotation line, might be continuation
-			i++
-			continue
+			return fmt.Errorf("%q is not an annotation; every line inside %s must begin with @, and only @description continues onto the next line", line, parentNode.Name)
 		}
 
-		// Extract annotation name
 		annotationName := extractAnnotationName(line)
-		if annotationName == "" {
-			i++
-			continue
-		}
 
 		// Get schema node for this annotation
 		childNode := parentNode.GetChild(annotationName)

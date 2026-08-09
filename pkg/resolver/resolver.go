@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"go/types"
 	"maps"
+	"net/http"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/wontaeyang/go-specgen/pkg/parser"
@@ -254,7 +256,6 @@ func (r *Resolver) resolveAPI(api *parser.APIInfo) *API {
 }
 
 // resolveSchema resolves a schema by looking up the Go struct and resolving its fields
-// schemaNames contains all known @schema type names for detecting unresolved struct references
 func (r *Resolver) resolveSchema(schema *parser.Schema) (*Schema, error) {
 	resolved := &Schema{
 		Name:        schema.Name,
@@ -831,7 +832,7 @@ func (r *Resolver) resolveEndpoint(endpoint *parser.Endpoint, parameters map[str
 	for statusCode, response := range endpoint.Responses {
 		resolvedResponse := &Response{
 			StatusCode:  response.StatusCode,
-			Description: response.Description,
+			Description: responseDescription(response.Description, response.StatusCode),
 			Body:        r.resolveBody(response.Body, schemas),
 		}
 
@@ -842,6 +843,7 @@ func (r *Resolver) resolveEndpoint(endpoint *parser.Endpoint, parameters map[str
 		}
 
 		for _, ref := range response.HeaderParams {
+			resolvedResponse.HeaderRefs = append(resolvedResponse.HeaderRefs, ref)
 			if param, ok := parameters[ref]; ok {
 				resolvedResponse.Headers = append(resolvedResponse.Headers, param)
 			}
@@ -862,6 +864,7 @@ func (r *Resolver) resolveEndpoint(endpoint *parser.Endpoint, parameters map[str
 	}
 	for _, group := range named {
 		for _, ref := range group.refs {
+			resolved.ParamRefs = append(resolved.ParamRefs, ParamRef{Name: ref, In: group.in})
 			if param, ok := parameters[ref]; ok {
 				resolved.Parameters = append(resolved.Parameters, parametersFrom(param.Fields, group.in)...)
 			}
@@ -903,6 +906,35 @@ func parametersFrom(fields []*Field, in string) []*Parameter {
 	return params
 }
 
+// responseDescription is what a response says about itself when its annotation
+// did not say.
+//
+// The Response Object requires a description, so the field is emitted either
+// way and the only question is whether it is emitted empty. It used to depend
+// on which form declared the response: a named @response rendered
+// description: "", an in-function one rendered "Response for status 200".
+//
+// Both now fall back to the status code's reason phrase — "OK", "Created",
+// "No Content" — which is what a hand-written document puts in that slot, and
+// which net/http already knows so there is no table here to drift. Wildcard
+// ranges and "default" cover no single status and so have no phrase; they
+// describe what they cover instead.
+func responseDescription(declared, statusCode string) string {
+	if declared != "" {
+		return declared
+	}
+
+	if statusCode == "default" {
+		return "Default response"
+	}
+	if code, err := strconv.Atoi(statusCode); err == nil {
+		if phrase := http.StatusText(code); phrase != "" {
+			return phrase
+		}
+	}
+	return fmt.Sprintf("Response for status %s", statusCode)
+}
+
 // sortResponses puts responses in emission order: by status code as a string.
 //
 // That is not numeric order, and deliberately so — the set includes wildcard
@@ -915,24 +947,6 @@ func sortResponses(byStatus map[string]*Response) []*Response {
 		responses = append(responses, byStatus[status])
 	}
 	return responses
-}
-
-// extractTagName extracts a field name from a specific struct tag key
-func extractTagName(tag string, key string) string {
-	// Parse struct tag
-	st := reflect.StructTag(tag)
-	value := st.Get(key)
-	if value == "" {
-		return ""
-	}
-
-	// Split by comma to remove options like omitempty
-	parts := strings.Split(value, ",")
-	if len(parts) > 0 {
-		return parts[0]
-	}
-
-	return ""
 }
 
 // SupportedTags defines struct tags checked for field names (in fallback order).
@@ -1106,17 +1120,13 @@ func (r *Resolver) resolveInlineDeclarations(endpoint *Endpoint, responses map[s
 			continue
 		}
 
-		description := body.Description
-		if description == "" {
-			description = fmt.Sprintf("Response for status %s", statusCode)
-		}
-
 		responses[statusCode] = &Response{
 			StatusCode:  statusCode,
-			Description: description,
+			Description: responseDescription(body.Description, statusCode),
 			ContentType: body.ContentType,
 			Inline:      body,
 			Headers:     body.Headers,
+			HeaderRefs:  body.HeaderRefs,
 		}
 	}
 
@@ -1182,12 +1192,6 @@ func (r *Resolver) resolveInlineBody(info *parser.InlineStructInfo, parsed *pars
 		return nil, err
 	}
 
-	// Build schemaNames for anonymous struct resolution
-	schemaNames := make(map[string]bool)
-	for name := range schemas {
-		schemaNames[name] = true
-	}
-
 	fields, err := r.resolveSchemaFields(structType, info.Fields, nil)
 	if err != nil {
 		return nil, err
@@ -1216,6 +1220,7 @@ func (r *Resolver) resolveInlineBody(info *parser.InlineStructInfo, parsed *pars
 		// Resolve header references (response only)
 		if parameters != nil {
 			for _, headerChild := range parsed.GetRepeatedChildren("@header") {
+				resolved.HeaderRefs = append(resolved.HeaderRefs, headerChild.Value)
 				if param, ok := parameters[headerChild.Value]; ok {
 					resolved.Headers = append(resolved.Headers, param)
 				}

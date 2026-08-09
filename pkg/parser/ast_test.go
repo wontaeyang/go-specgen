@@ -1,6 +1,10 @@
 package parser
 
 import (
+	"go/ast"
+	goparser "go/parser"
+	"go/token"
+	"strings"
 	"testing"
 )
 
@@ -31,9 +35,14 @@ func TestExtractComments(t *testing.T) {
 		}
 	}
 
-	// InternalStruct should not have annotations
-	if cb := comments.GetStructComment("InternalStruct"); cb != nil && cb.HasAnnotation("@") {
-		t.Error("InternalStruct should not have annotations")
+	// InternalStruct carries a plain doc comment, so none of the annotations
+	// that would classify it as a declaration specgen owns should match.
+	if cb := comments.GetStructComment("InternalStruct"); cb != nil {
+		for _, name := range []string{"@schema", "@path", "@query", "@header", "@cookie"} {
+			if cb.HasAnnotation(name) {
+				t.Errorf("InternalStruct should not have %s", name)
+			}
+		}
 	}
 
 	// Test field-level comments
@@ -63,9 +72,9 @@ func TestExtractComments(t *testing.T) {
 		}
 	}
 
-	// HelperFunction should not have annotations
-	if cb := comments.GetFunctionComment("HelperFunction"); cb != nil && cb.HasAnnotation("@") {
-		t.Error("HelperFunction should not have annotations")
+	// HelperFunction carries a plain doc comment and is not an endpoint.
+	if cb := comments.GetFunctionComment("HelperFunction"); cb != nil && cb.HasAnnotation("@endpoint") {
+		t.Error("HelperFunction should not have @endpoint")
 	}
 }
 
@@ -99,6 +108,32 @@ func TestCommentBlock_HasAnnotation(t *testing.T) {
 			lines:      []string{},
 			annotation: "@api",
 			expected:   false,
+		},
+		{
+			// A prefix match read this as @header and registered the struct as
+			// a header-parameter struct the user never wrote.
+			name:       "longer name is not a match",
+			lines:      []string{"@headers"},
+			annotation: "@header",
+			expected:   false,
+		},
+		{
+			name:       "apidoc's @apiVersion is not @api",
+			lines:      []string{"@apiVersion 1.0.0"},
+			annotation: "@api",
+			expected:   false,
+		},
+		{
+			name:       "a block opener still matches",
+			lines:      []string{"@api {", "  @title Test", "}"},
+			annotation: "@api",
+			expected:   true,
+		},
+		{
+			name:       "metadata after the name still matches",
+			lines:      []string{"@endpoint GET /users"},
+			annotation: "@endpoint",
+			expected:   true,
 		},
 	}
 
@@ -529,4 +564,105 @@ func TestInlineStructInfo_Fields(t *testing.T) {
 	if len(info.FieldComments) != 1 {
 		t.Errorf("len(FieldComments) = %d, want %d", len(info.FieldComments), 1)
 	}
+}
+
+// TestExtractFuncInlines_MustDefineStruct covers the declarations an
+// in-function annotation may not sit on. Each of these used to be skipped
+// without a word, so a handler's parameters or body simply went missing.
+func TestExtractFuncInlines_MustDefineStruct(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "named type declared elsewhere",
+			body: "\t// @query\n\tvar f Filters\n\t_ = f",
+			want: `@query on "f" declares Filters rather than defining a struct`,
+		},
+		{
+			name: "not a struct at all",
+			body: "\t// @query\n\tvar limit int\n\t_ = limit",
+			want: `@query on "limit" declares int rather than defining a struct`,
+		},
+		{
+			name: "type form declaring a non-struct",
+			body: "\t// @response 200\n\ttype payload int\n\t_ = payload(0)",
+			want: `@response on "payload" declares int rather than defining a struct`,
+		},
+		{
+			name: "no type at all",
+			body: "\t// @query\n\tvar f = Filters{}\n\t_ = f",
+			want: `@query on "f" declares no type`,
+		},
+		{
+			name: "grouped declaration",
+			body: "\t// @query\n\tvar (\n\t\ta struct{ A string }\n\t\tb struct{ B string }\n\t)\n\t_, _ = a, b",
+			want: "@query annotates a group of 2 declarations",
+		},
+		{
+			name: "several names on one declaration",
+			body: "\t// @query\n\tvar a, b struct{ A string }\n\t_, _ = a, b",
+			want: "@query annotates a declaration of 2 variables",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := parseHandlerBody(t, tt.body)
+
+			_, err := extractFuncInlines(token.NewFileSet(), nil, body)
+			if err == nil {
+				t.Fatalf("expected an error, got none")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+// TestExtractFuncInlines_AcceptsStructDefinitions is the other half: both
+// spellings that define a struct on the spot stay accepted.
+func TestExtractFuncInlines_AcceptsStructDefinitions(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"var form", "\t// @query\n\tvar f struct{ A string }\n\t_ = f"},
+		{"type form", "\t// @request\n\ttype request struct{ A string }\n\t_ = request{}"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := parseHandlerBody(t, tt.body)
+
+			inlines, err := extractFuncInlines(token.NewFileSet(), nil, body)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if inlines == nil {
+				t.Fatal("expected inline declarations, got none")
+			}
+		})
+	}
+}
+
+// parseHandlerBody wraps statements in a function and returns its body. The
+// source is parsed with comments so doc comments reach the GenDecls.
+func parseHandlerBody(t *testing.T, stmts string) *ast.BlockStmt {
+	t.Helper()
+
+	src := "package p\n\nfunc H() {\n" + stmts + "\n}\n"
+
+	file, err := goparser.ParseFile(token.NewFileSet(), "h.go", src, goparser.ParseComments)
+	if err != nil {
+		t.Fatalf("parsing test source: %v", err)
+	}
+
+	fn, ok := file.Decls[0].(*ast.FuncDecl)
+	if !ok {
+		t.Fatalf("first declaration is not a function")
+	}
+	return fn.Body
 }
