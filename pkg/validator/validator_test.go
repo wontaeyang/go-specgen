@@ -13,41 +13,39 @@ func TestNewValidator(t *testing.T) {
 		t.Fatal("NewValidator() returned nil")
 	}
 
-	if v.errors == nil {
-		t.Error("Validator.errors is nil")
+	if v.errs.Stage != "validation" {
+		t.Errorf("Validator.errs.Stage = %q, want %q", v.errs.Stage, "validation")
 	}
 }
 
 func TestValidator_Validate_ValidPackage(t *testing.T) {
-	pkg := &resolver.ResolvedPackage{
+	pkg := &resolver.Package{
 		PackageName: "test",
-		API: &resolver.ResolvedAPI{
+		API: &resolver.API{
 			Title:   "Test API",
 			Version: "1.0.0",
 		},
-		Schemas: map[string]*resolver.ResolvedSchema{
+		Schemas: map[string]*resolver.Schema{
 			"User": {
 				Name:       "User",
 				GoTypeName: "User",
-				Fields: []*resolver.ResolvedField{
+				Fields: []*resolver.Field{
 					{
-						Name:        "id",
-						GoName:      "ID",
-						OpenAPIType: "string",
+						Name:   "id",
+						GoName: "ID",
+						Type:   &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
 					},
 				},
 			},
 		},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
+		Parameters: map[string]*resolver.ParameterStruct{},
+		Endpoints: []*resolver.Endpoint{
 			{
 				Method: "GET",
 				Path:   "/users",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {
-						StatusCode:  "200",
-						Description: "Success",
-					},
+				Responses: []*resolver.Response{
+					{StatusCode: "200",
+						Description: "Success"},
 				},
 			},
 		},
@@ -60,42 +58,56 @@ func TestValidator_Validate_ValidPackage(t *testing.T) {
 	}
 }
 
+// TestValidator_Validate_MissingAPI checks that a nil API is recorded and the
+// rest of the package still gets validated. The endpoint is what makes it a
+// real test: validateEndpoint reads the API's tags, and reading them without a
+// guard turned this case into a panic instead of the error it promises.
 func TestValidator_Validate_MissingAPI(t *testing.T) {
-	pkg := &resolver.ResolvedPackage{
+	pkg := &resolver.Package{
 		PackageName: "test",
 		API:         nil,
-		Schemas:     map[string]*resolver.ResolvedSchema{},
-		Parameters:  map[string]*resolver.ResolvedParameter{},
-		Endpoints:   []*resolver.ResolvedEndpoint{},
+		Schemas:     map[string]*resolver.Schema{},
+		Parameters:  map[string]*resolver.ParameterStruct{},
+		Endpoints: []*resolver.Endpoint{
+			{
+				Method:    "GET",
+				Path:      "/widgets",
+				Tags:      []string{"widgets"},
+				Responses: []*resolver.Response{{StatusCode: "200"}},
+			},
+		},
 	}
 
 	v := NewValidator()
 	err := v.Validate(pkg)
 	if err == nil {
-		t.Error("Validate() should error when API is missing")
+		t.Fatal("Validate() should error when API is missing")
 	}
 
 	if !strings.Contains(err.Error(), "@api") {
 		t.Errorf("Error should mention @api, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "undefined tag: widgets") {
+		t.Errorf("Error should report the endpoint's tag as undefined, got: %v", err)
 	}
 }
 
 func TestValidator_ValidateAPI_MissingRequired(t *testing.T) {
 	tests := []struct {
 		name    string
-		api     *resolver.ResolvedAPI
+		api     *resolver.API
 		wantErr string
 	}{
 		{
 			name: "missing title",
-			api: &resolver.ResolvedAPI{
+			api: &resolver.API{
 				Version: "1.0.0",
 			},
 			wantErr: "@title",
 		},
 		{
 			name: "missing version",
-			api: &resolver.ResolvedAPI{
+			api: &resolver.API{
 				Title: "Test API",
 			},
 			wantErr: "@version",
@@ -104,11 +116,11 @@ func TestValidator_ValidateAPI_MissingRequired(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
+			pkg := &resolver.Package{
 				API:        tt.api,
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints:  []*resolver.ResolvedEndpoint{},
+				Schemas:    map[string]*resolver.Schema{},
+				Parameters: map[string]*resolver.ParameterStruct{},
+				Endpoints:  []*resolver.Endpoint{},
 			}
 
 			v := NewValidator()
@@ -170,17 +182,17 @@ func TestValidator_ValidateSecurityScheme(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
+			pkg := &resolver.Package{
+				API: &resolver.API{
 					Title:   "Test",
 					Version: "1.0.0",
 					SecuritySchemes: map[string]*resolver.SecurityScheme{
 						"test": tt.scheme,
 					},
 				},
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints:  []*resolver.ResolvedEndpoint{},
+				Schemas:    map[string]*resolver.Schema{},
+				Parameters: map[string]*resolver.ParameterStruct{},
+				Endpoints:  []*resolver.Endpoint{},
 			}
 
 			v := NewValidator()
@@ -204,36 +216,36 @@ func TestValidator_ValidateSecurityScheme(t *testing.T) {
 func TestValidator_ValidateSchema(t *testing.T) {
 	tests := []struct {
 		name    string
-		schema  *resolver.ResolvedSchema
+		schema  *resolver.Schema
 		wantErr bool
 		errMsg  string
 	}{
 		{
 			name: "valid schema",
-			schema: &resolver.ResolvedSchema{
+			schema: &resolver.Schema{
 				Name: "User",
-				Fields: []*resolver.ResolvedField{
-					{Name: "id", GoName: "ID", OpenAPIType: "string"},
+				Fields: []*resolver.Field{
+					{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 				},
 			},
 			wantErr: false,
 		},
 		{
 			name: "schema with no fields",
-			schema: &resolver.ResolvedSchema{
+			schema: &resolver.Schema{
 				Name:   "Empty",
-				Fields: []*resolver.ResolvedField{},
+				Fields: []*resolver.Field{},
 			},
 			wantErr: true,
 			errMsg:  "no fields",
 		},
 		{
 			name: "duplicate field names",
-			schema: &resolver.ResolvedSchema{
+			schema: &resolver.Schema{
 				Name: "User",
-				Fields: []*resolver.ResolvedField{
-					{Name: "id", GoName: "ID", OpenAPIType: "string"},
-					{Name: "id", GoName: "Id", OpenAPIType: "string"},
+				Fields: []*resolver.Field{
+					{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+					{Name: "id", GoName: "Id", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 				},
 			},
 			wantErr: true,
@@ -243,16 +255,16 @@ func TestValidator_ValidateSchema(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
+			pkg := &resolver.Package{
+				API: &resolver.API{
 					Title:   "Test",
 					Version: "1.0.0",
 				},
-				Schemas: map[string]*resolver.ResolvedSchema{
+				Schemas: map[string]*resolver.Schema{
 					tt.schema.Name: tt.schema,
 				},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints:  []*resolver.ResolvedEndpoint{},
+				Parameters: map[string]*resolver.ParameterStruct{},
+				Endpoints:  []*resolver.Endpoint{},
 			}
 
 			v := NewValidator()
@@ -281,176 +293,172 @@ func TestValidator_ValidateField(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		field   *resolver.ResolvedField
+		field   *resolver.Field
 		wantErr bool
 		errMsg  string
 	}{
 		{
 			name: "valid field",
-			field: &resolver.ResolvedField{
-				Name:        "age",
-				GoName:      "Age",
-				OpenAPIType: "integer",
+			field: &resolver.Field{
+				Name:   "age",
+				GoName: "Age",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "integer"},
 			},
 			wantErr: false,
 		},
 		{
 			name: "enum on integer",
-			field: &resolver.ResolvedField{
-				Name:        "age",
-				GoName:      "Age",
-				OpenAPIType: "integer",
-				Enum:        []string{"1", "2", "3"},
+			field: &resolver.Field{
+				Name:   "age",
+				GoName: "Age",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "integer"},
+				Enum:   []string{"1", "2", "3"},
 			},
 			wantErr: false,
 		},
 		{
 			name: "enum on array of strings",
-			field: &resolver.ResolvedField{
-				Name:        "tags",
-				GoName:      "Tags",
-				OpenAPIType: "array",
-				IsArray:     true,
-				ItemsType:   "string",
-				Enum:        []string{"red", "green", "blue"},
+			field: &resolver.Field{
+				Name:   "tags",
+				GoName: "Tags",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+
+				Enum: []string{"red", "green", "blue"},
 			},
 			wantErr: false,
 		},
 		{
 			name: "enum on array of integers",
-			field: &resolver.ResolvedField{
-				Name:        "levels",
-				GoName:      "Levels",
-				OpenAPIType: "array",
-				IsArray:     true,
-				ItemsType:   "integer",
-				Enum:        []string{"1", "2", "3"},
+			field: &resolver.Field{
+				Name:   "levels",
+				GoName: "Levels",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+
+				Enum: []string{"1", "2", "3"},
 			},
 			wantErr: false,
 		},
 		{
 			name: "enum on boolean",
-			field: &resolver.ResolvedField{
-				Name:        "active",
-				GoName:      "Active",
-				OpenAPIType: "boolean",
-				Enum:        []string{"true", "false"},
+			field: &resolver.Field{
+				Name:   "active",
+				GoName: "Active",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "boolean"},
+				Enum:   []string{"true", "false"},
 			},
 			wantErr: true,
 			errMsg:  "enum only supported for string, integer, or array types",
 		},
 		{
 			name: "enum on array of objects",
-			field: &resolver.ResolvedField{
-				Name:        "items",
-				GoName:      "Items",
-				OpenAPIType: "array",
-				IsArray:     true,
-				ItemsType:   "object",
-				Enum:        []string{"a", "b"},
+			field: &resolver.Field{
+				Name:   "items",
+				GoName: "Items",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeObject}},
+				Enum:   []string{"a", "b"},
 			},
 			wantErr: true,
 			errMsg:  "enum for arrays only supported with string or integer items",
 		},
 		{
 			name: "min > max",
-			field: &resolver.ResolvedField{
-				Name:        "value",
-				GoName:      "Value",
-				OpenAPIType: "number",
-				Minimum:     &maxVal,
-				Maximum:     &minVal,
+			field: &resolver.Field{
+				Name:    "value",
+				GoName:  "Value",
+				Type:    &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "number"},
+				Minimum: &maxVal,
+				Maximum: &minVal,
 			},
 			wantErr: true,
 			errMsg:  "minimum cannot be greater than maximum",
 		},
 		{
 			name: "minLength > maxLength",
-			field: &resolver.ResolvedField{
-				Name:        "text",
-				GoName:      "Text",
-				OpenAPIType: "string",
-				MinLength:   &maxLen,
-				MaxLength:   &minLen,
+			field: &resolver.Field{
+				Name:      "text",
+				GoName:    "Text",
+				Type:      &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+				MinLength: &maxLen,
+				MaxLength: &minLen,
 			},
 			wantErr: true,
 			errMsg:  "minLength cannot be greater than maxLength",
 		},
 		{
 			name: "length constraints on non-string",
-			field: &resolver.ResolvedField{
-				Name:        "count",
-				GoName:      "Count",
-				OpenAPIType: "integer",
-				MinLength:   &minLen,
+			field: &resolver.Field{
+				Name:      "count",
+				GoName:    "Count",
+				Type:      &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "integer"},
+				MinLength: &minLen,
 			},
 			wantErr: true,
 			errMsg:  "only valid for string",
 		},
 		{
 			name: "pattern on non-string",
-			field: &resolver.ResolvedField{
-				Name:        "count",
-				GoName:      "Count",
-				OpenAPIType: "integer",
-				Pattern:     "^[0-9]+$",
+			field: &resolver.Field{
+				Name:    "count",
+				GoName:  "Count",
+				Type:    &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "integer"},
+				Pattern: "^[0-9]+$",
 			},
 			wantErr: true,
 			errMsg:  "only valid for string",
 		},
 		{
 			name: "invalid pattern regex",
-			field: &resolver.ResolvedField{
-				Name:        "text",
-				GoName:      "Text",
-				OpenAPIType: "string",
-				Pattern:     "[invalid",
+			field: &resolver.Field{
+				Name:    "text",
+				GoName:  "Text",
+				Type:    &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+				Pattern: "[invalid",
 			},
 			wantErr: true,
 			errMsg:  "invalid pattern",
 		},
 		{
 			name: "minItems > maxItems",
-			field: &resolver.ResolvedField{
-				Name:        "tags",
-				GoName:      "Tags",
-				OpenAPIType: "array",
-				IsArray:     true,
-				MinItems:    &maxLen,
-				MaxItems:    &minLen,
+			field: &resolver.Field{
+				Name:   "tags",
+				GoName: "Tags",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+
+				MinItems: &maxLen,
+				MaxItems: &minLen,
 			},
 			wantErr: true,
 			errMsg:  "minItems cannot be greater than maxItems",
 		},
 		{
 			name: "items constraints on non-array",
-			field: &resolver.ResolvedField{
-				Name:        "name",
-				GoName:      "Name",
-				OpenAPIType: "string",
-				MinItems:    &minLen,
+			field: &resolver.Field{
+				Name:     "name",
+				GoName:   "Name",
+				Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+				MinItems: &minLen,
 			},
 			wantErr: true,
 			errMsg:  "only valid for array",
 		},
 		{
 			name: "valid array with minItems and maxItems",
-			field: &resolver.ResolvedField{
-				Name:        "tags",
-				GoName:      "Tags",
-				OpenAPIType: "array",
-				IsArray:     true,
-				MinItems:    &minLen,
-				MaxItems:    &maxLen,
+			field: &resolver.Field{
+				Name:   "tags",
+				GoName: "Tags",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+
+				MinItems: &minLen,
+				MaxItems: &maxLen,
 			},
 			wantErr: false,
 		},
 		{
 			name: "uniqueItems on non-array",
-			field: &resolver.ResolvedField{
+			field: &resolver.Field{
 				Name:        "name",
 				GoName:      "Name",
-				OpenAPIType: "string",
+				Type:        &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
 				UniqueItems: true,
 			},
 			wantErr: true,
@@ -458,44 +466,44 @@ func TestValidator_ValidateField(t *testing.T) {
 		},
 		{
 			name: "valid array with uniqueItems",
-			field: &resolver.ResolvedField{
-				Name:        "tags",
-				GoName:      "Tags",
-				OpenAPIType: "array",
-				IsArray:     true,
+			field: &resolver.Field{
+				Name:   "tags",
+				GoName: "Tags",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+
 				UniqueItems: true,
 			},
 			wantErr: false,
 		},
 		{
 			name: "readOnly and writeOnly both true",
-			field: &resolver.ResolvedField{
-				Name:        "field",
-				GoName:      "Field",
-				OpenAPIType: "string",
-				ReadOnly:    true,
-				WriteOnly:   true,
+			field: &resolver.Field{
+				Name:      "field",
+				GoName:    "Field",
+				Type:      &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+				ReadOnly:  true,
+				WriteOnly: true,
 			},
 			wantErr: true,
 			errMsg:  "readOnly and writeOnly cannot both be true",
 		},
 		{
 			name: "readOnly only",
-			field: &resolver.ResolvedField{
-				Name:        "id",
-				GoName:      "ID",
-				OpenAPIType: "string",
-				ReadOnly:    true,
+			field: &resolver.Field{
+				Name:     "id",
+				GoName:   "ID",
+				Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+				ReadOnly: true,
 			},
 			wantErr: false,
 		},
 		{
 			name: "writeOnly only",
-			field: &resolver.ResolvedField{
-				Name:        "password",
-				GoName:      "Password",
-				OpenAPIType: "string",
-				WriteOnly:   true,
+			field: &resolver.Field{
+				Name:      "password",
+				GoName:    "Password",
+				Type:      &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+				WriteOnly: true,
 			},
 			wantErr: false,
 		},
@@ -503,19 +511,19 @@ func TestValidator_ValidateField(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
+			pkg := &resolver.Package{
+				API: &resolver.API{
 					Title:   "Test",
 					Version: "1.0.0",
 				},
-				Schemas: map[string]*resolver.ResolvedSchema{
+				Schemas: map[string]*resolver.Schema{
 					"Test": {
 						Name:   "Test",
-						Fields: []*resolver.ResolvedField{tt.field},
+						Fields: []*resolver.Field{tt.field},
 					},
 				},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints:  []*resolver.ResolvedEndpoint{},
+				Parameters: map[string]*resolver.ParameterStruct{},
+				Endpoints:  []*resolver.Endpoint{},
 			}
 
 			v := NewValidator()
@@ -540,18 +548,18 @@ func TestValidator_ValidateParameterField(t *testing.T) {
 	tests := []struct {
 		name      string
 		paramType string
-		field     *resolver.ResolvedField
+		field     *resolver.Field
 		wantErr   bool
 		errMsg    string
 	}{
 		{
 			name:      "path param cannot be nullable",
 			paramType: "path",
-			field: &resolver.ResolvedField{
-				Name:        "id",
-				GoName:      "ID",
-				OpenAPIType: "string",
-				Nullable:    true,
+			field: &resolver.Field{
+				Name:     "id",
+				GoName:   "ID",
+				Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+				Nullable: true,
 			},
 			wantErr: true,
 			errMsg:  "cannot be nullable",
@@ -559,11 +567,10 @@ func TestValidator_ValidateParameterField(t *testing.T) {
 		{
 			name:      "path param cannot be array",
 			paramType: "path",
-			field: &resolver.ResolvedField{
-				Name:        "id",
-				GoName:      "ID",
-				OpenAPIType: "array",
-				IsArray:     true,
+			field: &resolver.Field{
+				Name:   "id",
+				GoName: "ID",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 			},
 			wantErr: true,
 			errMsg:  "cannot be arrays",
@@ -571,11 +578,10 @@ func TestValidator_ValidateParameterField(t *testing.T) {
 		{
 			name:      "header param cannot be array",
 			paramType: "header",
-			field: &resolver.ResolvedField{
-				Name:        "token",
-				GoName:      "Token",
-				OpenAPIType: "array",
-				IsArray:     true,
+			field: &resolver.Field{
+				Name:   "token",
+				GoName: "Token",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 			},
 			wantErr: true,
 			errMsg:  "cannot be arrays",
@@ -583,11 +589,10 @@ func TestValidator_ValidateParameterField(t *testing.T) {
 		{
 			name:      "cookie param cannot be array",
 			paramType: "cookie",
-			field: &resolver.ResolvedField{
-				Name:        "session",
-				GoName:      "Session",
-				OpenAPIType: "array",
-				IsArray:     true,
+			field: &resolver.Field{
+				Name:   "session",
+				GoName: "Session",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 			},
 			wantErr: true,
 			errMsg:  "cannot be arrays",
@@ -595,11 +600,10 @@ func TestValidator_ValidateParameterField(t *testing.T) {
 		{
 			name:      "query param can be array",
 			paramType: "query",
-			field: &resolver.ResolvedField{
-				Name:        "tags",
-				GoName:      "Tags",
-				OpenAPIType: "array",
-				IsArray:     true,
+			field: &resolver.Field{
+				Name:   "tags",
+				GoName: "Tags",
+				Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 			},
 			wantErr: false,
 		},
@@ -607,20 +611,20 @@ func TestValidator_ValidateParameterField(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
+			pkg := &resolver.Package{
+				API: &resolver.API{
 					Title:   "Test",
 					Version: "1.0.0",
 				},
-				Schemas: map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{
+				Schemas: map[string]*resolver.Schema{},
+				Parameters: map[string]*resolver.ParameterStruct{
 					"TestParam": {
 						Name:   "TestParam",
 						Type:   tt.paramType,
-						Fields: []*resolver.ResolvedField{tt.field},
+						Fields: []*resolver.Field{tt.field},
 					},
 				},
-				Endpoints: []*resolver.ResolvedEndpoint{},
+				Endpoints: []*resolver.Endpoint{},
 			}
 
 			v := NewValidator()
@@ -644,28 +648,41 @@ func TestValidator_ValidateParameterField(t *testing.T) {
 func TestValidator_ValidateEndpoint(t *testing.T) {
 	tests := []struct {
 		name     string
-		endpoint *resolver.ResolvedEndpoint
+		endpoint *resolver.Endpoint
 		wantErr  bool
 		errMsg   string
 	}{
 		{
 			name: "valid endpoint",
-			endpoint: &resolver.ResolvedEndpoint{
+			endpoint: &resolver.Endpoint{
 				Method: "GET",
 				Path:   "/users",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			// The eighth Path Item operation, and the one the generator could
+			// emit but the validator used to reject.
+			name: "TRACE is a valid method",
+			endpoint: &resolver.Endpoint{
+				Method: "TRACE",
+				Path:   "/users",
+				Responses: []*resolver.Response{
+					{StatusCode: "200"},
 				},
 			},
 			wantErr: false,
 		},
 		{
 			name: "invalid method",
-			endpoint: &resolver.ResolvedEndpoint{
+			endpoint: &resolver.Endpoint{
 				Method: "INVALID",
 				Path:   "/users",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200"},
 				},
 			},
 			wantErr: true,
@@ -673,11 +690,11 @@ func TestValidator_ValidateEndpoint(t *testing.T) {
 		},
 		{
 			name: "missing path",
-			endpoint: &resolver.ResolvedEndpoint{
+			endpoint: &resolver.Endpoint{
 				Method: "GET",
 				Path:   "",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200"},
 				},
 			},
 			wantErr: true,
@@ -685,11 +702,11 @@ func TestValidator_ValidateEndpoint(t *testing.T) {
 		},
 		{
 			name: "path not starting with /",
-			endpoint: &resolver.ResolvedEndpoint{
+			endpoint: &resolver.Endpoint{
 				Method: "GET",
 				Path:   "users",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200"},
 				},
 			},
 			wantErr: true,
@@ -697,10 +714,10 @@ func TestValidator_ValidateEndpoint(t *testing.T) {
 		},
 		{
 			name: "no responses",
-			endpoint: &resolver.ResolvedEndpoint{
+			endpoint: &resolver.Endpoint{
 				Method:    "GET",
 				Path:      "/users",
-				Responses: map[string]*resolver.ResolvedResponse{},
+				Responses: []*resolver.Response{},
 			},
 			wantErr: true,
 			errMsg:  "at least one response",
@@ -709,14 +726,14 @@ func TestValidator_ValidateEndpoint(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
+			pkg := &resolver.Package{
+				API: &resolver.API{
 					Title:   "Test",
 					Version: "1.0.0",
 				},
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints:  []*resolver.ResolvedEndpoint{tt.endpoint},
+				Schemas:    map[string]*resolver.Schema{},
+				Parameters: map[string]*resolver.ParameterStruct{},
+				Endpoints:  []*resolver.Endpoint{tt.endpoint},
 			}
 
 			v := NewValidator()
@@ -781,60 +798,60 @@ func TestValidator_ValidatePathParameters(t *testing.T) {
 	tests := []struct {
 		name    string
 		path    string
-		params  []*resolver.ResolvedParameter
+		params  []*resolver.Parameter
 		wantErr bool
 		errMsg  string
 	}{
 		{
 			name: "matching path variable and parameter",
 			path: "/users/{id}",
-			params: []*resolver.ResolvedParameter{
-				{
-					Fields: []*resolver.ResolvedField{
-						{Name: "id", GoName: "ID"},
-					},
-				},
+			params: []*resolver.Parameter{
+				{In: "path", Field: &resolver.Field{Name: "id", GoName: "ID"}},
 			},
 			wantErr: false,
 		},
 		{
 			name:    "path variable without parameter",
 			path:    "/users/{id}",
-			params:  []*resolver.ResolvedParameter{},
+			params:  []*resolver.Parameter{},
 			wantErr: true,
 			errMsg:  "has no corresponding @path parameter",
 		},
 		{
 			name: "parameter not used in path",
 			path: "/users",
-			params: []*resolver.ResolvedParameter{
-				{
-					Fields: []*resolver.ResolvedField{
-						{Name: "id", GoName: "ID"},
-					},
-				},
+			params: []*resolver.Parameter{
+				{In: "path", Field: &resolver.Field{Name: "id", GoName: "ID"}},
 			},
 			wantErr: true,
 			errMsg:  "not used in path",
+		},
+		{
+			name: "query parameter is not a path parameter",
+			path: "/users",
+			params: []*resolver.Parameter{
+				{In: "query", Field: &resolver.Field{Name: "id", GoName: "ID"}},
+			},
+			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
+			pkg := &resolver.Package{
+				API: &resolver.API{
 					Title:   "Test",
 					Version: "1.0.0",
 				},
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints: []*resolver.ResolvedEndpoint{
+				Schemas:    map[string]*resolver.Schema{},
+				Parameters: map[string]*resolver.ParameterStruct{},
+				Endpoints: []*resolver.Endpoint{
 					{
 						Method:     "GET",
 						Path:       tt.path,
-						PathParams: tt.params,
-						Responses: map[string]*resolver.ResolvedResponse{
-							"200": {StatusCode: "200"},
+						Parameters: tt.params,
+						Responses: []*resolver.Response{
+							{StatusCode: "200"},
 						},
 					},
 				},
@@ -861,22 +878,22 @@ func TestValidator_ValidatePathParameters(t *testing.T) {
 func TestValidator_ValidateRequestBody(t *testing.T) {
 	tests := []struct {
 		name    string
-		request *resolver.ResolvedRequestBody
-		schemas map[string]*resolver.ResolvedSchema
+		request *resolver.RequestBody
+		schemas map[string]*resolver.Schema
 		wantErr bool
 		errMsg  string
 	}{
 		{
 			name: "valid request",
-			request: &resolver.ResolvedRequestBody{
+			request: &resolver.RequestBody{
 				ContentType: "application/json",
-				Body:        &resolver.ResolvedBody{Schema: "User"},
+				Body:        &resolver.Body{Schema: "User"},
 			},
-			schemas: map[string]*resolver.ResolvedSchema{
+			schemas: map[string]*resolver.Schema{
 				"User": {
 					Name: "User",
-					Fields: []*resolver.ResolvedField{
-						{Name: "id", GoName: "ID", OpenAPIType: "string"},
+					Fields: []*resolver.Field{
+						{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 					},
 				},
 			},
@@ -884,10 +901,10 @@ func TestValidator_ValidateRequestBody(t *testing.T) {
 		},
 		{
 			name: "missing content type",
-			request: &resolver.ResolvedRequestBody{
-				Body: &resolver.ResolvedBody{Schema: "User"},
+			request: &resolver.RequestBody{
+				Body: &resolver.Body{Schema: "User"},
 			},
-			schemas: map[string]*resolver.ResolvedSchema{
+			schemas: map[string]*resolver.Schema{
 				"User": {Name: "User"},
 			},
 			wantErr: true,
@@ -895,11 +912,11 @@ func TestValidator_ValidateRequestBody(t *testing.T) {
 		},
 		{
 			name: "unknown schema",
-			request: &resolver.ResolvedRequestBody{
+			request: &resolver.RequestBody{
 				ContentType: "application/json",
-				Body:        &resolver.ResolvedBody{Schema: "Unknown"},
+				Body:        &resolver.Body{Schema: "Unknown", Type: &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "Unknown"}},
 			},
-			schemas: map[string]*resolver.ResolvedSchema{},
+			schemas: map[string]*resolver.Schema{},
 			wantErr: true,
 			errMsg:  "unknown schema",
 		},
@@ -907,20 +924,20 @@ func TestValidator_ValidateRequestBody(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
+			pkg := &resolver.Package{
+				API: &resolver.API{
 					Title:   "Test",
 					Version: "1.0.0",
 				},
 				Schemas:    tt.schemas,
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints: []*resolver.ResolvedEndpoint{
+				Parameters: map[string]*resolver.ParameterStruct{},
+				Endpoints: []*resolver.Endpoint{
 					{
 						Method:  "POST",
 						Path:    "/users",
 						Request: tt.request,
-						Responses: map[string]*resolver.ResolvedResponse{
-							"200": {StatusCode: "200"},
+						Responses: []*resolver.Response{
+							{StatusCode: "200"},
 						},
 					},
 				},
@@ -967,19 +984,19 @@ func TestValidator_ValidateResponseStatusCode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pkg := &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
+			pkg := &resolver.Package{
+				API: &resolver.API{
 					Title:   "Test",
 					Version: "1.0.0",
 				},
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
-				Endpoints: []*resolver.ResolvedEndpoint{
+				Schemas:    map[string]*resolver.Schema{},
+				Parameters: map[string]*resolver.ParameterStruct{},
+				Endpoints: []*resolver.Endpoint{
 					{
 						Method: "GET",
 						Path:   "/test",
-						Responses: map[string]*resolver.ResolvedResponse{
-							tt.statusCode: {StatusCode: tt.statusCode},
+						Responses: []*resolver.Response{
+							{StatusCode: tt.statusCode},
 						},
 					},
 				},
@@ -998,35 +1015,82 @@ func TestValidator_ValidateResponseStatusCode(t *testing.T) {
 	}
 }
 
-func TestMultiError_Error(t *testing.T) {
+func TestValidator_ValidateParameterRefs(t *testing.T) {
 	tests := []struct {
-		name   string
-		errors []error
-		want   string
+		name     string
+		endpoint *resolver.Endpoint
+		want     string
 	}{
 		{
-			name: "single error",
-			errors: []error{
-				&ValidationError{Message: "test error"},
+			name: "known reference",
+			endpoint: &resolver.Endpoint{
+				Method:    "GET",
+				Path:      "/test",
+				ParamRefs: []resolver.ParamRef{{Name: "ListQuery", In: "query"}},
+				Responses: []*resolver.Response{{StatusCode: "200"}},
 			},
-			want: "test error",
 		},
 		{
-			name: "multiple errors",
-			errors: []error{
-				&ValidationError{Message: "error 1"},
-				&ValidationError{Message: "error 2"},
+			name: "unknown endpoint reference",
+			endpoint: &resolver.Endpoint{
+				Method:    "GET",
+				Path:      "/test",
+				ParamRefs: []resolver.ParamRef{{Name: "Missing", In: "query"}},
+				Responses: []*resolver.Response{{StatusCode: "200"}},
 			},
-			want: "2 validation errors",
+			want: "@query references unknown parameter struct: Missing",
+		},
+		{
+			name: "unknown named response header reference",
+			endpoint: &resolver.Endpoint{
+				Method: "GET",
+				Path:   "/test",
+				Responses: []*resolver.Response{
+					{StatusCode: "200", HeaderRefs: []string{"Missing"}},
+				},
+			},
+			want: "@header references unknown parameter struct: Missing",
+		},
+		{
+			name: "unknown inline response header reference",
+			endpoint: &resolver.Endpoint{
+				Method: "GET",
+				Path:   "/test",
+				Responses: []*resolver.Response{
+					{
+						StatusCode: "200",
+						HeaderRefs: []string{"Missing"},
+						Inline:     &resolver.InlineBody{HeaderRefs: []string{"Missing"}},
+					},
+				},
+			},
+			want: "@header references unknown parameter struct: Missing",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			me := &MultiError{Errors: tt.errors}
-			got := me.Error()
-			if !strings.Contains(got, tt.want) {
-				t.Errorf("MultiError.Error() = %q, want to contain %q", got, tt.want)
+			pkg := &resolver.Package{
+				API:     &resolver.API{Title: "Test", Version: "1.0.0"},
+				Schemas: map[string]*resolver.Schema{},
+				Parameters: map[string]*resolver.ParameterStruct{
+					"ListQuery": {Name: "ListQuery", Type: "query", Fields: []*resolver.Field{
+						{Name: "limit", GoName: "Limit", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "integer"}},
+					}},
+				},
+				Endpoints: []*resolver.Endpoint{tt.endpoint},
+			}
+
+			err := NewValidator().Validate(pkg)
+
+			if tt.want == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("expected %q, got: %v", tt.want, err)
 			}
 		})
 	}
@@ -1088,24 +1152,24 @@ func TestValidator_ValidateEndpointTags(t *testing.T) {
 			v := NewValidator()
 			v.validateEndpointTags("@endpoint[GET /test]", tt.endpointTags, tt.apiTags)
 
-			if tt.wantError && len(v.errors) == 0 {
+			if tt.wantError && len(v.errs.Errors) == 0 {
 				t.Errorf("expected error but got none")
 			}
 
-			if !tt.wantError && len(v.errors) > 0 {
-				t.Errorf("expected no error but got: %v", v.errors)
+			if !tt.wantError && len(v.errs.Errors) > 0 {
+				t.Errorf("expected no error but got: %v", v.errs.Errors)
 			}
 
-			if tt.wantError && len(v.errors) > 0 {
+			if tt.wantError && len(v.errs.Errors) > 0 {
 				found := false
-				for _, err := range v.errors {
+				for _, err := range v.errs.Errors {
 					if strings.Contains(err.Error(), tt.errorMessage) {
 						found = true
 						break
 					}
 				}
 				if !found {
-					t.Errorf("expected error containing %q but got: %v", tt.errorMessage, v.errors)
+					t.Errorf("expected error containing %q but got: %v", tt.errorMessage, v.errs.Errors)
 				}
 			}
 		})
@@ -1115,78 +1179,78 @@ func TestValidator_ValidateEndpointTags(t *testing.T) {
 func TestValidator_ValidateEndpointWithTags(t *testing.T) {
 	tests := []struct {
 		name      string
-		endpoint  *resolver.ResolvedEndpoint
-		pkg       *resolver.ResolvedPackage
+		endpoint  *resolver.Endpoint
+		pkg       *resolver.Package
 		wantError bool
 		errorMsg  string
 	}{
 		{
 			name: "endpoint with valid tags",
-			endpoint: &resolver.ResolvedEndpoint{
+			endpoint: &resolver.Endpoint{
 				Method: "GET",
 				Path:   "/pets",
 				Tags:   []string{"pets"},
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200", Description: "Success"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200", Description: "Success"},
 				},
 			},
-			pkg: &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
+			pkg: &resolver.Package{
+				API: &resolver.API{
 					Title:   "Test API",
 					Version: "1.0.0",
 					Tags: []*resolver.Tag{
 						{Name: "pets", Description: "Pet operations"},
 					},
 				},
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
+				Schemas:    map[string]*resolver.Schema{},
+				Parameters: map[string]*resolver.ParameterStruct{},
 			},
 			wantError: false,
 		},
 		{
 			name: "endpoint with invalid tag",
-			endpoint: &resolver.ResolvedEndpoint{
+			endpoint: &resolver.Endpoint{
 				Method: "GET",
 				Path:   "/users",
 				Tags:   []string{"users"},
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200", Description: "Success"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200", Description: "Success"},
 				},
 			},
-			pkg: &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
+			pkg: &resolver.Package{
+				API: &resolver.API{
 					Title:   "Test API",
 					Version: "1.0.0",
 					Tags: []*resolver.Tag{
 						{Name: "pets", Description: "Pet operations"},
 					},
 				},
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
+				Schemas:    map[string]*resolver.Schema{},
+				Parameters: map[string]*resolver.ParameterStruct{},
 			},
 			wantError: true,
 			errorMsg:  "endpoint uses undefined tag: users",
 		},
 		{
 			name: "endpoint without tags when API has tags",
-			endpoint: &resolver.ResolvedEndpoint{
+			endpoint: &resolver.Endpoint{
 				Method: "GET",
 				Path:   "/health",
 				Tags:   []string{},
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200", Description: "Success"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200", Description: "Success"},
 				},
 			},
-			pkg: &resolver.ResolvedPackage{
-				API: &resolver.ResolvedAPI{
+			pkg: &resolver.Package{
+				API: &resolver.API{
 					Title:   "Test API",
 					Version: "1.0.0",
 					Tags: []*resolver.Tag{
 						{Name: "pets", Description: "Pet operations"},
 					},
 				},
-				Schemas:    map[string]*resolver.ResolvedSchema{},
-				Parameters: map[string]*resolver.ResolvedParameter{},
+				Schemas:    map[string]*resolver.Schema{},
+				Parameters: map[string]*resolver.ParameterStruct{},
 			},
 			wantError: false,
 		},
@@ -1197,24 +1261,24 @@ func TestValidator_ValidateEndpointWithTags(t *testing.T) {
 			v := NewValidator()
 			v.validateEndpoint(tt.endpoint, tt.pkg)
 
-			if tt.wantError && len(v.errors) == 0 {
+			if tt.wantError && len(v.errs.Errors) == 0 {
 				t.Errorf("expected error but got none")
 			}
 
-			if !tt.wantError && len(v.errors) > 0 {
-				t.Errorf("expected no error but got: %v", v.errors)
+			if !tt.wantError && len(v.errs.Errors) > 0 {
+				t.Errorf("expected no error but got: %v", v.errs.Errors)
 			}
 
-			if tt.wantError && tt.errorMsg != "" && len(v.errors) > 0 {
+			if tt.wantError && tt.errorMsg != "" && len(v.errs.Errors) > 0 {
 				found := false
-				for _, err := range v.errors {
+				for _, err := range v.errs.Errors {
 					if strings.Contains(err.Error(), tt.errorMsg) {
 						found = true
 						break
 					}
 				}
 				if !found {
-					t.Errorf("expected error containing %q but got: %v", tt.errorMsg, v.errors)
+					t.Errorf("expected error containing %q but got: %v", tt.errorMsg, v.errs.Errors)
 				}
 			}
 		})
@@ -1222,24 +1286,24 @@ func TestValidator_ValidateEndpointWithTags(t *testing.T) {
 }
 
 func TestValidator_ValidateBindTarget(t *testing.T) {
-	wrapperSchema := &resolver.ResolvedSchema{
+	wrapperSchema := &resolver.Schema{
 		Name:       "DataResponse",
 		GoTypeName: "DataResponse",
-		Fields: []*resolver.ResolvedField{
-			{Name: "data", GoName: "Data", OpenAPIType: "object"},
-			{Name: "message", GoName: "Message", OpenAPIType: "string"},
+		Fields: []*resolver.Field{
+			{Name: "data", GoName: "Data", Type: &resolver.TypeRef{Shape: resolver.ShapeObject}},
+			{Name: "message", GoName: "Message", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 		},
 	}
 
 	tests := []struct {
 		name    string
-		bind    *resolver.ResolvedBindTarget
+		bind    *resolver.BindTarget
 		wantErr bool
 		errMsg  string
 	}{
 		{
 			name: "valid bind target",
-			bind: &resolver.ResolvedBindTarget{
+			bind: &resolver.BindTarget{
 				Wrapper:       "DataResponse",
 				Field:         "Data",
 				WrapperSchema: wrapperSchema,
@@ -1248,7 +1312,7 @@ func TestValidator_ValidateBindTarget(t *testing.T) {
 		},
 		{
 			name: "unknown wrapper schema",
-			bind: &resolver.ResolvedBindTarget{
+			bind: &resolver.BindTarget{
 				Wrapper:       "NonExistent",
 				Field:         "Data",
 				WrapperSchema: nil,
@@ -1258,7 +1322,7 @@ func TestValidator_ValidateBindTarget(t *testing.T) {
 		},
 		{
 			name: "unknown field in wrapper",
-			bind: &resolver.ResolvedBindTarget{
+			bind: &resolver.BindTarget{
 				Wrapper:       "DataResponse",
 				Field:         "Missing",
 				WrapperSchema: wrapperSchema,
@@ -1271,22 +1335,22 @@ func TestValidator_ValidateBindTarget(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			v := NewValidator()
-			schemas := map[string]*resolver.ResolvedSchema{
+			schemas := map[string]*resolver.Schema{
 				"DataResponse": wrapperSchema,
 			}
 			v.validateBindTarget("@endpoint[GET /users].@request", tt.bind, schemas)
 
-			if tt.wantErr && len(v.errors) == 0 {
+			if tt.wantErr && len(v.errs.Errors) == 0 {
 				t.Error("expected error but got none")
 			}
 
-			if !tt.wantErr && len(v.errors) > 0 {
-				t.Errorf("expected no error but got: %v", v.errors)
+			if !tt.wantErr && len(v.errs.Errors) > 0 {
+				t.Errorf("expected no error but got: %v", v.errs.Errors)
 			}
 
-			if tt.wantErr && len(v.errors) > 0 {
-				if !strings.Contains(v.errors[0].Error(), tt.errMsg) {
-					t.Errorf("expected error containing %q, got: %v", tt.errMsg, v.errors[0])
+			if tt.wantErr && len(v.errs.Errors) > 0 {
+				if !strings.Contains(v.errs.Errors[0].Error(), tt.errMsg) {
+					t.Errorf("expected error containing %q, got: %v", tt.errMsg, v.errs.Errors[0])
 				}
 			}
 		})
@@ -1294,42 +1358,42 @@ func TestValidator_ValidateBindTarget(t *testing.T) {
 }
 
 func TestValidator_ValidateBindTarget_RequestBody(t *testing.T) {
-	wrapperSchema := &resolver.ResolvedSchema{
+	wrapperSchema := &resolver.Schema{
 		Name:       "DataResponse",
 		GoTypeName: "DataResponse",
-		Fields: []*resolver.ResolvedField{
-			{Name: "data", GoName: "Data", OpenAPIType: "object"},
+		Fields: []*resolver.Field{
+			{Name: "data", GoName: "Data", Type: &resolver.TypeRef{Shape: resolver.ShapeObject}},
 		},
 	}
 
-	pkg := &resolver.ResolvedPackage{
-		API: &resolver.ResolvedAPI{
+	pkg := &resolver.Package{
+		API: &resolver.API{
 			Title:   "Test",
 			Version: "1.0.0",
 		},
-		Schemas: map[string]*resolver.ResolvedSchema{
-			"User":         {Name: "User", Fields: []*resolver.ResolvedField{{Name: "id", GoName: "ID", OpenAPIType: "string"}}},
+		Schemas: map[string]*resolver.Schema{
+			"User":         {Name: "User", Fields: []*resolver.Field{{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}}}},
 			"DataResponse": wrapperSchema,
 		},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
+		Parameters: map[string]*resolver.ParameterStruct{},
+		Endpoints: []*resolver.Endpoint{
 			{
 				Method: "POST",
 				Path:   "/users",
-				Request: &resolver.ResolvedRequestBody{
+				Request: &resolver.RequestBody{
 					ContentType: "application/json",
-					Body: &resolver.ResolvedBody{
-						Schema:      "User",
-						ElementType: "User",
-						Bind: &resolver.ResolvedBindTarget{
+					Body: &resolver.Body{
+						Schema: "User",
+						Type:   &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"},
+						Bind: &resolver.BindTarget{
 							Wrapper:       "NonExistent",
 							Field:         "Data",
 							WrapperSchema: nil,
 						},
 					},
 				},
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200"},
 				},
 			},
 		},
@@ -1346,42 +1410,40 @@ func TestValidator_ValidateBindTarget_RequestBody(t *testing.T) {
 }
 
 func TestValidator_ValidateBindTarget_Response(t *testing.T) {
-	wrapperSchema := &resolver.ResolvedSchema{
+	wrapperSchema := &resolver.Schema{
 		Name:       "DataResponse",
 		GoTypeName: "DataResponse",
-		Fields: []*resolver.ResolvedField{
-			{Name: "data", GoName: "Data", OpenAPIType: "object"},
+		Fields: []*resolver.Field{
+			{Name: "data", GoName: "Data", Type: &resolver.TypeRef{Shape: resolver.ShapeObject}},
 		},
 	}
 
-	pkg := &resolver.ResolvedPackage{
-		API: &resolver.ResolvedAPI{
+	pkg := &resolver.Package{
+		API: &resolver.API{
 			Title:   "Test",
 			Version: "1.0.0",
 		},
-		Schemas: map[string]*resolver.ResolvedSchema{
-			"User":         {Name: "User", Fields: []*resolver.ResolvedField{{Name: "id", GoName: "ID", OpenAPIType: "string"}}},
+		Schemas: map[string]*resolver.Schema{
+			"User":         {Name: "User", Fields: []*resolver.Field{{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}}}},
 			"DataResponse": wrapperSchema,
 		},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
+		Parameters: map[string]*resolver.ParameterStruct{},
+		Endpoints: []*resolver.Endpoint{
 			{
 				Method: "GET",
 				Path:   "/users",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {
-						StatusCode:  "200",
+				Responses: []*resolver.Response{
+					{StatusCode: "200",
 						ContentType: "application/json",
-						Body: &resolver.ResolvedBody{
-							Schema:      "User",
-							ElementType: "User",
-							Bind: &resolver.ResolvedBindTarget{
+						Body: &resolver.Body{
+							Schema: "User",
+							Type:   &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"},
+							Bind: &resolver.BindTarget{
 								Wrapper:       "DataResponse",
 								Field:         "NonExistent",
 								WrapperSchema: wrapperSchema,
 							},
-						},
-					},
+						}},
 				},
 			},
 		},
@@ -1398,27 +1460,29 @@ func TestValidator_ValidateBindTarget_Response(t *testing.T) {
 }
 
 func TestValidator_ValidateBindTarget_InlineResponse(t *testing.T) {
-	pkg := &resolver.ResolvedPackage{
-		API: &resolver.ResolvedAPI{
+	pkg := &resolver.Package{
+		API: &resolver.API{
 			Title:   "Test",
 			Version: "1.0.0",
 		},
-		Schemas:    map[string]*resolver.ResolvedSchema{},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
+		Schemas:    map[string]*resolver.Schema{},
+		Parameters: map[string]*resolver.ParameterStruct{},
+		Endpoints: []*resolver.Endpoint{
 			{
 				Method: "GET",
 				Path:   "/users",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200"},
-				},
-				InlineResponses: map[string]*resolver.ResolvedInlineBody{
-					"201": {
+				Responses: []*resolver.Response{
+					{StatusCode: "200"},
+					{
+						StatusCode:  "201",
 						ContentType: "application/json",
-						Bind: &resolver.ResolvedBindTarget{
-							Wrapper:       "UnknownWrapper",
-							Field:         "Data",
-							WrapperSchema: nil,
+						Inline: &resolver.InlineBody{
+							ContentType: "application/json",
+							Bind: &resolver.BindTarget{
+								Wrapper:       "UnknownWrapper",
+								Field:         "Data",
+								WrapperSchema: nil,
+							},
 						},
 					},
 				},

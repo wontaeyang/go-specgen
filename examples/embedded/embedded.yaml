@@ -1,0 +1,52 @@
+openapi: 3.1.0
+info:
+    title: Embedded Fixture
+    description: Embedded struct and non-struct fields.
+    version: 1.0.0
+paths:
+    /documents:
+        get:
+            summary: Get a document
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Document'
+components:
+    schemas:
+        Document:
+            type: object
+            properties:
+                id:
+                    type: string
+                    description: Identifier
+                created_at:
+                    type: string
+                    format: date-time
+                    description: Creation timestamp
+                meta:
+                    $ref: '#/components/schemas/Meta'
+                Label:
+                    type: string
+                slug:
+                    type: string
+                title:
+                    type: string
+                    description: Document title
+            required:
+                - id
+                - created_at
+                - meta
+                - Label
+                - slug
+                - title
+        Meta:
+            type: object
+            properties:
+                revision:
+                    type: integer
+                    description: Revision counter
+            required:
+                - revision

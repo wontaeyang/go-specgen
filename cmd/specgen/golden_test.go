@@ -2,112 +2,143 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/wontaeyang/go-specgen/pkg/generator"
-	"github.com/wontaeyang/go-specgen/pkg/parser"
-	"github.com/wontaeyang/go-specgen/pkg/resolver"
-	"github.com/wontaeyang/go-specgen/pkg/validator"
 )
 
-var update = flag.Bool("update", false, "update golden files")
+// This is the golden harness: every package under examples/ must generate, and
+// its output must match the files checked in beside it byte for byte. The
+// error harness, for packages that must fail instead, is in errors_test.go.
+//
+// Adding a case means adding a directory. There is no list to keep in sync, and
+// no way to add a package that nothing asserts on.
+//
+// One directory is one case. @api is a package-level annotation, so a directory
+// holds exactly one document — two independent cases cannot share one, and a
+// new case means either extending an existing document or a new directory.
+//
+// Regenerate every expected file with:
+//
+//	go test ./cmd/specgen -update
+//
+// and read the diff. -update rewrites the goldens unconditionally, so it will
+// happily record a regression as the new truth if nobody looks.
 
+var update = flag.Bool("update", false, "update golden and expected-error files")
+
+const (
+	// examplesDir holds every package that must generate. They are documentation
+	// and test corpus at once: some demonstrate a feature, some exist to pin an
+	// edge case, and all of them are compiled and vetted with the module.
+	examplesDir = "../../examples"
+
+	// goldenVersion is the OpenAPI version everything is rendered at. 3.2 is a
+	// valid -openapi value and differs only in the version string; nothing
+	// tests it.
+	goldenVersion = "3.1"
+)
+
+// TestGoldenFiles renders every package under examples/ and compares it against
+// the <name>.yaml checked in beside it.
+//
+// JSON is opt-in per package: if <name>.json exists it is compared too, and if
+// it does not, JSON is not checked for that package. Both formats come from one
+// pipeline pass either way. To add JSON coverage, create the empty file and run
+// with -update; to drop it, delete the file.
 func TestGoldenFiles(t *testing.T) {
-	examples := []struct {
-		name string
-		yaml string
-	}{
-		{"block", "block.yaml"},
-		{"closure", "closure.yaml"},
-		{"customtypes", "customtypes.yaml"},
-		{"enum", "enum.yaml"},
-		{"overrides", "overrides.yaml"},
-		{"generics", "generics.yaml"},
-		{"inline", "inline.yaml"},
-		{"nested", "nested.yaml"},
-		{"parameters", "parameters.yaml"},
-		{"petstore", "petstore.yaml"},
-		{"responses", "responses.yaml"},
-		{"security", "security.yaml"},
-		{"standalone_api", "standalone_api.yaml"},
-		{"tags", "tags.yaml"},
-	}
+	for _, name := range subdirs(t, examplesDir) {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(examplesDir, name)
 
-	for _, ex := range examples {
-		t.Run(ex.name, func(t *testing.T) {
-			dir := filepath.Join("..", "..", "examples", ex.name)
-
-			// Step 1: Parse
-			p := parser.NewParser(dir)
-			parsed, err := p.Parse()
+			spec, err := buildSpec(dir, goldenVersion)
 			if err != nil {
-				t.Fatalf("parse: %v", err)
+				t.Fatalf("build: %v", err)
 			}
 
-			// Step 2: Resolve
-			r, err := resolver.NewResolver(dir, p.Comments())
-			if err != nil {
-				t.Fatalf("resolver: %v", err)
-			}
+			compareGolden(t, filepath.Join(dir, name+".yaml"), spec.YAML)
 
-			resolved, err := r.Resolve(parsed)
-			if err != nil {
-				t.Fatalf("resolve: %v", err)
-			}
-
-			// Step 3: Validate
-			v := validator.NewValidator()
-			if err := v.Validate(resolved); err != nil {
-				t.Fatalf("validate: %v", err)
-			}
-
-			// Step 4: Generate
-			gen := generator.NewGenerator("3.1")
-			spec, err := gen.Generate(resolved)
-			if err != nil {
-				t.Fatalf("generate: %v", err)
-			}
-
-			got, err := gen.Render(spec, generator.FormatYAML)
-			if err != nil {
-				t.Fatalf("render: %v", err)
-			}
-
-			goldenFile := filepath.Join(dir, ex.yaml)
-
-			// Update golden files if -update flag is set
-			if *update {
-				if err := os.WriteFile(goldenFile, got, 0644); err != nil {
-					t.Fatalf("update golden file: %v", err)
-				}
-				return
-			}
-
-			// Compare against golden file
-			want, err := os.ReadFile(goldenFile)
-			if err != nil {
-				t.Fatalf("read golden file: %v", err)
-			}
-
-			if string(got) != string(want) {
-				t.Errorf("output differs from %s", goldenFile)
-				// Show first differing line for easier debugging
-				gotLines := splitLines(string(got))
-				wantLines := splitLines(string(want))
-				for i := 0; i < len(gotLines) && i < len(wantLines); i++ {
-					if gotLines[i] != wantLines[i] {
-						t.Errorf("first diff at line %d:\n  got:  %s\n  want: %s", i+1, gotLines[i], wantLines[i])
-						break
-					}
-				}
-				if len(gotLines) != len(wantLines) {
-					t.Errorf("line count differs: got %d, want %d", len(gotLines), len(wantLines))
-				}
+			if jsonPath := filepath.Join(dir, name+".json"); exists(jsonPath) {
+				compareGolden(t, jsonPath, spec.JSON)
 			}
 		})
 	}
+}
+
+// exists reports whether a path is present, which is how a package opts in to
+// JSON coverage.
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// subdirs returns the names of every directory directly under root, sorted.
+func subdirs(t *testing.T, root string) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read %s: %v", root, err)
+	}
+
+	// os.ReadDir already sorts by filename, so subtest order is deterministic.
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+
+	if len(names) == 0 {
+		t.Fatalf("no packages found under %s", root)
+	}
+
+	return names
+}
+
+// compareGolden compares got against the file at path, or overwrites it when
+// the test binary was run with -update.
+func compareGolden(t *testing.T, path string, got []byte) {
+	t.Helper()
+
+	if *update {
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatalf("create %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, got, 0644); err != nil {
+			t.Fatalf("update %s: %v", path, err)
+		}
+		return
+	}
+
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v (run the test with -update to create it)", path, err)
+	}
+
+	if string(got) == string(want) {
+		return
+	}
+
+	t.Errorf("output differs from %s\n%s", path, firstDiff(string(want), string(got)))
+	t.Errorf("re-run with -update and review the diff if the change is intended")
+}
+
+// firstDiff describes the first line where want and got disagree. The full
+// change is meant to be reviewed with -update plus `git diff`; this is just
+// enough to recognize a failure without regenerating anything.
+func firstDiff(want, got string) string {
+	wantLines, gotLines := splitLines(want), splitLines(got)
+
+	for i := 0; i < len(wantLines) && i < len(gotLines); i++ {
+		if wantLines[i] != gotLines[i] {
+			return fmt.Sprintf("first difference at line %d:\n  want: %s\n  got:  %s\n(%d want lines, %d got lines)",
+				i+1, wantLines[i], gotLines[i], len(wantLines), len(gotLines))
+		}
+	}
+
+	return fmt.Sprintf("common prefix matches; line count differs: want %d, got %d", len(wantLines), len(gotLines))
 }
 
 func splitLines(s string) []string {

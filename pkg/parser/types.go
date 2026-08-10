@@ -1,9 +1,17 @@
 package parser
 
-// ParsedPackage represents a complete parsed Go package with all annotations
-type ParsedPackage struct {
+import "golang.org/x/tools/go/packages"
+
+// Package is everything the parser found: one value carrying both the
+// annotations and the loaded Go package they were written against.
+type Package struct {
 	// PackageName is the Go package name
 	PackageName string
+
+	// Pkg is the loaded Go package, with types and type info. Handed to the
+	// resolver so it works from the same type identities the parser saw
+	// instead of loading the package a second time.
+	Pkg *packages.Package
 
 	// API contains the @api annotation data
 	API *APIInfo
@@ -16,6 +24,16 @@ type ParsedPackage struct {
 
 	// Endpoints contains all @endpoint annotated functions
 	Endpoints []*Endpoint
+
+	// FuncInlines are the declarations found inside handler bodies, keyed by
+	// function name. Their @field annotations are already parsed.
+	FuncInlines map[string]*FuncInlineInfo
+
+	// StructFields holds the parsed @field annotations of every struct type in
+	// the package, keyed by type name. Schemas and Parameters index into this;
+	// so does the resolver, when it flattens an embedded struct that carries no
+	// annotation of its own.
+	StructFields map[string][]*Field
 }
 
 // APIInfo represents the @api annotation
@@ -123,6 +141,12 @@ type Schema struct {
 type Field struct {
 	// Name is the field name (from json/query/path/header/cookie tag)
 	Name string
+
+	// Fields are the annotations on the fields of this field's type, when that
+	// type is an anonymous struct. Annotations mirror the shape of the types
+	// they describe, so the resolver can attach each one at the level it was
+	// written.
+	Fields []*Field
 
 	// GoName is the Go field name
 	GoName string

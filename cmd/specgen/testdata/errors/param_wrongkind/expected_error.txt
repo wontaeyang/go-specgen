@@ -1,0 +1,1 @@
+resolve: @query[ListQuery].TenantID: field TenantID is tagged "path" but sits in a @query struct; tag it "query" or move it

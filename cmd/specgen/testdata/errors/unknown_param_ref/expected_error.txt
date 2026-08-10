@@ -1,0 +1,5 @@
+validate: 3 validation errors:
+  1. @endpoint[GET /widgets/{id}].@response[200]: @header references unknown parameter struct: RateLimitHeaders
+  2. @endpoint[GET /widgets].@response[200]: @header references unknown parameter struct: RateLimitHeaders
+  3. @endpoint[GET /widgets]: @query references unknown parameter struct: ListWidgetsQuery
+

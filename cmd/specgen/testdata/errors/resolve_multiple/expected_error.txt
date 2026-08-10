@@ -1,0 +1,5 @@
+resolve: 3 resolve errors:
+  1. @query[AlphaQuery].TenantID: field TenantID is tagged "path" but sits in a @query struct; tag it "query" or move it
+  2. @query[ZebraQuery].Stripes: field Stripes is tagged "header" but sits in a @query struct; tag it "query" or move it
+  3. @query[ZebraQuery].Zone: field Zone is tagged "cookie" but sits in a @query struct; tag it "query" or move it
+

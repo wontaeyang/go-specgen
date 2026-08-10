@@ -1,0 +1,1 @@
+validate: @endpoint[POST /widgets].@request: the struct under this @request has no fields; a request body needs at least one, or drop the @request

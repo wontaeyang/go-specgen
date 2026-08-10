@@ -1,0 +1,95 @@
+openapi: 3.1.0
+info:
+    title: Anonymous Struct Fixture
+    description: Nested field annotations inside anonymous structs.
+    version: 1.0.0
+paths:
+    /envelopes:
+        put:
+            summary: Replace an envelope
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/Envelope'
+                required: true
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    applied:
+                                        type: boolean
+                                        description: Whether the write was applied
+                                    results:
+                                        type: array
+                                        items:
+                                            type: object
+                                            properties:
+                                                name:
+                                                    type: string
+                                                    minLength: 1
+                                                    description: Entry name
+                                                code:
+                                                    type: string
+                                                    enum:
+                                                        - ok
+                                                        - skipped
+                                                        - failed
+                                                    description: Result code
+                                            required:
+                                                - name
+                                                - code
+                                        description: Per-entry results
+                                required:
+                                    - applied
+                                    - results
+components:
+    schemas:
+        Envelope:
+            type: object
+            properties:
+                id:
+                    type: string
+                    format: uuid
+                    description: Envelope identifier
+                payload:
+                    type: object
+                    properties:
+                        kind:
+                            type: string
+                            enum:
+                                - a
+                                - b
+                                - c
+                            description: Payload kind
+                        entries:
+                            type: array
+                            items:
+                                type: object
+                                properties:
+                                    name:
+                                        type: string
+                                        minLength: 1
+                                        description: Entry name
+                                    weight:
+                                        type: number
+                                        maximum: 1
+                                        minimum: 0
+                                        format: double
+                                        description: Entry weight
+                                required:
+                                    - name
+                                    - weight
+                            minItems: 1
+                            description: Nested entries
+                    required:
+                        - kind
+                        - entries
+                    description: Nested payload
+            required:
+                - id
+                - payload

@@ -1,0 +1,1 @@
+parse: @field[Widget.ID]: failed to parse @field: "@description a closing } brace, unescaped" closes the block but carries other text; write \} for a literal brace in a value

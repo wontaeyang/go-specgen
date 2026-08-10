@@ -1,0 +1,1 @@
+parse: @endpoint[ListWidgets]: @response 200 is declared twice; each status code can have only one response

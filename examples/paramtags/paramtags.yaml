@@ -1,0 +1,58 @@
+openapi: 3.1.0
+info:
+    title: Parameter Tags Fixture
+    description: The parameter naming and required-detection matrix.
+    version: 1.0.0
+paths:
+    /search:
+        get:
+            summary: Search
+            parameters:
+                - name: limit
+                  in: query
+                  description: Named by its tag
+                  required: false
+                  schema:
+                    type: integer
+                - name: q
+                  in: query
+                  description: Opted in as required
+                  required: true
+                  schema:
+                    type: string
+                - name: '-'
+                  in: query
+                  description: Literally named "-", using json's escape
+                  required: false
+                  schema:
+                    type: string
+                - name: Cursor
+                  in: query
+                  description: No query tag, so the Go field name is used
+                  required: false
+                  schema:
+                    type: string
+                - name: note
+                  in: query
+                  description: Only the json tag carries ",required"
+                  required: false
+                  schema:
+                    type: string
+                - name: per_page
+                  in: query
+                  description: Results per page
+                  required: false
+                  schema:
+                    type: integer
+                    maximum: 100
+                    minimum: 1
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    type: string
+components: {}

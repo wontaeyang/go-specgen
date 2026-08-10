@@ -1,0 +1,32 @@
+openapi: 3.1.0
+info:
+    title: Parameter Conflict Fixture
+    description: The same parameter name in two different locations.
+    version: 1.0.0
+paths:
+    /items/{id}:
+        get:
+            summary: Get an item
+            parameters:
+                - name: id
+                  in: path
+                  description: Item identifier
+                  required: true
+                  schema:
+                    type: string
+                - name: id
+                  in: query
+                  description: Tenant identifier
+                  required: false
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    type: string
+components: {}

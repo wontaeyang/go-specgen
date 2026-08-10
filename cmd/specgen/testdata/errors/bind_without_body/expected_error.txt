@@ -1,0 +1,1 @@
+parse: @endpoint[ListWidgets].@response[204]: @bind has no @body to bind into; add a @body, or drop the @bind from a message that carries none

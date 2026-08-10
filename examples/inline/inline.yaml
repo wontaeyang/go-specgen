@@ -37,7 +37,7 @@ paths:
                     type: string
             responses:
                 "200":
-                    description: Response for status 200
+                    description: OK
                     content:
                         application/json:
                             schema:
@@ -50,10 +50,14 @@ paths:
                                             properties:
                                                 id:
                                                     type: string
+                                                    format: uuid
+                                                    description: Order ID
                                                 status:
                                                     type: string
+                                                    description: Order status
                                                 total_cents:
                                                     type: integer
+                                                    description: Order total in cents
                                             required:
                                                 - id
                                                 - status
@@ -94,8 +98,12 @@ paths:
                                         properties:
                                             product_id:
                                                 type: string
+                                                format: uuid
+                                                description: Product ID
                                             quantity:
                                                 type: integer
+                                                minimum: 1
+                                                description: Quantity to order
                                         required:
                                             - product_id
                                             - quantity
@@ -105,12 +113,17 @@ paths:
                                     properties:
                                         street:
                                             type: string
+                                            description: Street address
                                         city:
                                             type: string
+                                            description: City
                                         postal_code:
                                             type: string
+                                            description: Postal code
                                         country:
                                             type: string
+                                            pattern: ^[A-Z]{2}$
+                                            description: Country code
                                     required:
                                         - street
                                         - city
@@ -124,7 +137,7 @@ paths:
                 required: true
             responses:
                 "201":
-                    description: Response for status 201
+                    description: Created
                     content:
                         application/json:
                             schema:
@@ -175,8 +188,11 @@ paths:
                                             properties:
                                                 id:
                                                     type: string
+                                                    format: uuid
+                                                    description: Order ID
                                                 status:
                                                     type: string
+                                                    description: Order status
                                             required:
                                                 - id
                                                 - status
@@ -213,7 +229,7 @@ paths:
                     type: boolean
             responses:
                 "200":
-                    description: Response for status 200
+                    description: OK
                     content:
                         application/json:
                             schema:
@@ -242,10 +258,15 @@ paths:
                                             properties:
                                                 name:
                                                     type: string
+                                                    description: Item name
                                                 quantity:
                                                     type: integer
+                                                    minimum: 1
+                                                    description: Item quantity
                                                 price_cents:
                                                     type: integer
+                                                    minimum: 0
+                                                    description: Item price in cents
                                             required:
                                                 - name
                                                 - quantity
@@ -257,7 +278,7 @@ paths:
                                     - total_cents
                                     - items
                 "404":
-                    description: Response for status 404
+                    description: Not Found
                     content:
                         application/json:
                             schema:
@@ -319,7 +340,7 @@ paths:
                         - inactive
             responses:
                 "200":
-                    description: Response for status 200
+                    description: OK
                     content:
                         application/json:
                             schema:
@@ -372,7 +393,7 @@ paths:
                 required: true
             responses:
                 "201":
-                    description: Response for status 201
+                    description: Created
                     content:
                         application/json:
                             schema:
@@ -385,7 +406,7 @@ paths:
                                 required:
                                     - id
                 "400":
-                    description: Response for status 400
+                    description: Bad Request
                     content:
                         application/json:
                             schema:
@@ -438,7 +459,7 @@ paths:
                     type: string
             responses:
                 "200":
-                    description: Response for status 200
+                    description: OK
                     content:
                         application/json:
                             schema:
@@ -451,8 +472,12 @@ paths:
                                             properties:
                                                 id:
                                                     type: string
+                                                    format: uuid
+                                                    description: User ID
                                                 email:
                                                     type: string
+                                                    format: email
+                                                    description: User email
                                             required:
                                                 - id
                                                 - email
@@ -475,7 +500,7 @@ paths:
                     format: uuid
             responses:
                 "200":
-                    description: Response for status 200
+                    description: OK
                     content:
                         application/json:
                             schema:

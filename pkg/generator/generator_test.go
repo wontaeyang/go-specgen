@@ -10,48 +10,48 @@ import (
 )
 
 func TestNewGenerator(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	if gen == nil {
 		t.Fatal("NewGenerator() returned nil")
 	}
 
-	if gen.version != "3.0" {
-		t.Errorf("version = %s, want 3.0", gen.version)
+	if gen.version != "3.1" {
+		t.Errorf("version = %s, want 3.1", gen.version)
 	}
 }
 
 func TestGenerator_Generate(t *testing.T) {
-	pkg := &resolver.ResolvedPackage{
-		API: &resolver.ResolvedAPI{
+	pkg := &resolver.Package{
+		API: &resolver.API{
 			Title:   "Test API",
 			Version: "1.0.0",
 		},
-		Schemas: map[string]*resolver.ResolvedSchema{
+		Schemas: map[string]*resolver.Schema{
 			"User": {
 				Name: "User",
-				Fields: []*resolver.ResolvedField{
+				Fields: []*resolver.Field{
 					{
-						Name:        "id",
-						GoName:      "ID",
-						OpenAPIType: "string",
-						Required:    true,
+						Name:     "id",
+						GoName:   "ID",
+						Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+						Required: true,
 					},
 				},
 			},
 		},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
+		Parameters: map[string]*resolver.ParameterStruct{},
+		Endpoints: []*resolver.Endpoint{
 			{
 				Method: "GET",
 				Path:   "/users",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200", Description: "Success"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200", Description: "Success"},
 				},
 			},
 		},
 	}
 
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	spec, err := gen.Generate(pkg)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
@@ -62,8 +62,8 @@ func TestGenerator_Generate(t *testing.T) {
 	}
 
 	// Verify openapi version
-	if spec.Version != "3.0.3" {
-		t.Errorf("openapi = %v, want 3.0.3", spec.Version)
+	if spec.Version != "3.1.0" {
+		t.Errorf("openapi = %v, want 3.1.0", spec.Version)
 	}
 
 	// Verify info
@@ -83,7 +83,7 @@ func TestGenerator_Generate(t *testing.T) {
 }
 
 func TestGenerator_GenerateInfo(t *testing.T) {
-	api := &resolver.ResolvedAPI{
+	api := &resolver.API{
 		Title:          "Test API",
 		Version:        "1.0.0",
 		Description:    "Test description",
@@ -99,7 +99,7 @@ func TestGenerator_GenerateInfo(t *testing.T) {
 		},
 	}
 
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	info := gen.generateInfo(api)
 
 	if info.Title != "Test API" {
@@ -135,7 +135,7 @@ func TestGenerator_GenerateServers(t *testing.T) {
 		},
 	}
 
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	result := gen.generateServers(servers)
 
 	if len(result) != 2 {
@@ -152,31 +152,31 @@ func TestGenerator_GenerateServers(t *testing.T) {
 }
 
 func TestGenerator_GenerateSchemas(t *testing.T) {
-	schemas := map[string]*resolver.ResolvedSchema{
+	schemas := map[string]*resolver.Schema{
 		"User": {
 			Name:        "User",
 			Description: "User model",
-			Fields: []*resolver.ResolvedField{
+			Fields: []*resolver.Field{
 				{
 					Name:        "id",
 					GoName:      "ID",
-					OpenAPIType: "string",
+					Type:        &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
 					Format:      "uuid",
 					Required:    true,
 					Description: "User ID",
 				},
 				{
-					Name:        "email",
-					GoName:      "Email",
-					OpenAPIType: "string",
-					Format:      "email",
-					Required:    true,
+					Name:     "email",
+					GoName:   "Email",
+					Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+					Format:   "email",
+					Required: true,
 				},
 			},
 		},
 	}
 
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	result := gen.generateSchemas(schemas)
 
 	if result.Len() != 1 {
@@ -190,33 +190,33 @@ func TestGenerator_GenerateSchemas(t *testing.T) {
 }
 
 func TestGenerator_RenderJSON(t *testing.T) {
-	pkg := &resolver.ResolvedPackage{
-		API: &resolver.ResolvedAPI{
+	pkg := &resolver.Package{
+		API: &resolver.API{
 			Title:   "Test API",
 			Version: "1.0.0",
 		},
-		Schemas:    map[string]*resolver.ResolvedSchema{},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
+		Schemas:    map[string]*resolver.Schema{},
+		Parameters: map[string]*resolver.ParameterStruct{},
+		Endpoints: []*resolver.Endpoint{
 			{
 				Method: "GET",
 				Path:   "/test",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200", Description: "OK"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200", Description: "OK"},
 				},
 			},
 		},
 	}
 
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	doc, err := gen.Generate(pkg)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
 
-	data, err := gen.Render(doc, FormatJSON)
+	data, err := gen.RenderJSON(doc)
 	if err != nil {
-		t.Fatalf("Render() error = %v", err)
+		t.Fatalf("render error = %v", err)
 	}
 
 	// Verify it's valid JSON
@@ -250,33 +250,33 @@ func TestGenerator_RenderJSON(t *testing.T) {
 }
 
 func TestGenerator_RenderYAML(t *testing.T) {
-	pkg := &resolver.ResolvedPackage{
-		API: &resolver.ResolvedAPI{
+	pkg := &resolver.Package{
+		API: &resolver.API{
 			Title:   "Test API",
 			Version: "1.0.0",
 		},
-		Schemas:    map[string]*resolver.ResolvedSchema{},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
+		Schemas:    map[string]*resolver.Schema{},
+		Parameters: map[string]*resolver.ParameterStruct{},
+		Endpoints: []*resolver.Endpoint{
 			{
 				Method: "GET",
 				Path:   "/test",
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200", Description: "OK"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200", Description: "OK"},
 				},
 			},
 		},
 	}
 
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 	doc, err := gen.Generate(pkg)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
 
-	data, err := gen.Render(doc, FormatYAML)
+	data, err := gen.RenderYAML(doc)
 	if err != nil {
-		t.Fatalf("Render() error = %v", err)
+		t.Fatalf("render error = %v", err)
 	}
 
 	// Verify it contains YAML-like content
@@ -301,27 +301,27 @@ func TestGenerator_RenderYAML(t *testing.T) {
 }
 
 func TestGenerator_GeneratePaths(t *testing.T) {
-	endpoints := []*resolver.ResolvedEndpoint{
+	endpoints := []*resolver.Endpoint{
 		{
 			Method:  "GET",
 			Path:    "/users",
 			Summary: "List users",
-			Responses: map[string]*resolver.ResolvedResponse{
-				"200": {StatusCode: "200", Description: "Success"},
+			Responses: []*resolver.Response{
+				{StatusCode: "200", Description: "Success"},
 			},
 		},
 		{
 			Method:  "POST",
 			Path:    "/users",
 			Summary: "Create user",
-			Responses: map[string]*resolver.ResolvedResponse{
-				"201": {StatusCode: "201", Description: "Created"},
+			Responses: []*resolver.Response{
+				{StatusCode: "201", Description: "Created"},
 			},
 		},
 	}
 
-	gen := NewGenerator("3.0")
-	paths := gen.generatePaths(endpoints, map[string]*resolver.ResolvedParameter{}, map[string]*resolver.ResolvedSchema{})
+	gen := NewGenerator("3.1")
+	paths := gen.generatePaths(endpoints)
 
 	if paths.PathItems.Len() != 1 {
 		t.Fatalf("Expected 1 path item, got %d", paths.PathItems.Len())
@@ -342,46 +342,34 @@ func TestGenerator_GeneratePaths(t *testing.T) {
 }
 
 func TestGenerator_GenerateOperation(t *testing.T) {
-	endpoint := &resolver.ResolvedEndpoint{
+	endpoint := &resolver.Endpoint{
 		Method:      "GET",
 		Path:        "/users/{id}",
 		Summary:     "Get user",
 		Description: "Get user by ID",
 		OperationID: "getUser",
 		Tags:        []string{"users"},
-		PathParams: []*resolver.ResolvedParameter{
+		Parameters: []*resolver.Parameter{
 			{
-				Name: "UserIDPath",
-				Fields: []*resolver.ResolvedField{
-					{
-						Name:        "id",
-						GoName:      "ID",
-						OpenAPIType: "string",
-						Required:    true,
-					},
+				In: "path",
+				Field: &resolver.Field{
+					Name:     "id",
+					GoName:   "ID",
+					Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+					Required: true,
 				},
 			},
 		},
-		Responses: map[string]*resolver.ResolvedResponse{
-			"200": {
-				StatusCode:  "200",
+		Responses: []*resolver.Response{
+			{StatusCode: "200",
 				Description: "Success",
 				ContentType: "application/json",
-				Body:        &resolver.ResolvedBody{Schema: "User", ElementType: "User"},
-			},
+				Body:        &resolver.Body{Schema: "User", Type: &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"}}},
 		},
 	}
 
-	paramMap := map[string]*resolver.ResolvedParameter{
-		"UserIDPath": endpoint.PathParams[0],
-	}
-
-	schemas := map[string]*resolver.ResolvedSchema{
-		"User": {Name: "User"},
-	}
-
-	gen := NewGenerator("3.0")
-	op := gen.generateOperation(endpoint, paramMap, schemas)
+	gen := NewGenerator("3.1")
+	op := gen.generateOperation(endpoint)
 
 	if op.Summary != "Get user" {
 		t.Errorf("Summary = %v, want Get user", op.Summary)
@@ -405,25 +393,25 @@ func TestGenerator_GenerateOperation(t *testing.T) {
 }
 
 func TestGenerator_HTTPMethodsLowercase(t *testing.T) {
-	endpoints := []*resolver.ResolvedEndpoint{
+	endpoints := []*resolver.Endpoint{
 		{
 			Method: "GET",
 			Path:   "/test",
-			Responses: map[string]*resolver.ResolvedResponse{
-				"200": {StatusCode: "200", Description: "OK"},
+			Responses: []*resolver.Response{
+				{StatusCode: "200", Description: "OK"},
 			},
 		},
 		{
 			Method: "POST",
 			Path:   "/test",
-			Responses: map[string]*resolver.ResolvedResponse{
-				"201": {StatusCode: "201", Description: "Created"},
+			Responses: []*resolver.Response{
+				{StatusCode: "201", Description: "Created"},
 			},
 		},
 	}
 
-	gen := NewGenerator("3.0")
-	paths := gen.generatePaths(endpoints, map[string]*resolver.ResolvedParameter{}, map[string]*resolver.ResolvedSchema{})
+	gen := NewGenerator("3.1")
+	paths := gen.generatePaths(endpoints)
 
 	testPath := paths.PathItems.GetOrZero("/test")
 	if testPath == nil {
@@ -441,7 +429,7 @@ func TestGenerator_HTTPMethodsLowercase(t *testing.T) {
 }
 
 func TestGenerator_GenerateTags(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	tests := []struct {
 		name string
@@ -500,10 +488,10 @@ func TestGenerator_GenerateTags(t *testing.T) {
 }
 
 func TestGenerator_GenerateWithTags(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
-	pkg := &resolver.ResolvedPackage{
-		API: &resolver.ResolvedAPI{
+	pkg := &resolver.Package{
+		API: &resolver.API{
 			Title:   "Test API",
 			Version: "1.0.0",
 			Tags: []*resolver.Tag{
@@ -511,15 +499,15 @@ func TestGenerator_GenerateWithTags(t *testing.T) {
 				{Name: "users", Description: "User operations"},
 			},
 		},
-		Schemas:    map[string]*resolver.ResolvedSchema{},
-		Parameters: map[string]*resolver.ResolvedParameter{},
-		Endpoints: []*resolver.ResolvedEndpoint{
+		Schemas:    map[string]*resolver.Schema{},
+		Parameters: map[string]*resolver.ParameterStruct{},
+		Endpoints: []*resolver.Endpoint{
 			{
 				Method: "GET",
 				Path:   "/pets",
 				Tags:   []string{"pets"},
-				Responses: map[string]*resolver.ResolvedResponse{
-					"200": {StatusCode: "200", Description: "Success"},
+				Responses: []*resolver.Response{
+					{StatusCode: "200", Description: "Success"},
 				},
 			},
 		},
@@ -560,16 +548,14 @@ func TestGenerator_GenerateWithTags(t *testing.T) {
 
 func TestGenerator_GenerateBodySchema_Ref(t *testing.T) {
 	// Test body without bind - should use $ref
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
-	body := &resolver.ResolvedBody{
-		Schema:      "User",
-		ElementType: "User",
+	body := &resolver.Body{
+		Schema: "User",
+		Type:   &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"},
 	}
 
-	schemas := map[string]*resolver.ResolvedSchema{}
-
-	result := gen.generateBodySchema(body, schemas)
+	result := gen.generateBodySchema(body)
 
 	if !result.IsReference() {
 		t.Error("Expected schema reference")
@@ -582,31 +568,27 @@ func TestGenerator_GenerateBodySchema_Ref(t *testing.T) {
 
 func TestGenerator_GenerateBodySchema_Wrapped(t *testing.T) {
 	// Test body with bind - should be wrapped
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
-	wrapperSchema := &resolver.ResolvedSchema{
+	wrapperSchema := &resolver.Schema{
 		Name: "DataResponse",
-		Fields: []*resolver.ResolvedField{
-			{Name: "status", GoName: "Status", OpenAPIType: "string", Required: true},
-			{Name: "data", GoName: "Data", OpenAPIType: "object", Required: true},
+		Fields: []*resolver.Field{
+			{Name: "status", GoName: "Status", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}, Required: true},
+			{Name: "data", GoName: "Data", Type: &resolver.TypeRef{Shape: resolver.ShapeObject}, Required: true},
 		},
 	}
 
-	body := &resolver.ResolvedBody{
-		Schema:      "User",
-		ElementType: "User",
-		Bind: &resolver.ResolvedBindTarget{
+	body := &resolver.Body{
+		Schema: "User",
+		Type:   &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"},
+		Bind: &resolver.BindTarget{
 			Wrapper:       "DataResponse",
 			Field:         "Data",
 			WrapperSchema: wrapperSchema,
 		},
 	}
 
-	schemas := map[string]*resolver.ResolvedSchema{
-		"DataResponse": wrapperSchema,
-	}
-
-	result := gen.generateBodySchema(body, schemas)
+	result := gen.generateBodySchema(body)
 
 	// Should not be a reference (wrapped schema is inlined)
 	if result.IsReference() {
@@ -629,10 +611,10 @@ func TestGenerator_GenerateBodySchema_Wrapped(t *testing.T) {
 	}
 }
 
-func TestGenerator_GenerateSchemaRef_Simple(t *testing.T) {
-	gen := NewGenerator("3.0")
+func TestGenerator_BuildTypeProxy_Simple(t *testing.T) {
+	gen := NewGenerator("3.1")
 
-	result := gen.generateSchemaRef("User", false, false, "User")
+	result := gen.buildTypeProxy(&resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"})
 
 	if !result.IsReference() {
 		t.Error("Expected schema reference")
@@ -643,10 +625,10 @@ func TestGenerator_GenerateSchemaRef_Simple(t *testing.T) {
 	}
 }
 
-func TestGenerator_GenerateSchemaRef_Array(t *testing.T) {
-	gen := NewGenerator("3.0")
+func TestGenerator_BuildTypeProxy_Array(t *testing.T) {
+	gen := NewGenerator("3.1")
 
-	result := gen.generateSchemaRef("[]User", true, false, "User")
+	result := gen.buildTypeProxy(&resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"}})
 
 	schema, err := result.BuildSchema()
 	if err != nil {
@@ -662,10 +644,10 @@ func TestGenerator_GenerateSchemaRef_Array(t *testing.T) {
 	}
 }
 
-func TestGenerator_GenerateSchemaRef_Map(t *testing.T) {
-	gen := NewGenerator("3.0")
+func TestGenerator_BuildTypeProxy_Map(t *testing.T) {
+	gen := NewGenerator("3.1")
 
-	result := gen.generateSchemaRef("map[string]User", false, true, "User")
+	result := gen.buildTypeProxy(&resolver.TypeRef{Shape: resolver.ShapeMap, Elem: &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "User"}})
 
 	schema, err := result.BuildSchema()
 	if err != nil {
@@ -681,10 +663,10 @@ func TestGenerator_GenerateSchemaRef_Map(t *testing.T) {
 	}
 }
 
-func TestGenerator_GenerateSchemaRef_Primitive(t *testing.T) {
-	gen := NewGenerator("3.0")
+func TestGenerator_BuildTypeProxy_Primitive(t *testing.T) {
+	gen := NewGenerator("3.1")
 
-	result := gen.generateSchemaRef("int", false, false, "int")
+	result := gen.buildTypeProxy(&resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "integer"})
 
 	schema, err := result.BuildSchema()
 	if err != nil {
@@ -699,13 +681,10 @@ func TestGenerator_GenerateSchemaRef_Primitive(t *testing.T) {
 // renderRefField renders a $ref field through generateFieldSchemaWithRefs and
 // returns the YAML so sibling keywords (which live on the proxy, not the built
 // schema) can be asserted.
-func renderRefField(t *testing.T, version string, field *resolver.ResolvedField) string {
+func renderRefField(t *testing.T, version string, field *resolver.Field) string {
 	t.Helper()
 	gen := NewGenerator(version)
-	schemas := map[string]*resolver.ResolvedSchema{
-		"Address": {Name: "Address"},
-	}
-	proxy := gen.generateFieldSchemaWithRefs(field, schemas)
+	proxy := gen.generateFieldSchema(field)
 	out, err := yaml.Marshal(proxy)
 	if err != nil {
 		t.Fatalf("yaml.Marshal() error = %v", err)
@@ -714,7 +693,8 @@ func renderRefField(t *testing.T, version string, field *resolver.ResolvedField)
 }
 
 func TestGenerator_RefField_BareWhenNoSiblings(t *testing.T) {
-	field := &resolver.ResolvedField{Name: "home_address", GoName: "HomeAddress", GoType: "Address"}
+	field := &resolver.Field{Name: "home_address", GoName: "HomeAddress", GoType: "Address",
+		Type: &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "Address"}}
 	got := renderRefField(t, "3.1", field)
 
 	if !strings.Contains(got, "$ref: '#/components/schemas/Address'") {
@@ -726,8 +706,9 @@ func TestGenerator_RefField_BareWhenNoSiblings(t *testing.T) {
 }
 
 func TestGenerator_RefField_Deprecated_31Siblings(t *testing.T) {
-	field := &resolver.ResolvedField{
+	field := &resolver.Field{
 		Name: "home_address", GoName: "HomeAddress", GoType: "Address",
+		Type:        &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "Address"},
 		Description: "Home address", Deprecated: true,
 	}
 	got := renderRefField(t, "3.1", field)
@@ -747,28 +728,10 @@ func TestGenerator_RefField_Deprecated_31Siblings(t *testing.T) {
 	}
 }
 
-func TestGenerator_RefField_Deprecated_30AllOf(t *testing.T) {
-	field := &resolver.ResolvedField{
-		Name: "home_address", GoName: "HomeAddress", GoType: "Address",
-		Description: "Home address", Deprecated: true,
-	}
-	got := renderRefField(t, "3.0", field)
-
-	// 3.0: $ref cannot have siblings, must be wrapped in allOf.
-	if !strings.Contains(got, "allOf") {
-		t.Errorf("3.0 ref with siblings should be wrapped in allOf, got:\n%s", got)
-	}
-	if !strings.Contains(got, "$ref: '#/components/schemas/Address'") {
-		t.Errorf("missing $ref, got:\n%s", got)
-	}
-	if !strings.Contains(got, "deprecated: true") {
-		t.Errorf("missing deprecated, got:\n%s", got)
-	}
-}
-
 func TestGenerator_RefField_NullableDeprecated_31OneOf(t *testing.T) {
-	field := &resolver.ResolvedField{
+	field := &resolver.Field{
 		Name: "work_address", GoName: "WorkAddress", GoType: "Address",
+		Type:        &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "Address"},
 		Description: "Work address", Deprecated: true, Nullable: true,
 	}
 	got := renderRefField(t, "3.1", field)
@@ -785,82 +748,32 @@ func TestGenerator_RefField_NullableDeprecated_31OneOf(t *testing.T) {
 	}
 }
 
-func TestIsPrimitive(t *testing.T) {
-	tests := []struct {
-		input string
-		want  bool
-	}{
-		{"string", true},
-		{"int", true},
-		{"int64", true},
-		{"float64", true},
-		{"bool", true},
-		{"User", false},
-		{"CustomType", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := isPrimitive(tt.input)
-			if got != tt.want {
-				t.Errorf("isPrimitive(%q) = %v, want %v", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestGoTypeToPrimitive(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"string", "string"},
-		{"int", "integer"},
-		{"int64", "integer"},
-		{"float64", "number"},
-		{"bool", "boolean"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := goTypeToPrimitive(tt.input)
-			if got != tt.want {
-				t.Errorf("goTypeToPrimitive(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestGenerator_GenerateInlineWrappedSchema(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
-	wrapperSchema := &resolver.ResolvedSchema{
+	wrapperSchema := &resolver.Schema{
 		Name: "DataResponse",
-		Fields: []*resolver.ResolvedField{
-			{Name: "status", GoName: "Status", OpenAPIType: "string", Required: true},
-			{Name: "data", GoName: "Data", OpenAPIType: "object", Required: true},
+		Fields: []*resolver.Field{
+			{Name: "status", GoName: "Status", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}, Required: true},
+			{Name: "data", GoName: "Data", Type: &resolver.TypeRef{Shape: resolver.ShapeObject}, Required: true},
 		},
 	}
 
 	// Create an inline body with bind
-	inline := &resolver.ResolvedInlineBody{
+	inline := &resolver.InlineBody{
 		ContentType: "application/json",
-		Fields: []*resolver.ResolvedField{
-			{Name: "id", GoName: "ID", OpenAPIType: "string", Required: true},
-			{Name: "email", GoName: "Email", OpenAPIType: "string", Required: true},
+		Fields: []*resolver.Field{
+			{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}, Required: true},
+			{Name: "email", GoName: "Email", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}, Required: true},
 		},
-		Bind: &resolver.ResolvedBindTarget{
+		Bind: &resolver.BindTarget{
 			Wrapper:       "DataResponse",
 			Field:         "Data",
 			WrapperSchema: wrapperSchema,
 		},
 	}
 
-	schemas := map[string]*resolver.ResolvedSchema{
-		"DataResponse": wrapperSchema,
-	}
-
-	result := gen.generateInlineWrappedSchema(inline, schemas)
+	result := gen.generateInlineWrappedSchema(inline)
 
 	schema, err := result.BuildSchema()
 	if err != nil {
@@ -889,18 +802,18 @@ func TestGenerator_GenerateInlineWrappedSchema(t *testing.T) {
 }
 
 func TestGenerator_GenerateInlineWrappedSchema_NoBind(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
 	// Create an inline body without bind - should fall back to inline schema
-	inline := &resolver.ResolvedInlineBody{
+	inline := &resolver.InlineBody{
 		ContentType: "application/json",
-		Fields: []*resolver.ResolvedField{
-			{Name: "id", GoName: "ID", OpenAPIType: "string", Required: true},
+		Fields: []*resolver.Field{
+			{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}, Required: true},
 		},
 		Bind: nil,
 	}
 
-	result := gen.generateInlineWrappedSchema(inline, nil)
+	result := gen.generateInlineWrappedSchema(inline)
 
 	schema, err := result.BuildSchema()
 	if err != nil {
@@ -922,15 +835,13 @@ func TestGenerator_GenerateInlineWrappedSchema_NoBind(t *testing.T) {
 }
 
 func TestGenerator_GenerateFieldSchema_ArrayEnum(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
-	field := &resolver.ResolvedField{
-		Name:        "tags",
-		GoName:      "Tags",
-		OpenAPIType: "array",
-		IsArray:     true,
-		ItemsType:   "string",
-		Enum:        []string{"red", "green", "blue"},
+	field := &resolver.Field{
+		Name:   "tags",
+		GoName: "Tags",
+		Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+		Enum:   []string{"red", "green", "blue"},
 	}
 
 	result := gen.generateFieldSchema(field)
@@ -967,13 +878,13 @@ func TestGenerator_GenerateFieldSchema_ArrayEnum(t *testing.T) {
 }
 
 func TestGenerator_GenerateFieldSchema_IntegerEnum(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
-	field := &resolver.ResolvedField{
-		Name:        "priority",
-		GoName:      "Priority",
-		OpenAPIType: "integer",
-		Enum:        []string{"1", "2", "3"},
+	field := &resolver.Field{
+		Name:   "priority",
+		GoName: "Priority",
+		Type:   &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "integer"},
+		Enum:   []string{"1", "2", "3"},
 	}
 
 	result := gen.generateFieldSchema(field)
@@ -997,15 +908,13 @@ func TestGenerator_GenerateFieldSchema_IntegerEnum(t *testing.T) {
 }
 
 func TestGenerator_GenerateParameterFieldSchema_ArrayEnum(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
-	field := &resolver.ResolvedField{
-		Name:        "status",
-		GoName:      "Status",
-		OpenAPIType: "array",
-		IsArray:     true,
-		ItemsType:   "string",
-		Enum:        []string{"active", "pending", "done"},
+	field := &resolver.Field{
+		Name:   "status",
+		GoName: "Status",
+		Type:   &resolver.TypeRef{Shape: resolver.ShapeArray, Elem: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
+		Enum:   []string{"active", "pending", "done"},
 	}
 
 	result := gen.generateParameterFieldSchema(field)
@@ -1030,42 +939,14 @@ func TestGenerator_GenerateParameterFieldSchema_ArrayEnum(t *testing.T) {
 	}
 }
 
-func TestGenerator_Version30Nullable(t *testing.T) {
-	gen := NewGenerator("3.0")
-
-	field := &resolver.ResolvedField{
-		Name:        "nickname",
-		GoName:      "Nickname",
-		OpenAPIType: "string",
-		Nullable:    true,
-	}
-
-	result := gen.generateFieldSchema(field)
-
-	schema, err := result.BuildSchema()
-	if err != nil {
-		t.Fatalf("BuildSchema() error = %v", err)
-	}
-
-	// In 3.0, nullable should be set to true
-	if schema.Nullable == nil || *schema.Nullable != true {
-		t.Error("nullable should be true for 3.0")
-	}
-
-	// Type should be just "string"
-	if len(schema.Type) != 1 || schema.Type[0] != "string" {
-		t.Errorf("type = %v, want [string]", schema.Type)
-	}
-}
-
 func TestGenerator_Version31Nullable(t *testing.T) {
 	gen := NewGenerator("3.1")
 
-	field := &resolver.ResolvedField{
-		Name:        "nickname",
-		GoName:      "Nickname",
-		OpenAPIType: "string",
-		Nullable:    true,
+	field := &resolver.Field{
+		Name:     "nickname",
+		GoName:   "Nickname",
+		Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+		Nullable: true,
 	}
 
 	result := gen.generateFieldSchema(field)
@@ -1100,11 +981,11 @@ func TestGenerator_Version31Nullable(t *testing.T) {
 func TestGenerator_Version32Nullable(t *testing.T) {
 	gen := NewGenerator("3.2")
 
-	field := &resolver.ResolvedField{
-		Name:        "nickname",
-		GoName:      "Nickname",
-		OpenAPIType: "string",
-		Nullable:    true,
+	field := &resolver.Field{
+		Name:     "nickname",
+		GoName:   "Nickname",
+		Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+		Nullable: true,
 	}
 
 	result := gen.generateFieldSchema(field)
@@ -1125,51 +1006,15 @@ func TestGenerator_Version32Nullable(t *testing.T) {
 	}
 }
 
-func TestGenerator_ExclusiveMinMax_30(t *testing.T) {
-	gen := NewGenerator("3.0")
-
-	exMin := 0.0
-	exMax := 100.0
-	field := &resolver.ResolvedField{
-		Name:             "score",
-		GoName:           "Score",
-		OpenAPIType:      "number",
-		ExclusiveMinimum: &exMin,
-		ExclusiveMaximum: &exMax,
-	}
-
-	result := gen.generateFieldSchema(field)
-
-	schema, err := result.BuildSchema()
-	if err != nil {
-		t.Fatalf("BuildSchema() error = %v", err)
-	}
-
-	// In 3.0, exclusive minimum is represented as minimum + exclusiveMinimum: true
-	if schema.Minimum == nil || *schema.Minimum != 0 {
-		t.Errorf("minimum = %v, want 0", schema.Minimum)
-	}
-	if schema.ExclusiveMinimum == nil || schema.ExclusiveMinimum.A != true {
-		t.Error("exclusiveMinimum should be true for 3.0")
-	}
-
-	if schema.Maximum == nil || *schema.Maximum != 100 {
-		t.Errorf("maximum = %v, want 100", schema.Maximum)
-	}
-	if schema.ExclusiveMaximum == nil || schema.ExclusiveMaximum.A != true {
-		t.Error("exclusiveMaximum should be true for 3.0")
-	}
-}
-
 func TestGenerator_ExclusiveMinMax_31(t *testing.T) {
 	gen := NewGenerator("3.1")
 
 	exMin := 0.0
 	exMax := 100.0
-	field := &resolver.ResolvedField{
+	field := &resolver.Field{
 		Name:             "score",
 		GoName:           "Score",
-		OpenAPIType:      "number",
+		Type:             &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "number"},
 		ExclusiveMinimum: &exMin,
 		ExclusiveMaximum: &exMax,
 	}
@@ -1199,13 +1044,13 @@ func TestGenerator_ExclusiveMinMax_31(t *testing.T) {
 }
 
 func TestGenerator_ReadOnly(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
-	field := &resolver.ResolvedField{
-		Name:        "id",
-		GoName:      "ID",
-		OpenAPIType: "string",
-		ReadOnly:    true,
+	field := &resolver.Field{
+		Name:     "id",
+		GoName:   "ID",
+		Type:     &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+		ReadOnly: true,
 	}
 
 	result := gen.generateFieldSchema(field)
@@ -1221,13 +1066,13 @@ func TestGenerator_ReadOnly(t *testing.T) {
 }
 
 func TestGenerator_WriteOnly(t *testing.T) {
-	gen := NewGenerator("3.0")
+	gen := NewGenerator("3.1")
 
-	field := &resolver.ResolvedField{
-		Name:        "password",
-		GoName:      "Password",
-		OpenAPIType: "string",
-		WriteOnly:   true,
+	field := &resolver.Field{
+		Name:      "password",
+		GoName:    "Password",
+		Type:      &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
+		WriteOnly: true,
 	}
 
 	result := gen.generateFieldSchema(field)
@@ -1242,63 +1087,17 @@ func TestGenerator_WriteOnly(t *testing.T) {
 	}
 }
 
-func TestGenerator_NullableSchemaRef_30(t *testing.T) {
-	gen := NewGenerator("3.0")
-	schemas := map[string]*resolver.ResolvedSchema{
-		"Address": {
-			Name: "Address",
-			Fields: []*resolver.ResolvedField{
-				{Name: "street", GoName: "Street", OpenAPIType: "string"},
-			},
-		},
-	}
-
-	field := &resolver.ResolvedField{
-		Name:        "address",
-		GoName:      "Address",
-		GoType:      "Address",
-		OpenAPIType: "object",
-		Nullable:    true,
-	}
-
-	result := gen.generateFieldSchemaWithRefs(field, schemas)
-
-	schema, err := result.BuildSchema()
-	if err != nil {
-		t.Fatalf("BuildSchema() error = %v", err)
-	}
-
-	// Should have allOf wrapping the $ref
-	if len(schema.AllOf) != 1 {
-		t.Fatalf("allOf should have 1 entry, got %d", len(schema.AllOf))
-	}
-
-	// Should have nullable: true (3.0 style)
-	if schema.Nullable == nil || *schema.Nullable != true {
-		t.Error("nullable should be true for 3.0")
-	}
-}
-
 func TestGenerator_NullableSchemaRef_31(t *testing.T) {
 	gen := NewGenerator("3.1")
-	schemas := map[string]*resolver.ResolvedSchema{
-		"Address": {
-			Name: "Address",
-			Fields: []*resolver.ResolvedField{
-				{Name: "street", GoName: "Street", OpenAPIType: "string"},
-			},
-		},
+	field := &resolver.Field{
+		Name:     "address",
+		GoName:   "Address",
+		GoType:   "Address",
+		Type:     &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "Address"},
+		Nullable: true,
 	}
 
-	field := &resolver.ResolvedField{
-		Name:        "address",
-		GoName:      "Address",
-		GoType:      "Address",
-		OpenAPIType: "object",
-		Nullable:    true,
-	}
-
-	result := gen.generateFieldSchemaWithRefs(field, schemas)
+	result := gen.generateFieldSchema(field)
 
 	schema, err := result.BuildSchema()
 	if err != nil {
@@ -1332,25 +1131,16 @@ func TestGenerator_NullableSchemaRef_31(t *testing.T) {
 }
 
 func TestGenerator_NonNullableSchemaRef(t *testing.T) {
-	gen := NewGenerator("3.0")
-	schemas := map[string]*resolver.ResolvedSchema{
-		"Address": {
-			Name: "Address",
-			Fields: []*resolver.ResolvedField{
-				{Name: "street", GoName: "Street", OpenAPIType: "string"},
-			},
-		},
+	gen := NewGenerator("3.1")
+	field := &resolver.Field{
+		Name:     "address",
+		GoName:   "Address",
+		GoType:   "Address",
+		Type:     &resolver.TypeRef{Shape: resolver.ShapeRef, Ref: "Address"},
+		Nullable: false,
 	}
 
-	field := &resolver.ResolvedField{
-		Name:        "address",
-		GoName:      "Address",
-		GoType:      "Address",
-		OpenAPIType: "object",
-		Nullable:    false,
-	}
-
-	result := gen.generateFieldSchemaWithRefs(field, schemas)
+	result := gen.generateFieldSchema(field)
 
 	// Non-nullable schema ref should be a bare $ref
 	// A bare $ref proxy returns the reference string, not a built schema
@@ -1368,10 +1158,9 @@ func TestGenerator_OpenAPIVersions(t *testing.T) {
 		version string
 		want    string
 	}{
-		{"3.0", "3.0.3"},
 		{"3.1", "3.1.0"},
 		{"3.2", "3.2.0"},
-		{"unknown", "3.0.3"}, // defaults to 3.0
+		{"unknown", "3.1.0"}, // the CLI rejects these; 3.1 is the fallback
 	}
 
 	for _, tt := range tests {

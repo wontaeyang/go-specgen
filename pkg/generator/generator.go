@@ -1,9 +1,7 @@
 package generator
 
 import (
-	"fmt"
 	"maps"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -14,30 +12,48 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
-// Generator generates OpenAPI specifications using libopenapi's v3high models
+// Generator generates OpenAPI specifications using libopenapi's v3high models.
+//
+// OpenAPI 3.1 is the baseline. 3.2 is accepted and differs only in the version
+// string, so there is no version-conditional code anywhere in this package —
+// see newSchema, markNullable, and exclusiveBound for the 3.1 spellings that
+// used to be branches.
 type Generator struct {
-	version       string // "3.0", "3.1", "3.2"
-	schemaBuilder *SchemaBuilder
+	version string // "3.1" or "3.2"
 }
-
-// OutputFormat represents the output format
-type OutputFormat string
-
-const (
-	FormatJSON OutputFormat = "json"
-	FormatYAML OutputFormat = "yaml"
-)
 
 // NewGenerator creates a new generator
 func NewGenerator(version string) *Generator {
-	return &Generator{
-		version:       version,
-		schemaBuilder: NewSchemaBuilder(version),
+	return &Generator{version: version}
+}
+
+// newSchema returns a schema of the given type. OpenAPI models Type as an array
+// because 3.1 uses it to express nullability; see markNullable. Called with no
+// type it returns the empty schema, which renders as {} and accepts any value.
+func newSchema(types ...string) *base.Schema {
+	return &base.Schema{Type: types}
+}
+
+// markNullable widens a schema to accept null, which OpenAPI 3.1 spells by
+// adding "null" to the type array rather than with 3.0's nullable: true.
+//
+// A schema with no type is left alone: it already accepts anything, so there is
+// nothing to widen.
+func markNullable(schema *base.Schema) {
+	if len(schema.Type) > 0 {
+		schema.Type = append(schema.Type, "null")
 	}
 }
 
+// exclusiveBound builds an exclusiveMinimum or exclusiveMaximum value. In 3.1
+// the keyword carries the bound itself; 3.0 spelled it as a boolean sitting
+// next to minimum/maximum, which is why libopenapi models it as a DynamicValue.
+func exclusiveBound(value float64) *base.DynamicValue[bool, float64] {
+	return &base.DynamicValue[bool, float64]{N: 1, B: value}
+}
+
 // Generate generates an OpenAPI spec from a resolved package
-func (g *Generator) Generate(pkg *resolver.ResolvedPackage) (*v3.Document, error) {
+func (g *Generator) Generate(pkg *resolver.Package) (*v3.Document, error) {
 	doc := &v3.Document{
 		Version: g.getOpenAPIVersion(),
 		Info:    g.generateInfo(pkg.API),
@@ -51,7 +67,7 @@ func (g *Generator) Generate(pkg *resolver.ResolvedPackage) (*v3.Document, error
 		doc.Tags = g.generateTags(pkg.API.Tags)
 	}
 
-	doc.Paths = g.generatePaths(pkg.Endpoints, pkg.Parameters, pkg.Schemas)
+	doc.Paths = g.generatePaths(pkg.Endpoints)
 	doc.Components = g.generateComponents(pkg)
 
 	if len(pkg.API.Security) > 0 {
@@ -61,34 +77,27 @@ func (g *Generator) Generate(pkg *resolver.ResolvedPackage) (*v3.Document, error
 	return doc, nil
 }
 
-// getOpenAPIVersion returns the OpenAPI version string
+// getOpenAPIVersion returns the version string written into the document.
+// Anything other than 3.2 is 3.1; the CLI rejects the rest before we get here.
 func (g *Generator) getOpenAPIVersion() string {
-	switch g.version {
-	case "3.0":
-		return "3.0.3"
-	case "3.1":
-		return "3.1.0"
-	case "3.2":
+	if g.version == "3.2" {
 		return "3.2.0"
-	default:
-		return "3.0.3"
 	}
+	return "3.1.0"
 }
 
-// Render renders the spec to the specified format
-func (g *Generator) Render(doc *v3.Document, format OutputFormat) ([]byte, error) {
-	switch format {
-	case FormatJSON:
-		return doc.RenderJSON("  ")
-	case FormatYAML:
-		return doc.Render()
-	default:
-		return nil, fmt.Errorf("unsupported format: %s", format)
-	}
+// RenderYAML renders the document as YAML.
+func (g *Generator) RenderYAML(doc *v3.Document) ([]byte, error) {
+	return doc.Render()
+}
+
+// RenderJSON renders the document as JSON, indented two spaces.
+func (g *Generator) RenderJSON(doc *v3.Document) ([]byte, error) {
+	return doc.RenderJSON("  ")
 }
 
 // generateInfo generates the info section
-func (g *Generator) generateInfo(api *resolver.ResolvedAPI) *base.Info {
+func (g *Generator) generateInfo(api *resolver.API) *base.Info {
 	info := &base.Info{
 		Title:   api.Title,
 		Version: api.Version,
@@ -145,7 +154,7 @@ func (g *Generator) generateTags(tags []*resolver.Tag) []*base.Tag {
 }
 
 // generateComponents generates the components section
-func (g *Generator) generateComponents(pkg *resolver.ResolvedPackage) *v3.Components {
+func (g *Generator) generateComponents(pkg *resolver.Package) *v3.Components {
 	components := &v3.Components{}
 
 	if len(pkg.Schemas) > 0 {
@@ -160,7 +169,7 @@ func (g *Generator) generateComponents(pkg *resolver.ResolvedPackage) *v3.Compon
 }
 
 // generateSchemas generates component schemas
-func (g *Generator) generateSchemas(schemas map[string]*resolver.ResolvedSchema) *orderedmap.Map[string, *base.SchemaProxy] {
+func (g *Generator) generateSchemas(schemas map[string]*resolver.Schema) *orderedmap.Map[string, *base.SchemaProxy] {
 	result := orderedmap.New[string, *base.SchemaProxy]()
 
 	for _, name := range slices.Sorted(maps.Keys(schemas)) {
@@ -170,37 +179,21 @@ func (g *Generator) generateSchemas(schemas map[string]*resolver.ResolvedSchema)
 			continue
 		}
 
-		result.Set(name, g.generateSchema(schema, schemas))
+		result.Set(name, g.generateSchema(schema))
 	}
 
 	return result
 }
 
 // generateSchema generates a single schema
-func (g *Generator) generateSchema(schema *resolver.ResolvedSchema, allSchemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
-	s := g.schemaBuilder.NewSchema()
-	g.schemaBuilder.SetType(s, "object")
+func (g *Generator) generateSchema(schema *resolver.Schema) *base.SchemaProxy {
+	s := newSchema("object")
 
 	if schema.Description != "" {
 		s.Description = schema.Description
 	}
 
-	if len(schema.Fields) > 0 {
-		props := orderedmap.New[string, *base.SchemaProxy]()
-		var required []string
-
-		for _, field := range schema.Fields {
-			props.Set(field.Name, g.generateFieldSchemaWithRefs(field, allSchemas))
-			if field.Required {
-				required = append(required, field.Name)
-			}
-		}
-
-		s.Properties = props
-		if len(required) > 0 {
-			s.Required = required
-		}
-	}
+	setObjectFields(s, schema.Fields, g.generateFieldSchema)
 
 	if schema.Deprecated {
 		t := true
@@ -210,212 +203,136 @@ func (g *Generator) generateSchema(schema *resolver.ResolvedSchema, allSchemas m
 	return base.CreateSchemaProxy(s)
 }
 
-// generateFieldSchemaWithRefs generates a schema for a field, using $ref for schema types
-func (g *Generator) generateFieldSchemaWithRefs(field *resolver.ResolvedField, schemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
-	// Handle anonymous structs - inline their fields
-	if len(field.InlineFields) > 0 {
-		proxy := g.buildInlineObjectSchema(field.InlineFields, schemas)
-		g.addFieldConstraints(proxy.Schema(), field)
-		return proxy
+// generateFieldSchema renders a field.
+//
+// The field's TypeRef says what shape to emit; there is nothing to discover
+// here, and in particular no Go type strings to re-parse. That is the point of
+// the shape. The generator used to have two versions of this — one that could
+// recognize a schema reference and one that could not — so the same field
+// rendered differently depending on which one reached it.
+func (g *Generator) generateFieldSchema(field *resolver.Field) *base.SchemaProxy {
+	// A $ref is the one shape that cannot simply carry the field's keywords,
+	// so it has its own builder.
+	if field.Type != nil && field.Type.Shape == resolver.ShapeRef {
+		return g.generateRefSchema(refPath(field.Type.Ref), field)
 	}
 
-	// Handle arrays of anonymous structs
-	if len(field.ItemsInlineFields) > 0 {
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, "array")
-		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-			A: g.buildInlineObjectSchema(field.ItemsInlineFields, schemas),
-		}
-		g.addFieldConstraints(schema, field)
-		return base.CreateSchemaProxy(schema)
-	}
-
-	// Handle maps of anonymous structs
-	if len(field.MapValueInlineFields) > 0 {
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, "object")
-		schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{
-			A: g.buildInlineObjectSchema(field.MapValueInlineFields, schemas),
-		}
-		g.addFieldConstraints(schema, field)
-		return base.CreateSchemaProxy(schema)
-	}
-
-	goType := field.GoType
-
-	// Handle arrays: []User or []string
-	if strings.HasPrefix(goType, "[]") {
-		elemType := strings.TrimPrefix(goType, "[]")
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, "array")
-
-		if isSchemaReference(elemType, schemas) {
-			schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-				A: base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", extractTypeName(elemType))),
-			}
-		} else if isPrimitive(extractTypeName(elemType)) {
-			itemSchema := g.schemaBuilder.NewSchema()
-			g.schemaBuilder.SetType(itemSchema, goTypeToPrimitive(extractTypeName(elemType)))
-			schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-				A: base.CreateSchemaProxy(itemSchema),
-			}
-		} else {
-			itemSchema := g.schemaBuilder.NewSchema()
-			g.schemaBuilder.SetType(itemSchema, field.ItemsType)
-			schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-				A: base.CreateSchemaProxy(itemSchema),
-			}
-		}
-		g.addFieldConstraints(schema, field)
-		return base.CreateSchemaProxy(schema)
-	}
-
-	// Handle maps: map[string]User
-	if strings.HasPrefix(goType, "map[") {
-		if idx := strings.LastIndex(goType, "]"); idx > 0 && idx < len(goType)-1 {
-			valueType := goType[idx+1:]
-			schema := g.schemaBuilder.NewSchema()
-			g.schemaBuilder.SetType(schema, "object")
-
-			if isSchemaReference(valueType, schemas) {
-				schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{
-					A: base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", extractTypeName(valueType))),
-				}
-			} else if isPrimitive(extractTypeName(valueType)) {
-				propSchema := g.schemaBuilder.NewSchema()
-				g.schemaBuilder.SetType(propSchema, goTypeToPrimitive(extractTypeName(valueType)))
-				schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{
-					A: base.CreateSchemaProxy(propSchema),
-				}
-			} else {
-				propSchema := g.schemaBuilder.NewSchema()
-				g.schemaBuilder.SetType(propSchema, "string")
-				schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{
-					A: base.CreateSchemaProxy(propSchema),
-				}
-			}
-			g.addFieldConstraints(schema, field)
-			return base.CreateSchemaProxy(schema)
-		}
-	}
-
-	// Handle schema references: User (named type that is a schema)
-	if isSchemaReference(goType, schemas) {
-		refPath := fmt.Sprintf("#/components/schemas/%s", extractTypeName(goType))
-		return g.generateRefSchema(refPath, field)
-	}
-
-	// Handle any value (empty schema)
-	if field.IsAnyValue {
-		schema := g.schemaBuilder.NewSchema()
-		g.addFieldConstraints(schema, field)
-		return base.CreateSchemaProxy(schema)
-	}
-
-	// Handle primitives and other types
-	schema := g.schemaBuilder.NewSchema()
-	if field.IsArray {
-		g.schemaBuilder.SetType(schema, "array")
-		itemSchema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(itemSchema, field.ItemsType)
-		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-			A: base.CreateSchemaProxy(itemSchema),
-		}
-	} else {
-		g.schemaBuilder.SetType(schema, field.OpenAPIType)
-	}
-
+	schema := g.buildTypeSchema(field.Type)
 	g.addFieldConstraints(schema, field)
 	return base.CreateSchemaProxy(schema)
 }
 
+// buildTypeSchema renders a type shape, without any field-level annotations.
+//
+// It recurses, so every level of a nested container keeps its own type and
+// format: map[string][]time.Time is an object whose additionalProperties is an
+// array whose items are date-time strings.
+func (g *Generator) buildTypeSchema(t *resolver.TypeRef) *base.Schema {
+	if t == nil {
+		return newSchema()
+	}
+
+	switch t.Shape {
+	case resolver.ShapeArray:
+		schema := newSchema("array")
+		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{A: g.buildTypeProxy(t.Elem)}
+		return schema
+
+	case resolver.ShapeMap:
+		schema := newSchema("object")
+		schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{A: g.buildTypeProxy(t.Elem)}
+		return schema
+
+	case resolver.ShapeObject:
+		schema := newSchema("object")
+		setObjectFields(schema, t.Fields, g.generateFieldSchema)
+		return schema
+
+	case resolver.ShapeScalar:
+		schema := newSchema(t.Type)
+		schema.Format = t.Format
+		return schema
+	}
+
+	// ShapeAny is the empty schema, which accepts any JSON value. ShapeRef is
+	// handled by the callers, ShapeTypeParam belongs to a generic template that
+	// never reaches components, and ShapeUnsupported is rejected before here.
+	return newSchema()
+}
+
+// buildTypeProxy is buildTypeSchema for a nested position, where a reference
+// has to become an actual $ref rather than a schema carrying keywords.
+func (g *Generator) buildTypeProxy(t *resolver.TypeRef) *base.SchemaProxy {
+	if t != nil && t.Shape == resolver.ShapeRef {
+		return base.CreateSchemaProxyRef(refPath(t.Ref))
+	}
+	return base.CreateSchemaProxy(g.buildTypeSchema(t))
+}
+
+// refPath is the components pointer for a schema name.
+func refPath(name string) string {
+	return "#/components/schemas/" + name
+}
+
 // generateRefSchema builds the schema for a field whose type is a named @schema.
-// A bare $ref is emitted when the field has no annotation keywords and is not nullable.
-// Otherwise sibling keywords (description, deprecated, ...) are attached: natively in
-// OpenAPI 3.1+ ($ref can carry siblings per JSON Schema 2020-12), or via an allOf
-// wrapper in 3.0 (where $ref siblings are forbidden). Nullable refs always need a
-// composition wrapper, since a $ref cannot also be typed "null".
-func (g *Generator) generateRefSchema(refPath string, field *resolver.ResolvedField) *base.SchemaProxy {
-	// Nullable refs always need a composition wrapper; a $ref cannot also be typed "null".
+// A bare $ref is emitted when the field has no annotation keywords and is not
+// nullable; otherwise sibling keywords (description, deprecated, ...) are attached.
+func (g *Generator) generateRefSchema(refPath string, field *resolver.Field) *base.SchemaProxy {
+	// A $ref cannot also be typed "null", so nullability becomes a union. oneOf
+	// rather than siblings: siblings would intersect the two, not unite them.
 	if field.Nullable {
-		wrapper := g.schemaBuilder.NewSchema()
-		if g.schemaBuilder.Is31Plus() {
-			// OpenAPI 3.1+: express null via oneOf (siblings would intersect, not union).
-			wrapper.OneOf = []*base.SchemaProxy{
-				base.CreateSchemaProxyRef(refPath),
-				base.CreateSchemaProxy(&base.Schema{Type: []string{"null"}}),
-			}
-		} else {
-			// OpenAPI 3.0: $ref cannot have siblings; wrap in allOf and mark nullable.
-			wrapper.AllOf = []*base.SchemaProxy{base.CreateSchemaProxyRef(refPath)}
+		wrapper := newSchema()
+		wrapper.OneOf = []*base.SchemaProxy{
+			base.CreateSchemaProxyRef(refPath),
+			base.CreateSchemaProxy(newSchema("null")),
 		}
 		g.addFieldConstraints(wrapper, field)
 		return base.CreateSchemaProxy(wrapper)
 	}
 
-	// Non-nullable: build the sibling keywords; addFieldConstraints is the single source
-	// of truth for which keywords exist.
-	siblings := g.schemaBuilder.NewSchema()
+	// JSON Schema 2020-12 lets $ref carry sibling keywords directly, so there is
+	// nothing to wrap. An empty siblings schema renders as a bare $ref on its own,
+	// which is why this needs no special case for unannotated fields.
+	// addFieldConstraints is the single source of truth for which keywords exist.
+	siblings := newSchema()
 	g.addFieldConstraints(siblings, field)
-
-	if g.schemaBuilder.Is31Plus() {
-		// OpenAPI 3.1+: $ref carries siblings directly (JSON Schema 2020-12). An empty
-		// siblings schema renders as a bare $ref, so no special-casing is needed.
-		return base.CreateSchemaProxyRefWithSchema(refPath, siblings)
-	}
-
-	// OpenAPI 3.0: $ref cannot have siblings. Wrap in allOf only when there is something
-	// to carry; an unannotated ref stays a bare $ref rather than a noisy allOf wrapper.
-	if reflect.DeepEqual(siblings, g.schemaBuilder.NewSchema()) {
-		return base.CreateSchemaProxyRef(refPath)
-	}
-	siblings.AllOf = []*base.SchemaProxy{base.CreateSchemaProxyRef(refPath)}
-	return base.CreateSchemaProxy(siblings)
+	return base.CreateSchemaProxyRefWithSchema(refPath, siblings)
 }
 
-// buildInlineObjectSchema builds an object schema from inline fields
-func (g *Generator) buildInlineObjectSchema(fields []*resolver.ResolvedField, schemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
-	schema := g.schemaBuilder.NewSchema()
-	g.schemaBuilder.SetType(schema, "object")
-
-	props := orderedmap.New[string, *base.SchemaProxy]()
-	var required []string
-
-	for _, field := range fields {
-		props.Set(field.Name, g.generateFieldSchemaWithRefs(field, schemas))
-		if field.Required {
-			required = append(required, field.Name)
-		}
-	}
-
-	schema.Properties = props
-	if len(required) > 0 {
-		schema.Required = required
-	}
-
-	return base.CreateSchemaProxy(schema)
-}
-
-// addFieldConstraints adds common field constraints to a schema
-func (g *Generator) addFieldConstraints(schema *base.Schema, field *resolver.ResolvedField) {
+// addFieldConstraints applies every annotation keyword a field carries.
+//
+// It is the single source of truth for which keywords exist: generateRefSchema
+// builds an empty schema, runs it through here, and emits a bare $ref when
+// nothing came out, so a keyword added here works on refs without further
+// changes.
+func (g *Generator) addFieldConstraints(schema *base.Schema, field *resolver.Field) {
 	if field.Description != "" {
 		schema.Description = field.Description
 	}
+	g.addValueConstraints(schema, field)
+}
+
+// addValueConstraints applies everything addFieldConstraints does except the
+// description.
+//
+// Parameters need the split: an OpenAPI parameter carries its own description
+// field, and repeating it inside the parameter's schema would say the same
+// thing twice in the rendered document.
+func (g *Generator) addValueConstraints(schema *base.Schema, field *resolver.Field) {
 	if field.Format != "" {
 		schema.Format = field.Format
 	}
 	if len(field.Enum) > 0 {
-		enumValues := convertEnumToYAMLNodes(field.Enum, field.OpenAPIType)
-		if field.IsArray {
-			// For arrays, enum goes inside items
+		// An array's enum constrains its items, not the array itself, so it
+		// goes inside items and is typed by the element rather than by "array".
+		if field.Type.IsArray() {
 			if schema.Items != nil && schema.Items.A != nil {
-				itemSchema, _ := schema.Items.A.BuildSchema()
-				if itemSchema != nil {
-					itemSchema.Enum = enumValues
+				if itemSchema, _ := schema.Items.A.BuildSchema(); itemSchema != nil {
+					itemSchema.Enum = convertEnumToYAMLNodes(field.Enum, field.Type.Elem.ScalarName())
 				}
 			}
 		} else {
-			schema.Enum = enumValues
+			schema.Enum = convertEnumToYAMLNodes(field.Enum, field.Type.ScalarName())
 		}
 	}
 	if field.Example != "" {
@@ -453,13 +370,13 @@ func (g *Generator) addFieldConstraints(schema *base.Schema, field *resolver.Res
 		schema.Maximum = field.Maximum
 	}
 	if field.ExclusiveMinimum != nil {
-		g.schemaBuilder.SetExclusiveMinimum(schema, *field.ExclusiveMinimum)
+		schema.ExclusiveMinimum = exclusiveBound(*field.ExclusiveMinimum)
 	}
 	if field.ExclusiveMaximum != nil {
-		g.schemaBuilder.SetExclusiveMaximum(schema, *field.ExclusiveMaximum)
+		schema.ExclusiveMaximum = exclusiveBound(*field.ExclusiveMaximum)
 	}
 	if field.Nullable {
-		g.schemaBuilder.SetNullable(schema, true)
+		markNullable(schema)
 	}
 	if field.Deprecated {
 		schema.Deprecated = &field.Deprecated
@@ -487,166 +404,14 @@ func convertEnumToYAMLNodes(values []string, openAPIType string) []*yaml.Node {
 	return result
 }
 
-// generateFieldSchema generates a schema for a field (without schema reference awareness)
-// Used for parameters and contexts where we don't have schema map
-func (g *Generator) generateFieldSchema(field *resolver.ResolvedField) *base.SchemaProxy {
-	// Handle any value (empty schema)
-	if field.IsAnyValue {
-		schema := g.schemaBuilder.NewSchema()
-		if field.Description != "" {
-			schema.Description = field.Description
-		}
-		return base.CreateSchemaProxy(schema)
-	}
-
-	// Handle anonymous structs - inline their fields
-	if len(field.InlineFields) > 0 {
-		proxy := g.buildInlineObjectSchemaSimple(field.InlineFields)
-		g.addFieldConstraints(proxy.Schema(), field)
-		return proxy
-	}
-
-	// Handle arrays of anonymous structs
-	if len(field.ItemsInlineFields) > 0 {
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, "array")
-		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-			A: g.buildInlineObjectSchemaSimple(field.ItemsInlineFields),
-		}
-		g.addFieldConstraints(schema, field)
-		return base.CreateSchemaProxy(schema)
-	}
-
-	// Handle maps of anonymous structs
-	if len(field.MapValueInlineFields) > 0 {
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, "object")
-		schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{
-			A: g.buildInlineObjectSchemaSimple(field.MapValueInlineFields),
-		}
-		g.addFieldConstraints(schema, field)
-		return base.CreateSchemaProxy(schema)
-	}
-
-	// Handle arrays
-	schema := g.schemaBuilder.NewSchema()
-	if field.IsArray {
-		g.schemaBuilder.SetType(schema, "array")
-		itemSchema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(itemSchema, field.ItemsType)
-		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-			A: base.CreateSchemaProxy(itemSchema),
-		}
-	} else {
-		g.schemaBuilder.SetType(schema, field.OpenAPIType)
-	}
-
-	g.addFieldConstraints(schema, field)
-	return base.CreateSchemaProxy(schema)
-}
-
-// buildInlineObjectSchemaSimple builds an object schema from inline fields without schema refs
-func (g *Generator) buildInlineObjectSchemaSimple(fields []*resolver.ResolvedField) *base.SchemaProxy {
-	schema := g.schemaBuilder.NewSchema()
-	g.schemaBuilder.SetType(schema, "object")
-
-	props := orderedmap.New[string, *base.SchemaProxy]()
-	var required []string
-
-	for _, field := range fields {
-		props.Set(field.Name, g.generateFieldSchema(field))
-		if field.Required {
-			required = append(required, field.Name)
-		}
-	}
-
-	schema.Properties = props
-	if len(required) > 0 {
-		schema.Required = required
-	}
-
-	return base.CreateSchemaProxy(schema)
-}
-
-// generateParameterFieldSchema generates a schema for a parameter field (excludes description)
-func (g *Generator) generateParameterFieldSchema(field *resolver.ResolvedField) *base.SchemaProxy {
-	schema := g.schemaBuilder.NewSchema()
-
-	// Handle arrays
-	if field.IsArray {
-		g.schemaBuilder.SetType(schema, "array")
-		itemSchema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(itemSchema, field.ItemsType)
-		// Add enum to items if present
-		if len(field.Enum) > 0 {
-			itemSchema.Enum = convertEnumToYAMLNodes(field.Enum, field.ItemsType)
-		}
-		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{
-			A: base.CreateSchemaProxy(itemSchema),
-		}
-	} else {
-		g.schemaBuilder.SetType(schema, field.OpenAPIType)
-		// Add enum directly
-		if len(field.Enum) > 0 {
-			schema.Enum = convertEnumToYAMLNodes(field.Enum, field.OpenAPIType)
-		}
-	}
-
-	if field.Format != "" {
-		schema.Format = field.Format
-	}
-	if field.Example != "" {
-		schema.Example = &yaml.Node{Kind: yaml.ScalarNode, Value: field.Example}
-	}
-	if field.Default != "" {
-		schema.Default = &yaml.Node{Kind: yaml.ScalarNode, Value: field.Default}
-	}
-	if field.Pattern != "" {
-		schema.Pattern = field.Pattern
-	}
-	if field.MinLength != nil {
-		val := int64(*field.MinLength)
-		schema.MinLength = &val
-	}
-	if field.MaxLength != nil {
-		val := int64(*field.MaxLength)
-		schema.MaxLength = &val
-	}
-	if field.MinItems != nil {
-		val := int64(*field.MinItems)
-		schema.MinItems = &val
-	}
-	if field.MaxItems != nil {
-		val := int64(*field.MaxItems)
-		schema.MaxItems = &val
-	}
-	if field.UniqueItems {
-		schema.UniqueItems = &field.UniqueItems
-	}
-	if field.Minimum != nil {
-		schema.Minimum = field.Minimum
-	}
-	if field.Maximum != nil {
-		schema.Maximum = field.Maximum
-	}
-	if field.ExclusiveMinimum != nil {
-		g.schemaBuilder.SetExclusiveMinimum(schema, *field.ExclusiveMinimum)
-	}
-	if field.ExclusiveMaximum != nil {
-		g.schemaBuilder.SetExclusiveMaximum(schema, *field.ExclusiveMaximum)
-	}
-	if field.Nullable {
-		g.schemaBuilder.SetNullable(schema, true)
-	}
-	if field.Deprecated {
-		schema.Deprecated = &field.Deprecated
-	}
-	if field.ReadOnly {
-		schema.ReadOnly = &field.ReadOnly
-	}
-	if field.WriteOnly {
-		schema.WriteOnly = &field.WriteOnly
-	}
+// generateParameterFieldSchema generates a schema for a parameter field.
+//
+// Parameters are scalars or arrays of scalars — never objects, never refs — so
+// this needs none of the shape handling generateFieldSchema does. The
+// description is deliberately left off: it belongs on the parameter itself.
+func (g *Generator) generateParameterFieldSchema(field *resolver.Field) *base.SchemaProxy {
+	schema := g.buildTypeSchema(field.Type)
+	g.addValueConstraints(schema, field)
 
 	return base.CreateSchemaProxy(schema)
 }
@@ -697,7 +462,7 @@ func (g *Generator) generateSecurity(security [][]*resolver.SecurityRequirement)
 }
 
 // generatePaths generates the paths section
-func (g *Generator) generatePaths(endpoints []*resolver.ResolvedEndpoint, parameters map[string]*resolver.ResolvedParameter, schemas map[string]*resolver.ResolvedSchema) *v3.Paths {
+func (g *Generator) generatePaths(endpoints []*resolver.Endpoint) *v3.Paths {
 	paths := &v3.Paths{
 		PathItems: orderedmap.New[string, *v3.PathItem](),
 	}
@@ -710,7 +475,7 @@ func (g *Generator) generatePaths(endpoints []*resolver.ResolvedEndpoint, parame
 			pathMap[endpoint.Path] = &v3.PathItem{}
 		}
 
-		operation := g.generateOperation(endpoint, parameters, schemas)
+		operation := g.generateOperation(endpoint)
 
 		// Set operation on the appropriate method
 		switch strings.ToLower(endpoint.Method) {
@@ -742,7 +507,7 @@ func (g *Generator) generatePaths(endpoints []*resolver.ResolvedEndpoint, parame
 }
 
 // generateOperation generates an operation
-func (g *Generator) generateOperation(endpoint *resolver.ResolvedEndpoint, parameterMap map[string]*resolver.ResolvedParameter, schemas map[string]*resolver.ResolvedSchema) *v3.Operation {
+func (g *Generator) generateOperation(endpoint *resolver.Endpoint) *v3.Operation {
 	op := &v3.Operation{}
 
 	if endpoint.Summary != "" {
@@ -761,70 +526,15 @@ func (g *Generator) generateOperation(endpoint *resolver.ResolvedEndpoint, param
 		op.Tags = endpoint.Tags
 	}
 
-	// Collect parameters
-	var params []*v3.Parameter
+	// The resolver already merged and ordered these, so emission is a
+	// straight walk.
+	op.Parameters = g.generateParameters(endpoint.Parameters)
 
-	// Path parameters
-	for _, paramRef := range endpoint.PathParams {
-		if p, ok := parameterMap[paramRef.Name]; ok {
-			params = append(params, g.generateParameters(p, "path")...)
-		}
-	}
-
-	// Query parameters
-	for _, paramRef := range endpoint.QueryParams {
-		if p, ok := parameterMap[paramRef.Name]; ok {
-			params = append(params, g.generateParameters(p, "query")...)
-		}
-	}
-
-	// Header parameters
-	for _, paramRef := range endpoint.HeaderParams {
-		if p, ok := parameterMap[paramRef.Name]; ok {
-			params = append(params, g.generateParameters(p, "header")...)
-		}
-	}
-
-	// Cookie parameters
-	for _, paramRef := range endpoint.CookieParams {
-		if p, ok := parameterMap[paramRef.Name]; ok {
-			params = append(params, g.generateParameters(p, "cookie")...)
-		}
-	}
-
-	// Inline path parameters
-	if endpoint.InlinePathParams != nil {
-		params = append(params, g.generateInlineParameters(endpoint.InlinePathParams.Fields, "path")...)
-	}
-
-	// Inline query parameters
-	if endpoint.InlineQueryParams != nil {
-		params = append(params, g.generateInlineParameters(endpoint.InlineQueryParams.Fields, "query")...)
-	}
-
-	// Inline header parameters
-	if endpoint.InlineHeaderParams != nil {
-		params = append(params, g.generateInlineParameters(endpoint.InlineHeaderParams.Fields, "header")...)
-	}
-
-	// Inline cookie parameters
-	if endpoint.InlineCookieParams != nil {
-		params = append(params, g.generateInlineParameters(endpoint.InlineCookieParams.Fields, "cookie")...)
-	}
-
-	if len(params) > 0 {
-		op.Parameters = params
-	}
-
-	// Add request body
 	if endpoint.Request != nil {
-		op.RequestBody = g.generateRequestBody(endpoint.Request, schemas)
-	} else if endpoint.InlineRequest != nil {
-		op.RequestBody = g.generateInlineRequestBody(endpoint.InlineRequest, schemas)
+		op.RequestBody = g.generateRequestBody(endpoint.Request)
 	}
 
-	// Add responses
-	op.Responses = g.generateResponsesWithInline(endpoint.Responses, endpoint.InlineResponses, schemas)
+	op.Responses = g.generateResponses(endpoint.Responses)
 
 	// Add security
 	if endpoint.Auth != "" {
@@ -843,14 +553,21 @@ func (g *Generator) generateOperation(endpoint *resolver.ResolvedEndpoint, param
 	return op
 }
 
-// generateParameters generates parameters from a parameter struct
-func (g *Generator) generateParameters(param *resolver.ResolvedParameter, in string) []*v3.Parameter {
-	params := make([]*v3.Parameter, 0, len(param.Fields))
+// generateParameters renders the operation's parameters in the order the
+// resolver put them in. Returns nil when there are none, so the key stays out
+// of the document.
+func (g *Generator) generateParameters(parameters []*resolver.Parameter) []*v3.Parameter {
+	if len(parameters) == 0 {
+		return nil
+	}
 
-	for _, field := range param.Fields {
+	params := make([]*v3.Parameter, 0, len(parameters))
+	for _, param := range parameters {
+		field := param.Field
+
 		p := &v3.Parameter{
 			Name:        field.Name,
-			In:          in,
+			In:          param.In,
 			Description: field.Description,
 			Required:    &field.Required,
 			Schema:      g.generateParameterFieldSchema(field),
@@ -866,277 +583,183 @@ func (g *Generator) generateParameters(param *resolver.ResolvedParameter, in str
 	return params
 }
 
-// generateInlineParameters generates parameters from inline struct fields
-func (g *Generator) generateInlineParameters(fields []*resolver.ResolvedField, in string) []*v3.Parameter {
-	params := make([]*v3.Parameter, 0, len(fields))
-
-	for _, field := range fields {
-		p := &v3.Parameter{
-			Name:        field.Name,
-			In:          in,
-			Description: field.Description,
-			Required:    &field.Required,
-			Schema:      g.generateParameterFieldSchema(field),
-		}
-
-		if field.Deprecated {
-			p.Deprecated = true
-		}
-
-		params = append(params, p)
+// generateRequestBody generates a request body, from either @request form.
+//
+// Nil when there is no schema to carry, so the operation has no requestBody key
+// at all. It used to return an empty &v3.RequestBody{}, which rendered as
+// "requestBody: {}" -- a Request Body Object with no content, which the spec
+// does not allow. The validator rejects the annotation that got here, so this is
+// the belt to its braces rather than the only guard.
+func (g *Generator) generateRequestBody(request *resolver.RequestBody) *v3.RequestBody {
+	schema := g.bodySchema(request.Body, request.Inline)
+	if schema == nil {
+		return nil
 	}
-
-	return params
-}
-
-// generateRequestBody generates a request body
-func (g *Generator) generateRequestBody(request *resolver.ResolvedRequestBody, schemas map[string]*resolver.ResolvedSchema) *v3.RequestBody {
-	if request.Body == nil {
-		return &v3.RequestBody{}
-	}
-
-	content := orderedmap.New[string, *v3.MediaType]()
-	content.Set(request.ContentType, &v3.MediaType{
-		Schema: g.generateBodySchema(request.Body, schemas),
-	})
 
 	return &v3.RequestBody{
-		Content:  content,
+		Content:  mediaContent(request.ContentType, schema),
 		Required: &request.Required,
 	}
 }
 
-// generateInlineRequestBody generates a request body from an inline struct
-func (g *Generator) generateInlineRequestBody(inline *resolver.ResolvedInlineBody, schemas map[string]*resolver.ResolvedSchema) *v3.RequestBody {
-	if inline == nil || len(inline.Fields) == 0 {
-		return &v3.RequestBody{}
-	}
-
-	content := orderedmap.New[string, *v3.MediaType]()
-
-	var schemaProxy *base.SchemaProxy
-	if inline.Bind != nil {
-		schemaProxy = g.generateInlineWrappedSchema(inline, schemas)
-	} else {
-		schemaProxy = g.generateInlineSchema(inline.Fields)
-	}
-
-	contentType := inline.ContentType
-	if contentType == "" {
-		contentType = "application/json"
-	}
-	content.Set(contentType, &v3.MediaType{Schema: schemaProxy})
-
-	required := true
-	return &v3.RequestBody{
-		Content:  content,
-		Required: &required,
-	}
-}
-
-// generateResponsesWithInline generates responses merging explicit and inline definitions
-func (g *Generator) generateResponsesWithInline(responses map[string]*resolver.ResolvedResponse, inlineResponses map[string]*resolver.ResolvedInlineBody, schemas map[string]*resolver.ResolvedSchema) *v3.Responses {
+// generateResponses renders the operation's responses in the order the resolver
+// put them in.
+func (g *Generator) generateResponses(responses []*resolver.Response) *v3.Responses {
 	result := &v3.Responses{
 		Codes: orderedmap.New[string, *v3.Response](),
 	}
 
-	// Add explicit responses
-	for _, statusCode := range slices.Sorted(maps.Keys(responses)) {
-		response := responses[statusCode]
+	for _, response := range responses {
 		resp := &v3.Response{
 			Description: response.Description,
+			Headers:     generateResponseHeaders(response.Headers),
 		}
 
-		// Add response headers if present
-		if len(response.Headers) > 0 {
-			headers := orderedmap.New[string, *v3.Header]()
-			for _, headerParam := range response.Headers {
-				for _, field := range headerParam.Fields {
-					headerSchema := g.schemaBuilder.NewSchema()
-					g.schemaBuilder.SetType(headerSchema, field.OpenAPIType)
-					if field.Format != "" {
-						headerSchema.Format = field.Format
-					}
-
-					header := &v3.Header{
-						Schema:      base.CreateSchemaProxy(headerSchema),
-						Description: field.Description,
-					}
-					headers.Set(field.Name, header)
-				}
-			}
-			resp.Headers = headers
+		if schema := g.bodySchema(response.Body, response.Inline); schema != nil && response.ContentType != "" {
+			resp.Content = mediaContent(response.ContentType, schema)
 		}
 
-		if response.Body != nil && response.Body.Schema != "" && response.ContentType != "" {
-			content := orderedmap.New[string, *v3.MediaType]()
-			content.Set(response.ContentType, &v3.MediaType{
-				Schema: g.generateBodySchema(response.Body, schemas),
-			})
-			resp.Content = content
-		}
-
-		result.Codes.Set(statusCode, resp)
-	}
-
-	// Add inline responses (don't override explicit ones)
-	for _, statusCode := range slices.Sorted(maps.Keys(inlineResponses)) {
-		inline := inlineResponses[statusCode]
-		if result.Codes.GetOrZero(statusCode) != nil {
-			continue // Skip if explicit response already exists
-		}
-
-		description := inline.Description
-		if description == "" {
-			description = fmt.Sprintf("Response for status %s", statusCode)
-		}
-
-		resp := &v3.Response{
-			Description: description,
-		}
-
-		// Add inline response headers if present
-		if len(inline.Headers) > 0 {
-			headers := orderedmap.New[string, *v3.Header]()
-			for _, headerParam := range inline.Headers {
-				for _, field := range headerParam.Fields {
-					headerSchema := g.schemaBuilder.NewSchema()
-					g.schemaBuilder.SetType(headerSchema, field.OpenAPIType)
-					if field.Format != "" {
-						headerSchema.Format = field.Format
-					}
-
-					header := &v3.Header{
-						Schema:      base.CreateSchemaProxy(headerSchema),
-						Description: field.Description,
-					}
-					headers.Set(field.Name, header)
-				}
-			}
-			resp.Headers = headers
-		}
-
-		if len(inline.Fields) > 0 {
-			content := orderedmap.New[string, *v3.MediaType]()
-
-			var schemaProxy *base.SchemaProxy
-			if inline.Bind != nil {
-				schemaProxy = g.generateInlineWrappedSchema(inline, schemas)
-			} else {
-				schemaProxy = g.generateInlineSchema(inline.Fields)
-			}
-
-			contentType := inline.ContentType
-			if contentType == "" {
-				contentType = "application/json"
-			}
-			content.Set(contentType, &v3.MediaType{Schema: schemaProxy})
-			resp.Content = content
-		}
-
-		result.Codes.Set(statusCode, resp)
+		result.Codes.Set(response.StatusCode, resp)
 	}
 
 	return result
 }
 
-// generateBodySchema generates schema for a body
-func (g *Generator) generateBodySchema(body *resolver.ResolvedBody, schemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
-	if body.Bind != nil {
-		return g.generateWrappedSchema(body, schemas)
+// bodySchema renders whichever of the two body forms is present, or nil when a
+// message carries no body at all — a 204, or an @endpoint with no @request.
+func (g *Generator) bodySchema(named *resolver.Body, inline *resolver.InlineBody) *base.SchemaProxy {
+	switch {
+	case named != nil && named.Schema != "":
+		return g.generateBodySchema(named)
+	case inline != nil && len(inline.Fields) > 0:
+		return g.generateInlineBodySchema(inline)
 	}
-	return g.generateSchemaRef(body.Schema, body.IsArray, body.IsMap, body.ElementType)
+	return nil
+}
+
+// generateResponseHeaders renders a response's header parameters. Returns nil
+// when there are none, so the caller can assign unconditionally and still leave
+// the field absent from the output.
+func generateResponseHeaders(params []*resolver.ParameterStruct) *orderedmap.Map[string, *v3.Header] {
+	if len(params) == 0 {
+		return nil
+	}
+
+	headers := orderedmap.New[string, *v3.Header]()
+	for _, param := range params {
+		for _, field := range param.Fields {
+			schema := newSchema(field.Type.ScalarName())
+			if field.Format != "" {
+				schema.Format = field.Format
+			}
+
+			headers.Set(field.Name, &v3.Header{
+				Schema:      base.CreateSchemaProxy(schema),
+				Description: field.Description,
+			})
+		}
+	}
+
+	return headers
+}
+
+// mediaContent wraps a single schema as a one-entry content map, which is the
+// only shape specgen emits — there is no multi-content-type support.
+func mediaContent(contentType string, schema *base.SchemaProxy) *orderedmap.Map[string, *v3.MediaType] {
+	content := orderedmap.New[string, *v3.MediaType]()
+	content.Set(contentType, &v3.MediaType{Schema: schema})
+	return content
+}
+
+// generateInlineBodySchema renders an in-function struct as a body, wrapped in
+// its @bind envelope when it has one.
+func (g *Generator) generateInlineBodySchema(inline *resolver.InlineBody) *base.SchemaProxy {
+	if inline.Bind != nil {
+		return g.generateInlineWrappedSchema(inline)
+	}
+	return g.generateInlineSchema(inline.Fields)
+}
+
+// generateBodySchema generates schema for a body
+func (g *Generator) generateBodySchema(body *resolver.Body) *base.SchemaProxy {
+	if body.Bind != nil {
+		return g.generateWrappedSchema(body)
+	}
+	return g.buildTypeProxy(body.Type)
 }
 
 // generateWrappedSchema generates a schema where the body is wrapped in an envelope
-func (g *Generator) generateWrappedSchema(body *resolver.ResolvedBody, schemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
-	wrapperSchema := body.Bind.WrapperSchema
-	if wrapperSchema == nil {
-		return g.generateSchemaRef(body.Schema, body.IsArray, body.IsMap, body.ElementType)
+func (g *Generator) generateWrappedSchema(body *resolver.Body) *base.SchemaProxy {
+	bodySchema := func() *base.SchemaProxy {
+		return g.buildTypeProxy(body.Type)
 	}
 
-	schema := g.schemaBuilder.NewSchema()
-	g.schemaBuilder.SetType(schema, "object")
-
-	if wrapperSchema.Description != "" {
-		schema.Description = wrapperSchema.Description
+	if body.Bind.WrapperSchema == nil {
+		return bodySchema()
 	}
 
-	props := orderedmap.New[string, *base.SchemaProxy]()
-	var required []string
-
-	for _, field := range wrapperSchema.Fields {
-		if field.GoName == body.Bind.Field {
-			props.Set(field.Name, g.generateSchemaRef(body.Schema, body.IsArray, body.IsMap, body.ElementType))
-		} else {
-			props.Set(field.Name, g.generateFieldSchema(field))
-		}
-
-		if field.Required {
-			required = append(required, field.Name)
-		}
-	}
-
-	schema.Properties = props
-	if len(required) > 0 {
-		schema.Required = required
-	}
-
-	return base.CreateSchemaProxy(schema)
+	return g.wrapInEnvelope(body.Bind.WrapperSchema, body.Bind.Field, bodySchema)
 }
 
 // generateInlineWrappedSchema wraps inline struct fields in a wrapper schema
-func (g *Generator) generateInlineWrappedSchema(inline *resolver.ResolvedInlineBody, schemas map[string]*resolver.ResolvedSchema) *base.SchemaProxy {
-	if inline.Bind == nil || inline.Bind.WrapperSchema == nil {
+func (g *Generator) generateInlineWrappedSchema(inline *resolver.InlineBody) *base.SchemaProxy {
+	bodySchema := func() *base.SchemaProxy {
 		return g.generateInlineSchema(inline.Fields)
 	}
 
-	wrapperSchema := inline.Bind.WrapperSchema
-
-	schema := g.schemaBuilder.NewSchema()
-	g.schemaBuilder.SetType(schema, "object")
-
-	if wrapperSchema.Description != "" {
-		schema.Description = wrapperSchema.Description
+	if inline.Bind == nil || inline.Bind.WrapperSchema == nil {
+		return bodySchema()
 	}
 
-	props := orderedmap.New[string, *base.SchemaProxy]()
-	var required []string
+	return g.wrapInEnvelope(inline.Bind.WrapperSchema, inline.Bind.Field, bodySchema)
+}
 
-	for _, field := range wrapperSchema.Fields {
-		if field.GoName == inline.Bind.Field {
-			props.Set(field.Name, g.generateInlineSchema(inline.Fields))
-		} else {
-			props.Set(field.Name, g.generateFieldSchema(field))
+// wrapInEnvelope renders a @bind wrapper: the wrapper schema inlined, with the
+// bound field replaced by the body. Every other field renders normally.
+//
+// The two callers differ only in what the body is — a named schema reference or
+// an inline struct — which is why it arrives as a function.
+func (g *Generator) wrapInEnvelope(wrapper *resolver.Schema, boundField string, body func() *base.SchemaProxy) *base.SchemaProxy {
+	schema := newSchema("object")
+
+	if wrapper.Description != "" {
+		schema.Description = wrapper.Description
+	}
+
+	setObjectFields(schema, wrapper.Fields, func(field *resolver.Field) *base.SchemaProxy {
+		if field.GoName == boundField {
+			return body()
 		}
-
-		if field.Required {
-			required = append(required, field.Name)
-		}
-	}
-
-	schema.Properties = props
-	if len(required) > 0 {
-		schema.Required = required
-	}
+		return g.generateFieldSchema(field)
+	})
 
 	return base.CreateSchemaProxy(schema)
 }
 
 // generateInlineSchema generates an object schema from inline struct fields
-func (g *Generator) generateInlineSchema(fields []*resolver.ResolvedField) *base.SchemaProxy {
-	schema := g.schemaBuilder.NewSchema()
-	g.schemaBuilder.SetType(schema, "object")
+func (g *Generator) generateInlineSchema(fields []*resolver.Field) *base.SchemaProxy {
+	schema := newSchema("object")
+	setObjectFields(schema, fields, g.generateFieldSchema)
+	return base.CreateSchemaProxy(schema)
+}
 
+// setObjectFields fills in an object schema's properties and required list.
+// fieldSchema renders one field, which is what lets a @bind wrapper substitute
+// the body for its bound field while every other field renders normally.
+//
+// Property order is the field order it is given, which is Go declaration order
+// all the way back to the resolver. Required is emitted only when non-empty, so
+// an all-optional object has no required key rather than an empty list.
+func setObjectFields(schema *base.Schema, fields []*resolver.Field, fieldSchema func(*resolver.Field) *base.SchemaProxy) {
 	if len(fields) == 0 {
-		return base.CreateSchemaProxy(schema)
+		return
 	}
 
 	props := orderedmap.New[string, *base.SchemaProxy]()
 	var required []string
 
 	for _, field := range fields {
-		props.Set(field.Name, g.generateFieldSchema(field))
+		props.Set(field.Name, fieldSchema(field))
 		if field.Required {
 			required = append(required, field.Name)
 		}
@@ -1145,94 +768,5 @@ func (g *Generator) generateInlineSchema(fields []*resolver.ResolvedField) *base
 	schema.Properties = props
 	if len(required) > 0 {
 		schema.Required = required
-	}
-
-	return base.CreateSchemaProxy(schema)
-}
-
-// generateSchemaRef generates a schema reference (handles arrays, maps, and simple refs)
-func (g *Generator) generateSchemaRef(schemaName string, isArray bool, isMap bool, elementType string) *base.SchemaProxy {
-	if isArray {
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, "array")
-
-		var itemsProxy *base.SchemaProxy
-		if isPrimitive(elementType) {
-			itemSchema := g.schemaBuilder.NewSchema()
-			g.schemaBuilder.SetType(itemSchema, goTypeToPrimitive(elementType))
-			itemsProxy = base.CreateSchemaProxy(itemSchema)
-		} else {
-			itemsProxy = base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", elementType))
-		}
-		schema.Items = &base.DynamicValue[*base.SchemaProxy, bool]{A: itemsProxy}
-		return base.CreateSchemaProxy(schema)
-	}
-
-	if isMap {
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, "object")
-
-		var propsProxy *base.SchemaProxy
-		if isPrimitive(elementType) {
-			propSchema := g.schemaBuilder.NewSchema()
-			g.schemaBuilder.SetType(propSchema, goTypeToPrimitive(elementType))
-			propsProxy = base.CreateSchemaProxy(propSchema)
-		} else {
-			propsProxy = base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", elementType))
-		}
-		schema.AdditionalProperties = &base.DynamicValue[*base.SchemaProxy, bool]{A: propsProxy}
-		return base.CreateSchemaProxy(schema)
-	}
-
-	// Simple type or schema reference
-	if isPrimitive(elementType) {
-		schema := g.schemaBuilder.NewSchema()
-		g.schemaBuilder.SetType(schema, goTypeToPrimitive(elementType))
-		return base.CreateSchemaProxy(schema)
-	}
-
-	return base.CreateSchemaProxyRef(fmt.Sprintf("#/components/schemas/%s", elementType))
-}
-
-// extractTypeName extracts the simple type name from a Go type string
-func extractTypeName(goType string) string {
-	if idx := strings.LastIndex(goType, "."); idx >= 0 {
-		return goType[idx+1:]
-	}
-	return goType
-}
-
-// isSchemaReference checks if a Go type corresponds to a known schema
-func isSchemaReference(goType string, schemas map[string]*resolver.ResolvedSchema) bool {
-	typeName := extractTypeName(goType)
-	if schema, ok := schemas[typeName]; ok {
-		return !schema.IsGeneric
-	}
-	return false
-}
-
-// isPrimitive checks if a type is a Go primitive
-func isPrimitive(typeName string) bool {
-	primitives := map[string]bool{
-		"string": true, "int": true, "int8": true, "int16": true, "int32": true, "int64": true,
-		"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
-		"float32": true, "float64": true, "bool": true, "byte": true,
-	}
-	return primitives[typeName]
-}
-
-// goTypeToPrimitive converts Go type to OpenAPI primitive type
-func goTypeToPrimitive(typeName string) string {
-	switch typeName {
-	case "string":
-		return "string"
-	case "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64":
-		return "integer"
-	case "float32", "float64":
-		return "number"
-	case "bool":
-		return "boolean"
-	default:
-		return "string"
 	}
 }

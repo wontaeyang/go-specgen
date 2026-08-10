@@ -1,0 +1,1 @@
+validate: @endpoint[GET /widgets]: endpoint uses undefined tag: inventory (define it at API level with @tag)

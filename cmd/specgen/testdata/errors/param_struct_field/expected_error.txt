@@ -1,0 +1,4 @@
+validate: 2 validation errors:
+  1. @query[AreaQuery].Origin: query parameters must be a scalar or a list of scalars, but Origin is the schema Coords
+  2. @query[AreaQuery].Window: query parameters must be a scalar or a list of scalars, but Window is a struct (DateRange) with no @schema annotation
+

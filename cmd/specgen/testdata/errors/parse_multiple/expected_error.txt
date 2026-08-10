@@ -1,0 +1,6 @@
+parse: 4 parse errors:
+  1. @schema[AlphaGadget]: unknown annotation @bogusStructRule in @schema
+  2. @endpoint[ListThings]: unknown annotation @bogusEndpointRule in @endpoint
+  3. @field[ZebraWidget.Code]: unknown annotation @multipleOf in @field
+  4. @field[ZebraWidget.Size]: unknown annotation @multipleOf in @field
+

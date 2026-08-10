@@ -2,106 +2,211 @@ package parser
 
 import (
 	"fmt"
+	"log"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
-	"github.com/wontaeyang/go-specgen/pkg/schema"
+	"github.com/wontaeyang/go-specgen/pkg/annotation"
+	"github.com/wontaeyang/go-specgen/pkg/specerr"
 )
 
-// Parser orchestrates the parsing of a Go package into a ParsedPackage
-type Parser struct {
-	packagePath string
-	comments    *PackageComments
-}
-
-// NewParser creates a new parser for the given package path
-func NewParser(packagePath string) *Parser {
-	return &Parser{
-		packagePath: packagePath,
-	}
-}
-
-// Comments returns the extracted package comments
-// This should be called after Parse() to access inline declarations and the loaded package
-func (p *Parser) Comments() *PackageComments {
-	return p.comments
-}
-
-// Parse parses the package and returns a ParsedPackage
-func (p *Parser) Parse() (*ParsedPackage, error) {
-	// Step 1: Extract comments from AST
-	comments, err := ExtractComments(p.packagePath)
+// Parse reads every annotation in a Go package and returns the result.
+//
+// The returned *Package is the parser's entire output: no comment side channel,
+// no second pass. It carries the loaded *packages.Package too, so the resolver
+// works from the same type identities the parser saw rather than loading the
+// package a second time.
+func Parse(packagePath string) (*Package, error) {
+	comments, err := ExtractComments(packagePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract comments: %w", err)
 	}
-	p.comments = comments
 
-	result := &ParsedPackage{
+	p := &parser{comments: comments, errs: specerr.List{Stage: "parse"}}
+	return p.parse()
+}
+
+// parser holds the comment scan while the annotation passes run over it.
+type parser struct {
+	comments *PackageComments
+	errs     specerr.List
+}
+
+// parse runs every annotation pass and reports what all of them found.
+//
+// The passes accumulate rather than returning at the first failure, and they do
+// it per annotation, not per declaration: every bad @schema, @endpoint and
+// @field in the package is reported in one run. Annotating a package for the
+// first time is the case this is for -- fifteen structs and a guess at the
+// syntax should not take fifteen runs, each costing a full package load, to
+// work through, and a syntax misunderstanding repeated on every field of a
+// struct should not take one run per field either.
+//
+// Every pass runs even when an earlier one failed, which is safe because no
+// pass reports on state an earlier pass produced: result.API is written and
+// never read again, parseStructFields only assigns fields to entries that
+// already exist, and resolveSchemaAliases treats every missing piece as a
+// reason to skip rather than to complain. Adding an error to a later pass means
+// checking that property still holds, or the second run of a broken package
+// starts inventing problems that follow from the first.
+func (p *parser) parse() (*Package, error) {
+	comments := p.comments
+
+	result := &Package{
 		PackageName: comments.Name,
+		Pkg:         comments.Pkg,
+		FuncInlines: comments.FuncInlines,
 		Schemas:     make(map[string]*Schema),
 		Parameters:  make(map[string]*Parameter),
 		Endpoints:   make([]*Endpoint, 0),
 	}
 
-	// Step 2: Parse @api annotation
-	if err := p.parseAPI(result); err != nil {
-		return nil, fmt.Errorf("failed to parse @api: %w", err)
-	}
+	// Runs first so a misplaced or misspelled annotation is reported against
+	// the declaration that carries it, before the passes that would each pass
+	// over it in silence.
+	p.checkDeclarationAnnotations()
 
-	// Step 3: Parse @schema annotations
-	if err := p.parseSchemas(result); err != nil {
-		return nil, fmt.Errorf("failed to parse schemas: %w", err)
-	}
+	p.parseAPI(result)
+	p.parseSchemas(result)
 
-	// Step 4: Parse parameter structs (@path, @query, @header, @cookie)
-	if err := p.parseParameters(result); err != nil {
-		return nil, fmt.Errorf("failed to parse parameters: %w", err)
-	}
+	// Parameter structs: @path, @query, @header, @cookie
+	p.parseParameters(result)
+	p.parseEndpoints(result)
 
-	// Step 5: Parse @endpoint annotations
-	if err := p.parseEndpoints(result); err != nil {
-		return nil, fmt.Errorf("failed to parse endpoints: %w", err)
-	}
+	// @field annotations on every struct that has them. Runs after the passes
+	// that discover those structs.
+	p.parseStructFields(result)
 
-	// Step 6: Parse @field annotations on every struct that has them —
-	// @schema structs and inline var structs both, via one shared path.
-	if err := p.parseStructFields(result); err != nil {
-		return nil, fmt.Errorf("failed to parse struct fields: %w", err)
-	}
+	// Type-alias schemas (generic instantiations). Runs after parseStructFields
+	// so aliases copy already-populated Fields from their base.
+	p.resolveSchemaAliases(result)
 
-	// Step 7: Resolve type-alias schemas (generic instantiations). Runs after
-	// parseStructFields so aliases copy already-populated Fields from their base.
-	if err := p.resolveSchemaAliases(result); err != nil {
-		return nil, fmt.Errorf("failed to resolve schema aliases: %w", err)
+	if err := p.errs.Err(); err != nil {
+		return nil, err
 	}
 
 	return result, nil
 }
 
-// parseStructFields is the single entry point for @field parsing. It iterates
-// every source of struct field comments — @schema structs and inline var structs
-// declared in handler bodies — and populates their Fields via parseFieldComments.
-// There is no separate "inline field parsing"; discovery differs by source, but
-// the parsing itself is identical for both.
-func (p *Parser) parseStructFields(result *ParsedPackage) error {
-	// @schema structs
-	for structName, s := range result.Schemas {
-		fieldComments, ok := p.comments.FieldComments[structName]
-		if !ok {
+// checkDeclarationAnnotations reports doc comments that open with a name the
+// declaration cannot carry.
+//
+// Nothing else asks this question. parseChildren checks every name written
+// *inside* a block against the grammar, but the name that opens a comment is
+// only ever compared for equality against the one annotation each pass is
+// looking for -- parseSchemas asks "is this @schema?", parseParameters asks "is
+// this @path?", and a comment that is neither is simply not theirs. So
+// @endpoin, matching none of them, used to cost a whole operation in silence.
+//
+// The two outcomes differ because the mistakes do. A name the grammar defines
+// somewhere is unambiguously an annotation in the wrong place, so it fails. A
+// name the grammar has never heard of cannot be told apart from prose -- an
+// "@author Bob" in a package that never asked specgen for an opinion looks
+// exactly like a typo -- so it is reported and the run continues. Write \@ for
+// a doc comment that really does begin a line with @.
+func (p *parser) checkDeclarationAnnotations() {
+	for _, name := range slices.Sorted(maps.Keys(p.comments.StructComments)) {
+		// A type declared inside a handler is an in-function declaration, and
+		// extractFuncInlines has already had its say about it.
+		if info := p.comments.TypeInfo[name]; info != nil && info.Local {
 			continue
 		}
-		fields, err := p.parseFieldComments(fieldComments, structName)
-		if err != nil {
-			return err
+		p.checkDeclarationAnnotation(annotation.OnType, name, p.comments.StructComments[name])
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(p.comments.FunctionComments)) {
+		p.checkDeclarationAnnotation(annotation.OnFunc, name, p.comments.FunctionComments[name])
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(p.comments.FieldComments)) {
+		p.checkFieldAnnotations(name, p.comments.FieldComments[name])
+	}
+}
+
+// checkFieldAnnotations walks a struct's field comments, and the comments on
+// the fields of any anonymous struct nested in them, the way
+// harvestFieldComments collected them.
+func (p *parser) checkFieldAnnotations(subject string, fields map[string]*FieldComments) {
+	for _, name := range slices.Sorted(maps.Keys(fields)) {
+		field := fields[name]
+		p.checkDeclarationAnnotation(annotation.OnField, subject+"."+name, field.Comment)
+
+		if field.Fields != nil {
+			p.checkFieldAnnotations(subject+"."+name, field.Fields)
 		}
-		s.Fields = fields
+	}
+}
+
+// checkDeclarationAnnotation applies the rule above to one comment.
+func (p *parser) checkDeclarationAnnotation(target annotation.Target, name string, comment *CommentBlock) {
+	valid := annotation.WrittenOn(target)
+	// Claimed by an annotation that belongs here, so there is nothing to
+	// report -- and the question is whether any line claims it, not whether the
+	// first one does. A doc comment is free to discuss an annotation in prose
+	// before writing the real one: testdata/errors/brace_in_value opens by
+	// explaining @pattern and declares @schema four lines further down.
+	for _, valid := range valid {
+		if comment.HasAnnotation(valid) {
+			return
+		}
+	}
+
+	// Nothing claimed it. Whatever it opens with is what the user meant to
+	// annotate it with.
+	written := firstAnnotationName(comment)
+	if written == "" {
+		return
+	}
+
+	subject := target.String() + " " + name
+
+	if annotation.IsKnown(written) {
+		p.errs.Addf(subject, "%s cannot annotate a %s; valid here: %s",
+			written, target, strings.Join(valid, ", "))
+		return
+	}
+
+	log.Printf("%s: %s is not an annotation; it was skipped", subject, written)
+}
+
+// parseStructFields is the single entry point for @field parsing. It visits
+// every source of struct field comments — @schema structs, parameter structs,
+// and inline var structs declared in handler bodies — and populates their
+// Fields via parseFieldComments. There is no separate "inline field parsing";
+// discovery differs by source, but the parsing itself is identical for all.
+//
+// Maps are visited in sorted order so that when several structs have bad
+// annotations, they are reported in the same order every run.
+//
+// Nothing here stops early. Every struct is visited and, inside each, every
+// field -- so a package where the same @field mistake was made twenty times
+// says so twenty times, in one run.
+func (p *parser) parseStructFields(result *Package) {
+	// Every struct type in the package, not only the annotated ones. An
+	// embedded struct contributes its fields to whatever embeds it, and it
+	// carries its own @field annotations along with them, whether or not it is
+	// a @schema in its own right.
+	result.StructFields = make(map[string][]*Field, len(p.comments.FieldComments))
+	for _, structName := range slices.Sorted(maps.Keys(p.comments.FieldComments)) {
+		result.StructFields[structName] = p.parseFieldComments(p.comments.FieldComments[structName], structName)
+	}
+
+	for name, schema := range result.Schemas {
+		schema.Fields = result.StructFields[name]
+	}
+	for name, param := range result.Parameters {
+		param.Fields = result.StructFields[name]
 	}
 
 	// Inline var structs declared in function bodies
-	for funcName, inlines := range p.comments.FuncInlines {
+	for _, funcName := range slices.Sorted(maps.Keys(p.comments.FuncInlines)) {
+		inlines := p.comments.FuncInlines[funcName]
 		if inlines == nil {
 			continue
 		}
+
 		var structs []*InlineStructInfo
 		structs = append(structs, inlines.Query...)
 		structs = append(structs, inlines.Path...)
@@ -110,77 +215,131 @@ func (p *Parser) parseStructFields(result *ParsedPackage) error {
 		if inlines.Request != nil {
 			structs = append(structs, inlines.Request)
 		}
-		for _, resp := range inlines.Responses {
-			structs = append(structs, resp)
+		for _, status := range slices.Sorted(maps.Keys(inlines.Responses)) {
+			structs = append(structs, inlines.Responses[status])
 		}
+
 		for _, info := range structs {
-			fields, err := p.parseFieldComments(info.FieldComments, funcName+"."+info.VarName)
-			if err != nil {
-				return err
-			}
-			info.Fields = fields
+			info.Fields = p.parseFieldComments(info.FieldComments, funcName+"."+info.VarName)
 		}
 	}
-
-	return nil
 }
 
 // parseFieldComments parses @field annotations from a map of per-field comment
-// blocks into *Field values. Single source of truth for @field parsing.
-func (p *Parser) parseFieldComments(fieldComments map[string]*CommentBlock, context string) ([]*Field, error) {
+// blocks into *Field values. Single source of truth for @field parsing, used by
+// @schema structs, parameter structs, and in-function var structs alike.
+//
+// Field order here does not reach the output — the resolver walks the Go struct
+// in declaration order and looks each field's annotation up by name. Sorting is
+// for the error path: it fixes the order bad fields are reported in.
+//
+// Every field is parsed, including the ones after a failure. Misunderstanding
+// the @field syntax tends to produce the same mistake on every field of a
+// struct, so stopping at the first would report one of five identical problems
+// and hide the rest -- the exact case where being told everything at once is
+// worth the most.
+//
+// A field that failed is left out of the returned slice, which is safe because
+// the pipeline stops at the end of this stage: a partial field list is never
+// generated from, only discarded.
+func (p *parser) parseFieldComments(fieldComments map[string]*FieldComments, context string) []*Field {
 	var fields []*Field
-	fieldNode := schema.AnnotationSchema.GetChild("@field")
 
-	for fieldName, fieldComment := range fieldComments {
-		if fieldComment == nil || !fieldComment.HasAnnotation("@field") {
+	for _, fieldName := range slices.Sorted(maps.Keys(fieldComments)) {
+		harvested := fieldComments[fieldName]
+		if harvested == nil {
 			continue
 		}
-		fieldLines := fieldComment.GetAnnotationLines()
 
-		var parsedField *ParsedAnnotation
-		var err error
-		if IsInlineFormat(fieldLines) {
-			parsedField, err = ParseInlineAnnotation(fieldLines[0], "@field", fieldNode)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse inline @field for %s.%s: %w", context, fieldName, err)
-			}
-		} else {
-			parsedField, err = ParseAnnotationBlock(fieldLines, "@field", fieldNode)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse @field for %s.%s: %w", context, fieldName, err)
-			}
-		}
+		// A field's own annotation, and the annotations on the fields of its
+		// type when that type is an anonymous struct. Either may be absent: a
+		// field can carry an @field with no nested struct, or an inline struct
+		// whose own field is unannotated.
+		nested := p.parseFieldComments(harvested.Fields, context+"."+fieldName)
 
-		field, err := p.convertParsedField(fieldName, parsedField)
+		field, err := parseFieldAnnotation(fieldName, harvested.Comment, context)
 		if err != nil {
-			return nil, fmt.Errorf("invalid @field for %s.%s: %w", context, fieldName, err)
+			p.errs.Append(err)
+			continue
 		}
+
+		switch {
+		case field != nil:
+			field.Fields = nested
+		case len(nested) > 0:
+			// No @field of its own, but something below it is annotated, so
+			// the field has to exist to carry them down.
+			field = &Field{GoName: fieldName, Name: fieldName, Fields: nested}
+		default:
+			continue
+		}
+
 		fields = append(fields, field)
 	}
-	return fields, nil
+
+	return fields
 }
 
-// parseAPI parses the @api annotation from package-level comments
-func (p *Parser) parseAPI(result *ParsedPackage) error {
+// parseFieldAnnotation parses one field's @field comment, in either the inline
+// or the block form. Returns nil when the comment carries no @field at all.
+func parseFieldAnnotation(fieldName string, comment *CommentBlock, context string) (*Field, error) {
+	if comment == nil || !comment.HasAnnotation("@field") {
+		return nil, nil
+	}
+
+	// The path carries the location, so the message is free to be only what went
+	// wrong. Which of the two @field forms was written is not part of it: the
+	// user knows which one they typed, and the grammar's own message already
+	// names the annotation it choked on.
+	path := fmt.Sprintf("@field[%s.%s]", context, fieldName)
+
+	lines := comment.GetAnnotationLines()
+	fieldNode := annotation.Schema.GetChild("@field")
+
+	// One entry point, whichever form the user wrote. ParseAnnotationBlock
+	// decides inline vs block itself, from the source it was handed.
+	parsed, err := ParseAnnotationBlock(lines, "@field", fieldNode)
+	if err != nil {
+		return nil, &specerr.Error{Path: path, Message: err.Error()}
+	}
+
+	field, err := convertParsedField(fieldName, parsed)
+	if err != nil {
+		return nil, &specerr.Error{Path: path, Message: err.Error()}
+	}
+	return field, nil
+}
+
+// parseAPI parses the @api annotation from package-level comments.
+//
+// Every failure here returns early, because there is no partial @api worth
+// keeping. The passes that follow still run: a package with no @api almost
+// certainly has other problems too, and there is no reason to make the user
+// find them one run at a time.
+func (p *parser) parseAPI(result *Package) {
 	if p.comments.PackageComments == nil {
-		return fmt.Errorf("no package-level comments found (missing @api annotation)")
+		p.errs.Add("", "no package-level comments found (missing @api annotation)")
+		return
 	}
 
 	lines := p.comments.PackageComments.GetAnnotationLines()
 	if len(lines) == 0 {
-		return fmt.Errorf("no annotations found in package comments")
+		p.errs.Add("", "no annotations found in package comments")
+		return
 	}
 
 	// Get @api schema node
-	apiNode := schema.AnnotationSchema.GetChild("@api")
+	apiNode := annotation.Schema.GetChild("@api")
 	if apiNode == nil {
-		return fmt.Errorf("@api schema node not found")
+		p.errs.Add("@api", "@api schema node not found")
+		return
 	}
 
 	// Parse @api annotation
 	parsed, err := ParseAnnotationBlock(lines, "@api", apiNode)
 	if err != nil {
-		return err
+		p.errs.Wrap("@api", err)
+		return
 	}
 
 	// Convert to APIInfo
@@ -195,10 +354,10 @@ func (p *Parser) parseAPI(result *ParsedPackage) error {
 	api.Version = parsed.GetChildValue("@version")
 
 	if api.Title == "" {
-		return fmt.Errorf("@api missing required @title")
+		p.errs.Add("@api", "missing required @title")
 	}
 	if api.Version == "" {
-		return fmt.Errorf("@api missing required @version")
+		p.errs.Add("@api", "missing required @version")
 	}
 
 	// Optional fields
@@ -278,23 +437,27 @@ func (p *Parser) parseAPI(result *ParsedPackage) error {
 	}
 
 	result.API = api
-	return nil
 }
 
-// parseSchemas parses all @schema annotated structs
-func (p *Parser) parseSchemas(result *ParsedPackage) error {
+// parseSchemas parses all @schema annotated structs.
+//
+// Sorted so that the errors from several bad @schema blocks come out in the
+// same order every run.
+func (p *parser) parseSchemas(result *Package) {
 	// First pass: parse @schema annotated structs
-	for structName, commentBlock := range p.comments.StructComments {
+	for _, structName := range slices.Sorted(maps.Keys(p.comments.StructComments)) {
+		commentBlock := p.comments.StructComments[structName]
 		if !commentBlock.HasAnnotation("@schema") {
 			continue
 		}
 
 		lines := commentBlock.GetAnnotationLines()
-		schemaNode := schema.AnnotationSchema.GetChild("@schema")
+		def := annotation.Schema.GetChild("@schema")
 
-		parsed, err := ParseAnnotationBlock(lines, "@schema", schemaNode)
+		parsed, err := ParseAnnotationBlock(lines, "@schema", def)
 		if err != nil {
-			return fmt.Errorf("failed to parse @schema for %s: %w", structName, err)
+			p.errs.Wrap(fmt.Sprintf("@schema[%s]", structName), err)
+			continue
 		}
 
 		s := &Schema{
@@ -321,15 +484,16 @@ func (p *Parser) parseSchemas(result *ParsedPackage) error {
 
 		result.Schemas[structName] = s
 	}
-
-	return nil
 }
 
 // resolveSchemaAliases detects type aliases that instantiate generic schemas
 // (e.g. `type UserResponse = DataResponse[User]`) and creates derived Schema
 // entries by copying fields from the base. Runs after parseStructFields so the
 // base schema's Fields are already populated.
-func (p *Parser) resolveSchemaAliases(result *ParsedPackage) error {
+// It reports nothing: every case it cannot handle is a reason to skip, not to
+// complain. That is what lets it run after a failed pass without inventing
+// errors about schemas that never got built.
+func (p *parser) resolveSchemaAliases(result *Package) {
 	for typeName, typeInfo := range p.comments.TypeInfo {
 		if _, exists := result.Schemas[typeName]; exists {
 			continue
@@ -358,7 +522,6 @@ func (p *Parser) resolveSchemaAliases(result *ParsedPackage) error {
 		}
 		result.Schemas[typeName] = s
 	}
-	return nil
 }
 
 // extractBaseType extracts the base type name from a generic instantiation
@@ -371,8 +534,10 @@ func extractBaseType(typeName string) string {
 }
 
 // parseParameters parses all parameter structs (@path, @query, @header, @cookie)
-func (p *Parser) parseParameters(result *ParsedPackage) error {
-	for structName, commentBlock := range p.comments.StructComments {
+func (p *parser) parseParameters(result *Package) {
+	for _, structName := range slices.Sorted(maps.Keys(p.comments.StructComments)) {
+		commentBlock := p.comments.StructComments[structName]
+
 		var paramType ParameterType
 
 		// Determine parameter type
@@ -388,76 +553,49 @@ func (p *Parser) parseParameters(result *ParsedPackage) error {
 			continue
 		}
 
-		param := &Parameter{
+		// Fields are filled in by parseStructFields, which parses every
+		// struct's annotations once.
+		result.Parameters[structName] = &Parameter{
 			Name:       structName,
 			Type:       paramType,
 			GoTypeName: structName,
-			Fields:     make([]*Field, 0),
 		}
-
-		// Parse fields
-		if fieldComments, ok := p.comments.FieldComments[structName]; ok {
-			for fieldName, fieldComment := range fieldComments {
-				if !fieldComment.HasAnnotation("@field") {
-					continue
-				}
-
-				fieldLines := fieldComment.GetAnnotationLines()
-				fieldNode := schema.AnnotationSchema.GetChild("@field")
-
-				// Check if inline format
-				if IsInlineFormat(fieldLines) {
-					parsedField, err := ParseInlineAnnotation(fieldLines[0], "@field", fieldNode)
-					if err != nil {
-						return fmt.Errorf("failed to parse inline @field for %s.%s: %w", structName, fieldName, err)
-					}
-
-					field, err := p.convertParsedField(fieldName, parsedField)
-					if err != nil {
-						return fmt.Errorf("invalid @field for %s.%s: %w", structName, fieldName, err)
-					}
-					param.Fields = append(param.Fields, field)
-				} else {
-					parsedField, err := ParseAnnotationBlock(fieldLines, "@field", fieldNode)
-					if err != nil {
-						return fmt.Errorf("failed to parse @field for %s.%s: %w", structName, fieldName, err)
-					}
-
-					field, err := p.convertParsedField(fieldName, parsedField)
-					if err != nil {
-						return fmt.Errorf("invalid @field for %s.%s: %w", structName, fieldName, err)
-					}
-					param.Fields = append(param.Fields, field)
-				}
-			}
-		}
-
-		result.Parameters[structName] = param
 	}
-
-	return nil
 }
 
-// parseEndpoints parses all @endpoint annotated functions
-func (p *Parser) parseEndpoints(result *ParsedPackage) error {
-	for funcName, commentBlock := range p.comments.FunctionComments {
+// parseEndpoints parses all @endpoint annotated functions.
+//
+// Sorting by function name does double duty: it fixes the order errors come out
+// in, and it fixes the order of result.Endpoints itself, which every later
+// stage walks. Built from an unsorted map range, that slice put the validator's
+// endpoint errors in a different order run to run.
+//
+// Endpoints are keyed by function name rather than by "GET /path" because a
+// block that failed to parse may have neither.
+func (p *parser) parseEndpoints(result *Package) {
+	for _, funcName := range slices.Sorted(maps.Keys(p.comments.FunctionComments)) {
+		commentBlock := p.comments.FunctionComments[funcName]
 		if !commentBlock.HasAnnotation("@endpoint") {
 			continue
 		}
 
+		path := fmt.Sprintf("@endpoint[%s]", funcName)
+
 		lines := commentBlock.GetAnnotationLines()
-		endpointNode := schema.AnnotationSchema.GetChild("@endpoint")
+		endpointNode := annotation.Schema.GetChild("@endpoint")
 
 		parsed, err := ParseAnnotationBlock(lines, "@endpoint", endpointNode)
 		if err != nil {
-			return fmt.Errorf("failed to parse @endpoint for %s: %w", funcName, err)
+			p.errs.Wrap(path, err)
+			continue
 		}
 
 		// Extract method and path from metadata
 		metadata := parsed.Metadata
 		parts := strings.Fields(metadata)
 		if len(parts) < 2 {
-			return fmt.Errorf("@endpoint for %s missing method and path: %s", funcName, metadata)
+			p.errs.Addf(path, "missing method and path: %s", metadata)
+			continue
 		}
 
 		endpoint := &Endpoint{
@@ -485,19 +623,42 @@ func (p *Parser) parseEndpoints(result *ParsedPackage) error {
 
 		// Parse request
 		if request := parsed.Children["@request"]; request != nil {
+			body, err := parseBody(request)
+			if err != nil {
+				p.errs.Wrap(path+".@request", err)
+			}
+
 			endpoint.Request = &RequestBody{
 				ContentType: ExpandContentType(request.GetChildValue("@contentType")),
-				Body:        parseBody(request),
+				Body:        body,
 			}
 		}
 
-		// Parse responses
+		// Parse responses.
+		//
+		// @response repeats so that one endpoint can describe several status
+		// codes, not so that one status code can be described twice. There is no
+		// merge rule for the second: it replaced the first, and the operation
+		// lost a response with nothing said. The in-function form has always
+		// rejected this -- see extractFuncInlines -- so leaving the doc-comment
+		// form silent made the same mistake an error in one syntax and a shrug
+		// in the other.
 		for _, responseParsed := range parsed.GetRepeatedChildren("@response") {
 			statusCode := responseParsed.Metadata
+			if _, taken := endpoint.Responses[statusCode]; taken {
+				p.errs.Addf(path, "@response %s is declared twice; each status code can have only one response", statusCode)
+				continue
+			}
+
+			body, err := parseBody(responseParsed)
+			if err != nil {
+				p.errs.Wrap(fmt.Sprintf("%s.@response[%s]", path, statusCode), err)
+			}
+
 			resp := &Response{
 				StatusCode:   statusCode,
 				ContentType:  ExpandContentType(responseParsed.GetChildValue("@contentType")),
-				Body:         parseBody(responseParsed),
+				Body:         body,
 				Description:  responseParsed.GetChildValue("@description"),
 				HeaderParams: extractRepeatedReferences(responseParsed, "@header"),
 			}
@@ -506,12 +667,12 @@ func (p *Parser) parseEndpoints(result *ParsedPackage) error {
 
 		result.Endpoints = append(result.Endpoints, endpoint)
 	}
-
-	return nil
 }
 
 // convertParsedField converts a ParsedAnnotation to a Field
-func (p *Parser) convertParsedField(fieldName string, parsed *ParsedAnnotation) (*Field, error) {
+// convertParsedField needs no parser state; it is a pure translation from a
+// parsed annotation tree to a Field.
+func convertParsedField(fieldName string, parsed *ParsedAnnotation) (*Field, error) {
 	field := &Field{
 		GoName:      fieldName,
 		Name:        fieldName, // Will be resolved from struct tags later
@@ -602,23 +763,43 @@ func (p *Parser) convertParsedField(fieldName string, parsed *ParsedAnnotation) 
 		field.UniqueItems = true
 	}
 
-	if req := parsed.GetChildValue("@required"); req != "" {
-		val, err := strconv.ParseBool(req)
+	if parsed.HasChild("@required") {
+		val, err := parseOverride("@required", parsed.GetChildValue("@required"))
 		if err != nil {
-			return nil, fmt.Errorf("@required value %q is not a valid boolean (use true or false)", req)
+			return nil, err
 		}
 		field.Required = &val
 	}
 
-	if null := parsed.GetChildValue("@nullable"); null != "" {
-		val, err := strconv.ParseBool(null)
+	if parsed.HasChild("@nullable") {
+		val, err := parseOverride("@nullable", parsed.GetChildValue("@nullable"))
 		if err != nil {
-			return nil, fmt.Errorf("@nullable value %q is not a valid boolean (use true or false)", null)
+			return nil, err
 		}
 		field.Nullable = &val
 	}
 
 	return field, nil
+}
+
+// parseOverride reads a @required or @nullable value.
+//
+// Both carry true|false because both override something specgen already
+// inferred from the Go type and its json tag, and turning an inference off is
+// the reason they are not plain flags. But every other modifier inside @field —
+// @deprecated, @readOnly, @writeOnly, @uniqueItems — is written bare, so a bare
+// one here means the same thing it means there: true. Treating it as absent
+// instead made the annotation a no-op with nothing said.
+func parseOverride(name, value string) (bool, error) {
+	if value == "" {
+		return true, nil
+	}
+
+	val, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s value %q is not a valid boolean (use true or false)", name, value)
+	}
+	return val, nil
 }
 
 // extractRepeatedReferences extracts references from repeated children annotations
@@ -663,48 +844,68 @@ func ExpandContentType(shortName string) string {
 	return shortName
 }
 
-// parseBody parses @body annotation from a request/response block
-// Returns nil if no body is defined
-// New syntax: @body User @bind DataResponse.Data
-// The @body value is the schema (User, []User, map[string]User)
-// The @bind is optional and specifies the wrapper (Wrapper.Field format)
-func parseBody(parsed *ParsedAnnotation) *Body {
-	// Check for @body annotation
-	if bodyParsed := parsed.Children["@body"]; bodyParsed != nil {
-		body := &Body{
-			Schema: bodyParsed.Metadata, // Schema name is in metadata (e.g., "User", "[]User")
+// parseBody reads the body of a @request or @response block, or nil when the
+// block declares none — a 204, say.
+//
+// The schema name arrives as the @body annotation's metadata, because @body
+// carries its value on its own opening line: @body User, @body []User,
+// @body map[string]User. @bind is a sibling rather than a child, so a wrapped
+// body is written @body User @bind DataResponse.Data.
+//
+// There is no @schema fallback. One used to sit here, advertising a legacy
+// spelling that had already stopped working: @schema is not a child of @request
+// or @response in either grammar, so parseChildren rejects it with "unknown
+// annotation @schema in @response" before this function is ever reached.
+func parseBody(parsed *ParsedAnnotation) (*Body, error) {
+	bodyParsed := parsed.Children["@body"]
+	if bodyParsed == nil {
+		// @bind says which field of an envelope the body binds into, so it has
+		// nothing to say without one. Returning early here dropped it: a 204
+		// carrying a stray @bind rendered as an ordinary bodyless response and
+		// the run exited 0. A @request in the same state is caught downstream by
+		// "missing @body", but a @response is not -- a response with no body is
+		// legitimate, so nothing else was ever going to ask.
+		if parsed.HasChild("@bind") {
+			return nil, fmt.Errorf("@bind has no @body to bind into; add a @body, or drop the @bind from a message that carries none")
 		}
-
-		// Parse @bind annotation (sibling of @body in the response/request block)
-		// New syntax: @bind DataResponse.Data
-		if bindParsed := parsed.Children["@bind"]; bindParsed != nil {
-			body.Bind = ParseBindTarget(bindParsed.Value)
-		}
-
-		return body
+		return nil, nil
 	}
 
-	// Fallback to @schema annotation (legacy style, but keeping for simplicity)
-	if schema := parsed.GetChildValue("@schema"); schema != "" {
-		return &Body{
-			Schema: schema,
-			Bind:   nil,
+	body := &Body{Schema: bodyParsed.Metadata}
+
+	if bindParsed := parsed.Children["@bind"]; bindParsed != nil {
+		bind, err := ParseBindTarget(bindParsed.Value)
+		if err != nil {
+			return nil, err
 		}
+		body.Bind = bind
 	}
 
-	return nil
+	return body, nil
 }
 
-// ParseBindTarget parses a @bind value into a BindTarget
-// Format: "Wrapper.Field" (e.g., "DataResponse.Data")
-func ParseBindTarget(value string) *BindTarget {
-	parts := strings.SplitN(strings.TrimSpace(value), ".", 2)
-	if len(parts) != 2 {
-		return nil
+// ParseBindTarget parses a @bind value into a BindTarget.
+//
+// The format is "Wrapper.Field" -- the envelope schema, and the field of it the
+// body binds into, as in "DataResponse.Data".
+//
+// Anything else is an error rather than a nil. nil is what "no @bind was
+// written" looks like to everything downstream, so returning it for a malformed
+// one dropped the annotation and said nothing: @bind DataResponse emitted the
+// bare body, unwrapped, and exited 0. Every other way to get @bind wrong -- a
+// wrapper that does not exist, a field the wrapper does not have -- is already
+// reported by validateBindTarget, so this was the one mistake that stayed
+// quiet, and it is the one a typo produces.
+//
+// Only the first dot separates: "A.B.C" binds field "B.C" of wrapper "A", which
+// is what a nested target would have to mean.
+func ParseBindTarget(value string) (*BindTarget, error) {
+	wrapper, field, found := strings.Cut(strings.TrimSpace(value), ".")
+	wrapper, field = strings.TrimSpace(wrapper), strings.TrimSpace(field)
+
+	if !found || wrapper == "" || field == "" {
+		return nil, fmt.Errorf("@bind %q is not a Wrapper.Field target; name the envelope schema and the field the body binds into, as in @bind DataResponse.Data", value)
 	}
 
-	return &BindTarget{
-		Wrapper: strings.TrimSpace(parts[0]),
-		Field:   strings.TrimSpace(parts[1]),
-	}
+	return &BindTarget{Wrapper: wrapper, Field: field}, nil
 }

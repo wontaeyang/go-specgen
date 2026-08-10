@@ -1,0 +1,52 @@
+openapi: 3.1.0
+info:
+    title: Raw Value Example
+    description: Demonstrates that a raw value's braces are text, not block structure.
+    version: 1.0.0
+paths: {}
+components:
+    schemas:
+        Pattern:
+            type: object
+            properties:
+                countryCode:
+                    type: string
+                    pattern: ^[A-Z]{2}$
+                    description: Country code
+                locale:
+                    type: string
+                    pattern: ^[a-z]{2}(-[A-Z]{2})?$
+                    description: Locale
+                closer:
+                    type: string
+                    pattern: ^a}b$
+                    description: Unpaired closing brace
+                closerBlock:
+                    type: string
+                    pattern: ^a}b$
+                    description: Unpaired closing brace, block form
+                opener:
+                    type: string
+                    pattern: ^[{]+$
+                    description: Literal brace in a character class
+                openerBlock:
+                    type: string
+                    pattern: ^[{]+$
+                    description: Literal brace in a character class, block form
+                spacedQuantifier:
+                    type: string
+                    pattern: ^a {2}$
+                    description: Quantified space
+                spacedQuantifierBlock:
+                    type: string
+                    pattern: ^a {2}$
+                    description: Quantified space, block form
+            required:
+                - countryCode
+                - locale
+                - closer
+                - closerBlock
+                - opener
+                - openerBlock
+                - spacedQuantifier
+                - spacedQuantifierBlock

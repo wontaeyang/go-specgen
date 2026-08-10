@@ -115,14 +115,14 @@ tool github.com/wontaeyang/go-specgen/cmd/specgen@v1.0.0
 Then run:
 
 ```bash
-go tool specgen -package ./handlers -output openapi.yaml
+go tool specgen -package ./handlers -yaml openapi.yaml
 ```
 
 ### Using go install
 
 ```bash
 go install github.com/wontaeyang/go-specgen/cmd/specgen@latest
-specgen -package ./handlers -output openapi.yaml
+specgen -package ./handlers -yaml openapi.yaml
 ```
 
 ### Build from source
@@ -142,24 +142,28 @@ specgen [options]
 
 Options:
   -package string    Path to Go package (default ".")
-  -output string     Output file path (default "openapi.yaml")
-  -format string     Output format: json or yaml (default "yaml")
-  -openapi string    OpenAPI version: 3.0, 3.1, or 3.2 (default "3.0")
+  -yaml string       Write the spec as YAML to this path
+  -json string       Write the spec as JSON to this path
+  -openapi string    OpenAPI version: 3.1 or 3.2 (default "3.1")
   -version           Show version
   -help              Show help
 ```
 
+At least one of `-yaml` or `-json` is required. The spec is written only to the
+paths you name — there is no default output file. Passing both renders both from
+a single pass, so the two files can never disagree.
+
 **Examples:**
 
 ```bash
-# Generate from current directory
-specgen
+# Both formats from one run
+specgen -package ./api -yaml openapi.yaml -json openapi.json
 
-# Generate JSON from specific package
-specgen -package ./api/handlers -format json -output openapi.json
+# YAML only, into a directory that may not exist yet
+specgen -package ./api -yaml docs/openapi.yaml
 
-# Generate OpenAPI 3.1
-specgen -openapi 3.1
+# OpenAPI 3.2 (identical output apart from the version string)
+specgen -package ./api -openapi 3.2 -yaml openapi.yaml
 ```
 
 ---
@@ -194,8 +198,20 @@ Go types map to OpenAPI types automatically:
 | `time.Time` | `string` | `date-time` |
 | `url.URL` | `string` | `uri` |
 | `[]T` | `array` | items: T |
+| `[N]T` | `array` | items: T |
+| `[]byte` | `string` | `byte` |
+| `map[string]T` | `object` | additionalProperties: T |
 | `*T` | nullable T | - |
 | `any` | `{}` | any JSON value |
+
+Containers nest to any depth, and every level keeps its own type and format:
+`map[string][]time.Time` is an object whose `additionalProperties` is an array
+whose `items` are `date-time` strings.
+
+A Go type with no OpenAPI representation is an error, not a guess. Channels,
+functions, complex numbers and `uintptr` are rejected — `encoding/json` refuses
+to marshal them too, so there is nothing truthful to emit. A field whose type is
+a struct without `@schema` is rejected the same way.
 
 Custom types resolve to their underlying type:
 
@@ -242,9 +258,12 @@ rather than encoded as `null`, so the field is optional and non-nullable.
 | Parameter type | Default | Required when |
 |----------------|---------|---------------|
 | `path` | Always required | Always |
-| `query` | Optional | Tag contains `,required` (e.g., `query:"q,required"`) |
-| `header` | Optional | Tag contains `,required` |
-| `cookie` | Optional | Tag contains `,required` |
+| `query` | Optional | The `query` tag has the `required` option (e.g., `query:"q,required"`) |
+| `header` | Optional | The `header` tag has the `required` option |
+| `cookie` | Optional | The `cookie` tag has the `required` option |
+
+The option is read from the tag matching the parameter's own kind. A `,required`
+sitting in some other tag on the same field has no effect.
 
 **Overrides** — `@required` and `@nullable` on `@field` let you decouple the OpenAPI contract from Go's type/tag defaults when they don't match what you want to expose:
 
@@ -273,27 +292,44 @@ type UpdateUserPatch struct {
 }
 ```
 
+Both take `true` or `false`. Written bare — `@required`, `@nullable` — they mean
+`true`, the same as every other modifier inside `@field`. The explicit value is
+there for the `false` case, which is the one Go's defaults cannot express.
+
 When omitted, behavior falls back to the Go-type rules in the tables above.
 
 ### Embedded Structs
 
-Embedded (anonymous) struct fields are flattened into the parent schema or parameter:
+Embedded (anonymous) fields follow `encoding/json` exactly:
 
 ```go
 type BaseModel struct {
-    ID        string `json:"id"`
-    CreatedAt string `json:"created_at"`
+    // @field { @description Identifier }
+    ID string `json:"id"`
 }
 
+type Meta struct{ Revision int `json:"revision"` }
+type Hidden struct{ Secret string `json:"secret"` }
+type Label string
+
 // @schema
-type User struct {
-    BaseModel                    // Fields flattened into User
-    Name  string `json:"name"`
-    Email string `json:"email"`
+type Document struct {
+    BaseModel                 // untagged struct    -> fields flattened into Document
+    Meta      `json:"meta"`   // tagged struct      -> nested under "meta"
+    Hidden    `json:"-"`      // tagged "-"         -> omitted entirely
+    Label                     // untagged non-struct -> field named "Label"
+
+    Title string `json:"title"`
 }
 ```
 
-The embedded struct does not need a `@schema` annotation — its fields are inlined directly.
+An untagged embedded struct does not need `@schema` — its fields are flattened
+in, and they bring their own `@field` annotations with them. A *tagged* embedded
+struct becomes a nested field, so it does need `@schema` in order to be
+referenced.
+
+Embedded `time.Time` and the other standard-library types that serialize as
+scalars are not flattened; they stay single fields.
 
 ### Schema References
 
@@ -492,7 +528,7 @@ The `@api` block can appear directly above the `package` keyword or as a standal
   @body Schema   Schema reference
   @bind Wrapper.Field   Wrap body in response envelope
   @header Name   Response header struct reference (repeatable)
-  @description   Response description
+  @description   Response description (defaults to the reason phrase)
 }
 ```
 
@@ -504,6 +540,13 @@ CODE can be a specific status (`200`, `404`), a range (`2XX`, `4XX`, `5XX`), or 
 @response 5XX { @body Error @description Server error }
 @response default { @body Error }
 ```
+
+The Response Object requires a description, so one is always emitted. Without
+`@description` it is the status code's reason phrase — `200` becomes `OK`, `201`
+becomes `Created`, `204` becomes `No Content`. A range or `default` names no
+single status and so has no phrase; those describe what they cover instead
+(`Response for status 4XX`, `Default response`). Both response forms — the named
+one above and the in-function one — use the same fallback.
 
 **Content type support:**
 
@@ -540,8 +583,8 @@ CODE can be a specific status (`200`, `404`), a range (`2XX`, `4XX`, `5XX`), or 
   @deprecated         Mark as deprecated
   @readOnly           Mark as read-only
   @writeOnly          Mark as write-only
-  @required           Override required (true|false)
-  @nullable           Override nullable (true|false)
+  @required           Override required (true|false, bare means true)
+  @nullable           Override nullable (true|false, bare means true)
 }
 ```
 
@@ -627,16 +670,30 @@ All block annotations use curly braces `{ }` for grouping. Blocks can be written
 
 | Escape | Result | Use case |
 |--------|--------|----------|
-| `\{`   | `{`    | Regex quantifiers, JSON examples |
-| `\}`   | `}`    | Regex quantifiers, JSON examples |
-| `\@`   | `@`    | Email addresses |
+| `\{`   | `{`    | A literal brace in a value — JSON examples and defaults |
+| `\}`   | `}`    | A literal brace in a value — JSON examples and defaults |
+| `\@`   | `@`    | Email addresses; a description line that starts with `@` |
 | `\\`   | `\`    | Literal backslash |
 
 ```go
-// @field { @pattern ^[A-Z]\{2\}$ }           // Regex: ^[A-Z]{2}$
 // @field { @description Contact admin\@example.com }
 // @field { @example \{"name": "John"\} }    // JSON example
 ```
+
+**`@pattern` is the exception.** A regex is a language with its own brace rules,
+so `@pattern` is the one annotation whose value is passed through verbatim —
+write the regex exactly as you mean it, escaping nothing:
+
+```go
+// @field { @pattern ^[A-Z]{2}$ }             // quantifier, as written
+// @field { @pattern ^a}b$ }                  // unpaired brace is fine
+// @field { @pattern [{] }                    // so is a literal one
+```
+
+Escaping a `@pattern` changes it: `^[A-Z]\{2\}$` reaches the spec with the
+backslashes intact, where `\{2\}` matches a literal `{2}` rather than repeating
+the previous character twice. `examples/rawvalue/` pins this — every regex there
+is written twice, inline and as a block, and the two forms must agree.
 
 ### Multi-line Descriptions
 
@@ -652,20 +709,149 @@ Only `@description` supports multi-line values:
 // }
 ```
 
+The value ends at the next line beginning with an unescaped `@`, whether or not
+specgen recognizes the name. A line of prose that starts with `@` escapes it:
+
+```go
+// @field {
+//   @description Questions go to
+//   \@support, not the on-call rota.
+// }
+```
+
+Without the escape, that line is an annotation named `@support`, and specgen
+reports it as unknown. That is deliberate: the alternative is reading a
+misspelled annotation as prose and publishing it in the description.
+
 ### Parameter Rules
 
-**Path (`@path`):** Always required, simple types only, no arrays/objects.
+**Path (`@path`):** Always required, scalars only, no arrays.
 
-**Query (`@query`):** Optional by default, use `,required` tag to mark required (e.g., `query:"q,required"`). Arrays allowed for repeated params.
+**Query (`@query`):** Optional by default; `query:"q,required"` marks it required. Arrays allowed, for repeated parameters.
 
-**Header (`@header`):** Optional by default, use `,required` tag to mark required. No arrays/objects.
+**Header (`@header`):** Optional by default; `header:"X-Key,required"` marks it required. No arrays.
 
-**Cookie (`@cookie`):** Optional by default, use `,required` tag to mark required. No arrays/objects.
+**Cookie (`@cookie`):** Optional by default; `cookie:"session,required"` marks it required. No arrays.
+
+**Naming** mirrors `encoding/json`, so one rule covers parameters and bodies alike:
+
+| Tag | Parameter |
+|-----|-----------|
+| `query:"limit"` | named `limit` |
+| `query:"-"` | skipped |
+| `query:"-,"` | named `-` |
+| no `query` tag | named by the Go field |
+
+Field names are never transformed: what you write is what the spec says.
+
+A parameter is a scalar or a list of scalars, and nothing else. `net/http` hands
+parameters over as `map[string][]string`, so there is no structured value to
+decode into — a struct-typed parameter field is an error, and `deepObject` is not
+supported. A field tagged for a different kind than the struct it sits in
+(`path:"x"` inside a `@query` struct) is an error too, rather than being renamed.
+
+### Where the spec and `encoding/json` differ
+
+specgen describes what `encoding/json` puts on the wire, so most of the time the
+two agree by construction. These are the places they deliberately do not:
+
+| | `encoding/json` | specgen |
+|---|---|---|
+| nil slice / nil map | writes `null` | not nullable — a handler returning one nearly always means "empty", and `@nullable true` opts in |
+| pointer parameter | n/a | never nullable: a parameter is text in a URL or header, which cannot carry `null`. The pointer only lets the handler tell absent from zero |
+| generic template | marshals normally | not emitted to `components/schemas` — a template is not a type. Aliases that instantiate it are emitted |
+| unmarshalable type | fails at runtime | rejected at generation time |
+
+And two things specgen does *not* do, deliberately:
+
+- **No name transformation.** An untagged field is named exactly as it is
+  declared in Go. There is no snake_case conversion anywhere in the pipeline.
+- **No `deepObject`.** Structured parameters have no `net/http` model, so they
+  are an error rather than a guess at an encoding.
+
+### Errors
+
+specgen fails rather than emitting a spec it cannot stand behind. The cases:
+
+- a type with no OpenAPI representation (channel, function, complex, `uintptr`)
+- a field whose type is a struct without `@schema`
+- a parameter that is not a scalar or a list of scalars
+- a parameter field tagged for a different kind than its struct
+- a body naming a schema that does not exist
+- an endpoint tag with no API-level `@tag`
+- the same parameter name twice in the same location
+- constraints that contradict each other, or apply to the wrong type
+- an annotation on a declaration that cannot carry it (see below)
+
+Every stage accumulates, so one run reports every mistake it can reach rather
+than stopping at the first:
+
+```
+$ specgen -package ./api -yaml openapi.yaml
+Error: parse: 4 parse errors:
+  1. @endpoint[ListOrders]: failed to parse @endpoint children: unknown annotation @produces in @endpoint
+  2. @field[Customer.Tier]: unknown annotation @oneOf in @field
+  3. @field[Order.ItemCount]: unknown annotation @desc in @field
+  4. @field[Order.TotalCents]: unknown annotation @multipleOf in @field
+```
+
+Each error names the declaration it came from — `@schema[Order].ItemCount`,
+`@query[OrderFilter].TenantID`, `@endpoint[GET /orders]` — in the annotation
+vocabulary rather than Go's.
+
+Two things still end a run early. Inside a single annotation block, parsing stops
+at the first name it does not recognize — `{ @desc Line items @min 1 }` reports
+`@desc`, and `@min` turns up on the next run. And stage boundaries hold: parse,
+then resolve, then validate. The resolver never sees a package that failed to
+parse, so a run reports everything wrong at one stage rather than across all
+three.
+
+### Annotations in the wrong place
+
+The annotation that opens a doc comment decides what the declaration is, and each
+kind of declaration accepts its own:
+
+```
+package doc        @api
+type               @schema @path @query @header @cookie
+func               @endpoint
+struct field       @field
+in a func body     @path @query @header @cookie @request @response
+```
+
+Writing a real annotation somewhere it cannot mean anything is an error, because
+there is exactly one thing you meant:
+
+```
+Error: parse: 2 parse errors:
+  1. type Widget: @summary cannot annotate a type; valid here: @cookie, @header, @path, @query, @schema
+  2. func ListWidgets: @schema cannot annotate a func; valid here: @endpoint
+```
+
+A name that appears in no annotation at all is reported instead, and the run
+continues:
+
+```
+$ specgen -package ./api -yaml openapi.yaml
+specgen: func ListWidgets: @endpoin is not an annotation; it was skipped
+Wrote openapi.yaml
+```
+
+It cannot be an error, because a doc comment is also ordinary documentation and
+nothing distinguishes `@endpoin` from an `@author` line in a package that never
+asked specgen for an opinion. But a misspelled `@endpoint` costs a whole
+operation, so it is not silent either. Write `\@` for a doc comment that really
+does begin a line with `@`.
+
+Only the *opening* annotation is subject to this. Names written inside a block
+are checked against the grammar and always error, and a comment that discusses an
+annotation in prose before declaring the real one is fine — what matters is
+whether any line claims the declaration, not what the first line says.
 
 ### Limitations
 
 - **JSON only** - Field names parsed from `json` struct tags
-- **OpenAPI 3.x** - Supports 3.0, 3.1, 3.2 (not OpenAPI 2.0/Swagger)
+- **OpenAPI 3.1+** - Supports 3.1 and 3.2 (not 3.0, not OpenAPI 2.0/Swagger)
 
 ### Requirements
 

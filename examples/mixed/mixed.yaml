@@ -1,0 +1,64 @@
+openapi: 3.1.0
+info:
+    title: Mixed Fixture
+    description: Named and inline declarations on one endpoint.
+    version: 1.0.0
+paths:
+    /reports/{id}:
+        get:
+            summary: Get a report
+            parameters:
+                - name: id
+                  in: path
+                  description: Report identifier
+                  required: true
+                  schema:
+                    type: string
+                - name: include_archived
+                  in: query
+                  description: Include archived reports
+                  required: false
+                  schema:
+                    type: boolean
+                - name: format
+                  in: query
+                  description: Response format
+                  required: false
+                  schema:
+                    type: string
+                - name: X-Request-ID
+                  in: header
+                  description: Correlation identifier
+                  required: false
+                  schema:
+                    type: string
+                    format: uuid
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Report'
+                "404":
+                    description: Not Found
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        description: Error message
+                                required:
+                                    - message
+components:
+    schemas:
+        Report:
+            type: object
+            properties:
+                id:
+                    type: string
+                    description: Report identifier
+            required:
+                - id

@@ -5,8 +5,11 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"log"
+	"path/filepath"
 	"strings"
 
+	"github.com/wontaeyang/go-specgen/pkg/annotation"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -17,6 +20,81 @@ type CommentBlock struct {
 
 	// Position is the file position for error reporting
 	Position token.Position
+}
+
+// FieldComments is the doc comment above one struct field, together with the
+// comments on the fields of its type when that type is an anonymous struct.
+//
+// It is a tree because Go types are: an @field written inside an inline struct
+// describes a field of that struct, not of the one containing it, and flattening
+// the two would make them indistinguishable.
+type FieldComments struct {
+	// Comment is the doc comment above the field itself, if it has one.
+	Comment *CommentBlock
+
+	// Fields are the comments on the fields of this field's type, when that
+	// type is an anonymous struct (or a slice or map of one).
+	Fields map[string]*FieldComments
+}
+
+// harvestFieldComments collects the doc comments on a struct's fields, and
+// recursively on the fields of any anonymous struct nested inside them.
+//
+// The previous version walked one level and stopped, so an @field written
+// inside an inline struct was parsed and then dropped -- 16 of them in
+// examples/inline alone.
+func harvestFieldComments(fset *token.FileSet, structType *ast.StructType) map[string]*FieldComments {
+	if structType == nil {
+		return nil
+	}
+
+	comments := make(map[string]*FieldComments)
+
+	for _, field := range structType.Fields.List {
+		nested := harvestFieldComments(fset, anonymousStructOf(field.Type))
+		if field.Doc == nil && nested == nil {
+			continue
+		}
+		if len(field.Names) == 0 {
+			continue
+		}
+
+		harvested := &FieldComments{Fields: nested}
+		if field.Doc != nil {
+			harvested.Comment = extractCommentBlock(fset, field.Doc)
+		}
+
+		// One *ast.Field with several Names is several fields -- "X, Y float64"
+		// is two *types.Var, and the comment above them describes both.
+		for _, name := range field.Names {
+			comments[name.Name] = harvested
+		}
+	}
+
+	if len(comments) == 0 {
+		return nil
+	}
+	return comments
+}
+
+// anonymousStructOf returns the anonymous struct a type expression describes,
+// looking through pointers, slices, arrays and maps so that []struct{...} and
+// map[string]struct{...} are reached as readily as a bare struct{...}.
+//
+// A named type returns nil: its fields carry their own comments where the type
+// is declared, and harvesting them again here would duplicate them.
+func anonymousStructOf(expr ast.Expr) *ast.StructType {
+	switch t := expr.(type) {
+	case *ast.StructType:
+		return t
+	case *ast.StarExpr:
+		return anonymousStructOf(t.X)
+	case *ast.ArrayType:
+		return anonymousStructOf(t.Elt)
+	case *ast.MapType:
+		return anonymousStructOf(t.Value)
+	}
+	return nil
 }
 
 // PackageComments represents all comments extracted from a package
@@ -34,7 +112,7 @@ type PackageComments struct {
 	StructComments map[string]*CommentBlock // Key: struct name
 
 	// Field-level comments (for @field)
-	FieldComments map[string]map[string]*CommentBlock // Key: struct name -> field name
+	FieldComments map[string]map[string]*FieldComments // Key: struct name -> field name
 
 	// Function-level comments (for @endpoint)
 	FunctionComments map[string]*CommentBlock // Key: function name
@@ -96,7 +174,7 @@ type InlineStructInfo struct {
 	// FieldComments are the raw per-field comments collected at extraction time.
 	// Consumed by parseStructFields to populate Fields. Parser-internal — the
 	// resolver does not read this.
-	FieldComments map[string]*CommentBlock
+	FieldComments map[string]*FieldComments
 
 	// Fields are the parsed @field annotations. Populated by the parser so the
 	// resolver does not re-parse annotations. Shape mirrors Schema.Fields so both
@@ -111,10 +189,22 @@ type TypeDeclInfo struct {
 	IsGeneric   bool   // Has type parameters (e.g., type Foo[T any] struct{})
 	IsTypeAlias bool   // Is a type alias (e.g., type Bar = Foo[Baz])
 	AliasOf     string // For type aliases, the aliased type (e.g., "Foo[Baz]")
+
+	// Local marks a type declared inside a function body. Such a type is an
+	// in-function declaration, so the annotations legal on it are the
+	// in-function ones rather than the ones legal on a package-level type.
+	Local bool
 }
 
 // ExtractComments extracts all comment blocks from a Go package
 func ExtractComments(packagePath string) (*PackageComments, error) {
+	// A bare relative path is read by go/packages as an import path, not a
+	// directory: "examples/petstore" is looked for in std and not found. The
+	// caller means a directory, so say so.
+	if !filepath.IsAbs(packagePath) && !strings.HasPrefix(packagePath, ".") {
+		packagePath = "./" + packagePath
+	}
+
 	// Load the package with documentation
 	cfg := &packages.Config{
 		Mode: packages.NeedName |
@@ -142,7 +232,7 @@ func ExtractComments(packagePath string) (*PackageComments, error) {
 		Name:             pkg.Name,
 		Pkg:              pkg,
 		StructComments:   make(map[string]*CommentBlock),
-		FieldComments:    make(map[string]map[string]*CommentBlock),
+		FieldComments:    make(map[string]map[string]*FieldComments),
 		FunctionComments: make(map[string]*CommentBlock),
 		TypeInfo:         make(map[string]*TypeDeclInfo),
 		FuncInlines:      make(map[string]*FuncInlineInfo),
@@ -169,6 +259,17 @@ func ExtractComments(packagePath string) (*PackageComments, error) {
 			}
 		}
 
+		// A type declared inside a function body is reached by ast.Inspect just
+		// like a package-level one, and is indistinguishable from it by name
+		// alone. It matters because such a type is an in-function declaration —
+		// examples/closure writes `type request struct` under an @request — and
+		// the annotations legal on it are not the ones legal on a package-level
+		// type.
+		topLevel := make(map[ast.Decl]bool, len(file.Decls))
+		for _, decl := range file.Decls {
+			topLevel[decl] = true
+		}
+
 		// Traverse AST nodes
 		ast.Inspect(file, func(n ast.Node) bool {
 			if extractErr != nil {
@@ -193,6 +294,7 @@ func ExtractComments(packagePath string) (*PackageComments, error) {
 								Name:        typeName,
 								IsGeneric:   isGeneric,
 								IsTypeAlias: isTypeAlias,
+								Local:       !topLevel[node],
 							}
 
 							// For type aliases, extract the aliased type
@@ -213,14 +315,7 @@ func ExtractComments(packagePath string) (*PackageComments, error) {
 
 								// Extract field-level comments
 								if structType, ok := typeSpec.Type.(*ast.StructType); ok {
-									comments.FieldComments[typeName] = make(map[string]*CommentBlock)
-
-									for _, field := range structType.Fields.List {
-										if field.Doc != nil && len(field.Names) > 0 {
-											fieldName := field.Names[0].Name
-											comments.FieldComments[typeName][fieldName] = extractCommentBlock(fset, field.Doc)
-										}
-									}
+									comments.FieldComments[typeName] = harvestFieldComments(fset, structType)
 								}
 							}
 
@@ -245,7 +340,7 @@ func ExtractComments(packagePath string) (*PackageComments, error) {
 				}
 				// Extract inline declarations from function body
 				if node.Body != nil {
-					inlines, err := extractFuncInlines(fset, pkg.TypesInfo, node.Body)
+					inlines, err := extractFuncInlines(fset, pkg.TypesInfo, funcName, node.Body)
 					if err != nil {
 						extractErr = fmt.Errorf("in function %s: %w", funcName, err)
 						return false
@@ -310,7 +405,11 @@ func hasAPIAnnotation(cg *ast.CommentGroup) bool {
 		text := strings.TrimPrefix(c.Text, "//")
 		text = strings.TrimPrefix(text, "/*")
 		text = strings.TrimSpace(text)
-		if strings.HasPrefix(text, "@api") {
+		// Whole-name match, for the reason HasAnnotation gives. Here the
+		// near-miss is a real annotation family rather than a typo: apidoc's
+		// @apiVersion and @apiParam both begin with @api, and either could win
+		// this scan and be handed to parseAPI as the API block.
+		if ExtractAnnotationName(text) == "@api" {
 			return true
 		}
 	}
@@ -325,7 +424,9 @@ func (pc *PackageComments) GetStructComment(structName string) *CommentBlock {
 // GetFieldComment returns the comment block for a field
 func (pc *PackageComments) GetFieldComment(structName, fieldName string) *CommentBlock {
 	if fields, ok := pc.FieldComments[structName]; ok {
-		return fields[fieldName]
+		if field, ok := fields[fieldName]; ok {
+			return field.Comment
+		}
 	}
 	return nil
 }
@@ -335,18 +436,46 @@ func (pc *PackageComments) GetFunctionComment(funcName string) *CommentBlock {
 	return pc.FunctionComments[funcName]
 }
 
-// HasAnnotation checks if a comment block contains an annotation
+// HasAnnotation reports whether the block writes the named annotation on a line
+// of its own.
+//
+// The name has to match whole. This is what classifies a declaration — a struct
+// carrying @path becomes a path-parameter struct here, before any grammar is
+// consulted — so a prefix match let @headers register as @header, and the
+// declaration was read as something the user never wrote. ExtractAnnotationName
+// draws the boundary the rest of the parser draws, which is why it is borrowed
+// rather than restated.
 func (cb *CommentBlock) HasAnnotation(annotation string) bool {
 	if cb == nil {
 		return false
 	}
 
 	for _, line := range cb.Lines {
-		if strings.HasPrefix(line, annotation) {
+		if ExtractAnnotationName(line) == annotation {
 			return true
 		}
 	}
 	return false
+}
+
+// firstAnnotationName is the annotation a comment block opens with, or "" when
+// the block is ordinary documentation.
+//
+// Only the first one matters. It is the line that decides what the declaration
+// is; everything after it is inside a block, where parseChildren checks each
+// name against the grammar already. A line beginning \@ is prose, since that is
+// how a literal @ is written everywhere else in the syntax.
+func firstAnnotationName(cb *CommentBlock) string {
+	if cb == nil {
+		return ""
+	}
+
+	for _, line := range cb.Lines {
+		if name := ExtractAnnotationName(line); name != "" {
+			return name
+		}
+	}
+	return ""
 }
 
 // GetAnnotationLines returns all lines that are part of an annotation
@@ -456,7 +585,10 @@ func collectGenDecls(body *ast.BlockStmt) []*ast.GenDecl {
 // @response annotations. Only @response is repeatable (keyed by status code);
 // a duplicate in any other category — or a duplicate status code for @response —
 // is an error. Users needing composition should reference named @schema types.
-func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.BlockStmt) (*FuncInlineInfo, error) {
+//
+// funcName is only for messages: a declaration inside a handler has no name a
+// reader could find it by on its own.
+func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, funcName string, body *ast.BlockStmt) (*FuncInlineInfo, error) {
 	if body == nil {
 		return nil, nil
 	}
@@ -477,63 +609,48 @@ func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.Bl
 			continue
 		}
 
-		annotation, statusCode := detectInlineAnnotation(commentBlock.Lines)
-		if annotation == "" {
+		// detectInlineAnnotation answers "" for a name no in-function grammar
+		// defines, which is the whole of what it can say about @quer. What the
+		// user actually wrote is the only thing that can be reported, so an
+		// unclaimed comment is asked again, lexically.
+		inlineName, statusCode := detectInlineAnnotation(commentBlock.Lines)
+		if inlineName == "" {
+			written := firstAnnotationName(commentBlock)
+			if written == "" {
+				// Ordinary documentation on a local variable.
+				continue
+			}
+
+			// The error is wrapped with "in function <name>" by the caller, so
+			// it names only the declaration. The log line has no such wrapper
+			// and carries the function itself.
+			if annotation.IsKnown(written) {
+				return nil, fmt.Errorf("%s cannot annotate %q; a declaration in a function body takes: %s",
+					written, declaredName(genDecl), strings.Join(annotation.InFunction(), ", "))
+			}
+
+			log.Printf("%s: %s is not an annotation; it was skipped", declarationSubject(funcName, genDecl), written)
 			continue
 		}
 
-		// Extract struct from var or type declaration
-		var ident *ast.Ident
-		var structType *ast.StructType
-
-		if genDecl.Tok == token.VAR {
-			// var x struct { ... }
-			for _, spec := range genDecl.Specs {
-				if vs, ok := spec.(*ast.ValueSpec); ok && len(vs.Names) > 0 {
-					ident = vs.Names[0]
-					if st, ok := vs.Type.(*ast.StructType); ok {
-						structType = st
-					}
-				}
-			}
-		} else if genDecl.Tok == token.TYPE {
-			// type X struct { ... }
-			for _, spec := range genDecl.Specs {
-				if ts, ok := spec.(*ast.TypeSpec); ok {
-					ident = ts.Name
-					if st, ok := ts.Type.(*ast.StructType); ok {
-						structType = st
-					}
-				}
-			}
-		}
-
-		if ident == nil || structType == nil {
-			continue
-		}
-
-		// Extract field comments from the struct
-		fieldComments := make(map[string]*CommentBlock)
-		for _, field := range structType.Fields.List {
-			if field.Doc != nil && len(field.Names) > 0 {
-				fieldName := field.Names[0].Name
-				fieldComments[fieldName] = extractCommentBlock(fset, field.Doc)
-			}
+		ident, structType, err := inlineStructDecl(genDecl, inlineName)
+		if err != nil {
+			return nil, err
 		}
 
 		inline := &InlineStructInfo{
 			VarName:       ident.Name,
-			Annotation:    annotation,
+			Annotation:    inlineName,
 			Comment:       commentBlock,
 			Ident:         ident,
 			StatusCode:    statusCode,
-			FieldComments: fieldComments,
+			FieldComments: harvestFieldComments(fset, structType),
 		}
 
 		// Store based on annotation type. @query/@path/@header/@cookie are
 		// repeatable per schema — append. @request is single-slot. @response is
 		// keyed by status code; a duplicate status code is an error.
-		switch annotation {
+		switch inlineName {
 		case "query":
 			result.Query = append(result.Query, inline)
 		case "path":
@@ -565,42 +682,121 @@ func extractFuncInlines(fset *token.FileSet, typesInfo *types.Info, body *ast.Bl
 	return result, nil
 }
 
-// detectInlineAnnotation detects the annotation type from comment lines
-// Returns the annotation type and optionally a status code for responses
-func detectInlineAnnotation(lines []string) (annotation string, statusCode string) {
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
+// declarationSubject names a declaration inside a handler, for a message. The
+// function is half of it: a var called "filters" is not findable on its own.
+func declarationSubject(funcName string, genDecl *ast.GenDecl) string {
+	subject := "declaration in " + funcName
+	if name := declaredName(genDecl); name != "" {
+		subject = fmt.Sprintf("declaration %s.%s", funcName, name)
+	}
+	return subject
+}
 
-		if strings.HasPrefix(line, "@query") {
-			return "query", ""
-		}
-		if strings.HasPrefix(line, "@path") {
-			return "path", ""
-		}
-		if strings.HasPrefix(line, "@header") {
-			return "header", ""
-		}
-		if strings.HasPrefix(line, "@cookie") {
-			return "cookie", ""
-		}
-		if strings.HasPrefix(line, "@request") {
-			return "request", ""
-		}
-		if strings.HasPrefix(line, "@response") {
-			// Extract status code if present: @response 200 { ... } or @response 200
-			rest := strings.TrimPrefix(line, "@response")
-			rest = strings.TrimSpace(rest)
-			// Parse status code (first numeric part)
-			parts := strings.Fields(rest)
-			if len(parts) > 0 {
-				// Check if first part is a status code
-				code := parts[0]
-				if len(code) == 3 && code[0] >= '1' && code[0] <= '5' {
-					return "response", code
-				}
+// declaredName is the first name a declaration binds, or "" when it binds none.
+func declaredName(genDecl *ast.GenDecl) string {
+	for _, spec := range genDecl.Specs {
+		switch s := spec.(type) {
+		case *ast.ValueSpec:
+			if len(s.Names) > 0 {
+				return s.Names[0].Name
 			}
-			return "response", "200" // default status code
+		case *ast.TypeSpec:
+			return s.Name.Name
 		}
 	}
+	return ""
+}
+
+// inlineStructDecl reads the one struct an in-function annotation is attached
+// to.
+//
+// The annotation goes on the declaration that *defines* the struct, never on
+// one that names a struct defined elsewhere: `var f Filters` puts its @query on
+// Filters itself, and @endpoint references it by name. So the only thing
+// accepted here is a struct literal, in either the var or the type spelling —
+// `type request struct { ... }` inside a handler defines its struct just as
+// much as `var request struct { ... }` does.
+//
+// One annotation, one struct. A grouped declaration under a single annotation
+// has no single subject; the loop that used to walk one kept whichever spec
+// came last and dropped the rest without a word.
+func inlineStructDecl(genDecl *ast.GenDecl, annotation string) (*ast.Ident, *ast.StructType, error) {
+	keyword := strings.ToLower(genDecl.Tok.String())
+
+	if len(genDecl.Specs) != 1 {
+		return nil, nil, fmt.Errorf("@%s annotates a group of %d declarations; an in-function @%s takes one struct, so give each its own declaration and its own @%s",
+			annotation, len(genDecl.Specs), annotation, annotation)
+	}
+
+	switch spec := genDecl.Specs[0].(type) {
+	case *ast.ValueSpec:
+		if len(spec.Names) != 1 {
+			return nil, nil, fmt.Errorf("@%s annotates a declaration of %d variables; an in-function @%s takes one struct, so give each its own declaration and its own @%s",
+				annotation, len(spec.Names), annotation, annotation)
+		}
+		st, ok := spec.Type.(*ast.StructType)
+		if !ok {
+			return nil, nil, notAStructDefinition(annotation, keyword, spec.Names[0].Name, spec.Type)
+		}
+		return spec.Names[0], st, nil
+
+	case *ast.TypeSpec:
+		st, ok := spec.Type.(*ast.StructType)
+		if !ok {
+			return nil, nil, notAStructDefinition(annotation, keyword, spec.Name.Name, spec.Type)
+		}
+		return spec.Name, st, nil
+	}
+
+	return nil, nil, fmt.Errorf("@%s must annotate a var or type declaration", annotation)
+}
+
+// notAStructDefinition reports a declaration that carries an in-function
+// annotation without defining the struct it describes.
+func notAStructDefinition(annotation, keyword, name string, declared ast.Expr) error {
+	advice := fmt.Sprintf("write \"%s %s struct { ... }\" here, or annotate the struct where it is defined and reference it from @endpoint",
+		keyword, name)
+
+	if declared == nil {
+		return fmt.Errorf("@%s on %q declares no type; an in-function @%s must define its struct: %s", annotation, name, annotation, advice)
+	}
+	return fmt.Errorf("@%s on %q declares %s rather than defining a struct; %s", annotation, name, formatTypeExpr(declared), advice)
+}
+
+// detectInlineAnnotation reports which in-function annotation a comment block
+// opens with, and the status code when that annotation is @response.
+//
+// The names come from annotation.Declaration rather than a list here, so adding
+// an in-function annotation means editing the grammar and nothing else.
+func detectInlineAnnotation(lines []string) (name string, statusCode string) {
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+
+		def := annotation.Declaration.GetChild(fields[0])
+		if def == nil {
+			continue
+		}
+
+		if def.Name != "@response" {
+			return strings.TrimPrefix(def.Name, "@"), ""
+		}
+
+		// @response 404 { ... } — the status code is the block's metadata.
+		if len(fields) > 1 && isStatusCode(fields[1]) {
+			return "response", fields[1]
+		}
+		return "response", "200"
+	}
+
 	return "", ""
+}
+
+// isStatusCode reports whether s looks like an HTTP status code. Wildcard forms
+// like 4XX are deliberately not accepted here: they are valid in a doc-comment
+// @response, but an in-function one describes a concrete struct being returned.
+func isStatusCode(s string) bool {
+	return len(s) == 3 && s[0] >= '1' && s[0] <= '5'
 }

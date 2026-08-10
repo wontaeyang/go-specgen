@@ -1,0 +1,41 @@
+openapi: 3.1.0
+info:
+    title: Grouped Fields Fixture
+    description: Field declarations that name more than one field.
+    version: 1.0.0
+paths:
+    /points:
+        get:
+            summary: Get a point
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Point'
+components:
+    schemas:
+        Point:
+            type: object
+            properties:
+                X:
+                    type: number
+                    maximum: 180
+                    minimum: -180
+                    format: double
+                    description: Coordinate in degrees
+                Y:
+                    type: number
+                    maximum: 180
+                    minimum: -180
+                    format: double
+                    description: Coordinate in degrees
+                Z:
+                    type: number
+                    format: double
+                    description: Elevation in meters
+            required:
+                - X
+                - 'Y'
+                - Z

@@ -1,0 +1,1 @@
+parse: failed to extract comments: in function ListWidgets: @query on "f" declares Filters rather than defining a struct; write "var f struct { ... }" here, or annotate the struct where it is defined and reference it from @endpoint

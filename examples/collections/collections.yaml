@@ -1,0 +1,110 @@
+openapi: 3.1.0
+info:
+    title: Collections Fixture
+    description: Exercises maps and slices, including nested combinations.
+    version: 1.0.0
+paths:
+    /containers:
+        get:
+            summary: Get containers
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Containers'
+components:
+    schemas:
+        Containers:
+            type: object
+            properties:
+                by_id:
+                    type: object
+                    additionalProperties:
+                        $ref: '#/components/schemas/Item'
+                    description: Items keyed by ID
+                groups:
+                    type: object
+                    additionalProperties:
+                        type: array
+                        items:
+                            $ref: '#/components/schemas/Item'
+                    description: Item lists keyed by group name
+                tags:
+                    type: object
+                    additionalProperties:
+                        type: array
+                        items:
+                            type: string
+                    description: String lists keyed by name
+                buckets:
+                    type: array
+                    items:
+                        type: object
+                        additionalProperties:
+                            type: string
+                    description: List of string maps
+                nested:
+                    type: object
+                    additionalProperties:
+                        type: object
+                        additionalProperties:
+                            type: string
+                    description: Nested maps
+                matrix:
+                    type: array
+                    items:
+                        type: array
+                        items:
+                            type: integer
+                    description: List of lists
+                items:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/Item'
+                    description: List of items
+                ids:
+                    type: array
+                    items:
+                        type: integer
+                        format: int64
+                    description: Identifiers
+                times:
+                    type: array
+                    items:
+                        type: string
+                        format: date-time
+                    description: Event times
+                sizes:
+                    type: object
+                    additionalProperties:
+                        type: integer
+                        format: int64
+                    description: Sizes keyed by name
+                ratios:
+                    type: array
+                    items:
+                        type: number
+                        format: float
+                    description: Ratios
+            required:
+                - by_id
+                - groups
+                - tags
+                - buckets
+                - nested
+                - matrix
+                - items
+                - ids
+                - times
+                - sizes
+                - ratios
+        Item:
+            type: object
+            properties:
+                id:
+                    type: string
+                    description: Item identifier
+            required:
+                - id

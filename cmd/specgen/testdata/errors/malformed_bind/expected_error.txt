@@ -1,0 +1,1 @@
+parse: @endpoint[ListWidgets].@response[200]: @bind "Envelope" is not a Wrapper.Field target; name the envelope schema and the field the body binds into, as in @bind DataResponse.Data
