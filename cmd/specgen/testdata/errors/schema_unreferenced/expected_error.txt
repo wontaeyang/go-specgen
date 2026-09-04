@@ -1,1 +1,0 @@
-validate: @schema[Orphan]: not referenced by any request or response body; reference it from an endpoint or remove the @schema annotation

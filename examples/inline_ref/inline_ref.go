@@ -1,15 +1,9 @@
-// Package inline_ref references named @schemas from places that go through
+// Package inline_ref references a named @schema from places that go through
 // the generator's ref-unaware field path: an in-function response struct, an
 // in-function request struct, and a @bind wrapper's non-bound fields.
 //
 // The ref-aware path emits $ref for these; the ref-unaware one does not know
 // what a schema is and falls back to the field's OpenAPI type.
-//
-// A schema is either request or response - never both - so the request struct
-// references AuthorInput while the response struct and Envelope reference
-// Author. All three reference paths are direction seeds: the inline request
-// makes AuthorInput request-only, and both the inline response and the bind
-// wrapper's ProducedBy field make Author response-only.
 //
 //	@api {
 //	  @title Inline Ref Fixture
@@ -27,13 +21,6 @@ type Author struct {
 	// @field { @description Author identifier @format uuid }
 	ID string `json:"id"`
 
-	// @field { @description Author display name }
-	Name string `json:"name"`
-}
-
-// AuthorInput is the request-side twin of Author.
-// @schema
-type AuthorInput struct {
 	// @field { @description Author display name }
 	Name string `json:"name"`
 }
@@ -60,10 +47,10 @@ func CreatePost(w http.ResponseWriter, r *http.Request) {
 		Title string `json:"title"`
 
 		// @field { @description Post author }
-		Author AuthorInput `json:"author"`
+		Author Author `json:"author"`
 
 		// @field { @description Contributing authors }
-		Contributors []AuthorInput `json:"contributors"`
+		Contributors []Author `json:"contributors"`
 	}
 
 	// @response 201 { @bind Envelope.Data }

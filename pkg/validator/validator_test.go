@@ -36,9 +36,6 @@ func TestValidator_Validate_ValidPackage(t *testing.T) {
 						Type:   &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"},
 					},
 				},
-				// Hand-built packages skip the resolver, so the direction
-				// chain the resolver would have recorded is set directly.
-				ResponseChain: "@endpoint[GET /users].@response[200] → User",
 			},
 		},
 		Parameters: map[string]*resolver.ParameterStruct{},
@@ -230,16 +227,14 @@ func TestValidator_ValidateSchema(t *testing.T) {
 				Fields: []*resolver.Field{
 					{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 				},
-				ResponseChain: "@endpoint[GET /users].@response[200] → User",
 			},
 			wantErr: false,
 		},
 		{
 			name: "schema with no fields",
 			schema: &resolver.Schema{
-				Name:          "Empty",
-				Fields:        []*resolver.Field{},
-				ResponseChain: "@endpoint[GET /empty].@response[200] → Empty",
+				Name:   "Empty",
+				Fields: []*resolver.Field{},
 			},
 			wantErr: true,
 			errMsg:  "no fields",
@@ -252,7 +247,6 @@ func TestValidator_ValidateSchema(t *testing.T) {
 					{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 					{Name: "id", GoName: "Id", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 				},
-				ResponseChain: "@endpoint[GET /users].@response[200] → User",
 			},
 			wantErr: true,
 			errMsg:  "duplicate",
@@ -524,9 +518,8 @@ func TestValidator_ValidateField(t *testing.T) {
 				},
 				Schemas: map[string]*resolver.Schema{
 					"Test": {
-						Name:          "Test",
-						Fields:        []*resolver.Field{tt.field},
-						ResponseChain: "@endpoint[GET /tests].@response[200] → Test",
+						Name:   "Test",
+						Fields: []*resolver.Field{tt.field},
 					},
 				},
 				Parameters: map[string]*resolver.ParameterStruct{},
@@ -902,7 +895,6 @@ func TestValidator_ValidateRequestBody(t *testing.T) {
 					Fields: []*resolver.Field{
 						{Name: "id", GoName: "ID", Type: &resolver.TypeRef{Shape: resolver.ShapeScalar, Type: "string"}},
 					},
-					RequestChain: "@endpoint[POST /users].@request → User",
 				},
 			},
 			wantErr: false,
@@ -913,7 +905,7 @@ func TestValidator_ValidateRequestBody(t *testing.T) {
 				Body: &resolver.Body{Schema: "User"},
 			},
 			schemas: map[string]*resolver.Schema{
-				"User": {Name: "User", RequestChain: "@endpoint[POST /users].@request → User"},
+				"User": {Name: "User"},
 			},
 			wantErr: true,
 			errMsg:  "@contentType",

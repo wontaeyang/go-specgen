@@ -72,15 +72,11 @@ type AreaQuery struct {
 //	}
 func SearchZone(w http.ResponseWriter, r *http.Request) {}
 
-// SearchArea reads the area query. The 500 response references Alpha so every
-// schema here is body-reachable: a parameter field naming a schema is one of
-// the errors under test, not a direction seed, and without a body reference
-// Alpha would add an unreferenced-schema error this fixture is not about.
+// SearchArea reads the area query.
 //
 //	@endpoint GET /areas {
 //	  @summary Search an area
 //	  @query AreaQuery
 //	  @response 200 { @body Mid }
-//	  @response 500 { @body Alpha }
 //	}
 func SearchArea(w http.ResponseWriter, r *http.Request) {}

@@ -51,17 +51,6 @@ paths:
             responses:
                 "201":
                     description: Promo created
-    /tag-defaults:
-        get:
-            summary: Get the tag defaults sample
-            operationId: getTagDefaults
-            responses:
-                "200":
-                    description: OK
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/TagDefaults'
     /users/{id}:
         patch:
             summary: Patch user fields
@@ -92,7 +81,9 @@ components:
                     type: string
                     description: Promo code
                 percent:
-                    type: integer
+                    type:
+                        - integer
+                        - "null"
                     maximum: 100
                     minimum: 0
                     description: Discount percent; 0 is a valid value

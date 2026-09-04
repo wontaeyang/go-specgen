@@ -18,12 +18,12 @@ paths:
                                     minLength: 1
                                     description: Post title
                                 author:
-                                    $ref: '#/components/schemas/AuthorInput'
+                                    $ref: '#/components/schemas/Author'
                                     description: Post author
                                 contributors:
                                     type: array
                                     items:
-                                        $ref: '#/components/schemas/AuthorInput'
+                                        $ref: '#/components/schemas/Author'
                                     description: Contributing authors
                             required:
                                 - title
@@ -71,14 +71,6 @@ components:
                     description: Author display name
             required:
                 - id
-                - name
-        AuthorInput:
-            type: object
-            properties:
-                name:
-                    type: string
-                    description: Author display name
-            required:
                 - name
         Envelope:
             type: object

@@ -63,23 +63,6 @@ type User struct {
 	Bio string `json:"bio,omitempty"`
 }
 
-// UserInput is the request-side twin of User. A schema is either request or
-// response - never both - so the create/update payload is its own type, and
-// its required/optional split follows decoding: non-pointer fields must be
-// present, pointer fields may be absent.
-//
-// @schema { @description Payload for creating or updating a user }
-type UserInput struct {
-	// @field { @description User's email address @format email }
-	Email string `json:"email"`
-
-	// @field { @description User's display name @minLength 1 @maxLength 100 }
-	Name string `json:"name"`
-
-	// @field { @description Optional biography }
-	Bio *string `json:"bio,omitempty"`
-}
-
 // -----------------------------------------------------------------------------
 // Parameter Types
 // -----------------------------------------------------------------------------
@@ -136,7 +119,7 @@ func ListUsers() {}
 //	  @summary Create a new user
 //	  @description Creates a new user account.
 //	  @request {
-//	    @body UserInput
+//	    @body User
 //	  }
 //	  @response 201 {
 //	    @body User
@@ -159,7 +142,7 @@ func CreateUser() {}
 //	  @summary Update user
 //	  @path UserPath
 //	  @request {
-//	    @body UserInput
+//	    @body User
 //	  }
 //	  @response 200 {
 //	    @body User

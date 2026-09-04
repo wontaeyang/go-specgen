@@ -202,7 +202,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UserInput"
+                "$ref": "#/components/schemas/User"
               }
             }
           },
@@ -573,33 +573,6 @@
           "zip"
         ]
       },
-      "AddressInput": {
-        "type": "object",
-        "properties": {
-          "street": {
-            "type": "string",
-            "description": "Street address"
-          },
-          "city": {
-            "type": "string",
-            "description": "City"
-          },
-          "state": {
-            "type": "string",
-            "description": "State or province"
-          },
-          "zip": {
-            "type": "string",
-            "description": "ZIP or postal code"
-          }
-        },
-        "required": [
-          "street",
-          "city",
-          "state",
-          "zip"
-        ]
-      },
       "Error": {
         "type": "object",
         "properties": {
@@ -743,33 +716,6 @@
         },
         "required": [
           "id",
-          "email",
-          "name",
-          "billing_address"
-        ]
-      },
-      "UserInput": {
-        "type": "object",
-        "properties": {
-          "email": {
-            "type": "string",
-            "format": "email",
-            "description": "User email"
-          },
-          "name": {
-            "type": "string",
-            "description": "User display name"
-          },
-          "address": {
-            "$ref": "#/components/schemas/AddressInput",
-            "description": "Optional mailing address"
-          },
-          "billing_address": {
-            "$ref": "#/components/schemas/AddressInput",
-            "description": "Billing address"
-          }
-        },
-        "required": [
           "email",
           "name",
           "billing_address"

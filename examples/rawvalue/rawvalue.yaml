@@ -3,17 +3,7 @@ info:
     title: Raw Value Example
     description: Demonstrates that a raw value's braces are text, not block structure.
     version: 1.0.0
-paths:
-    /patterns:
-        get:
-            summary: Get the pattern samples
-            responses:
-                "200":
-                    description: Pattern samples
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/Pattern'
+paths: {}
 components:
     schemas:
         Pattern:

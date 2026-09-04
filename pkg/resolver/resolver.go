@@ -176,7 +176,14 @@ func (r *Resolver) Resolve() (*Package, error) {
 		return nil, err
 	}
 
-	inferDirections(resolved)
+	// In-function @request structs are decoded, not encoded, so their fields
+	// trade the marshal rule for the decode rule. Named schemas are
+	// directionless and keep the marshal rule everywhere.
+	for _, endpoint := range resolved.Endpoints {
+		if endpoint.Request != nil && endpoint.Request.Inline != nil {
+			applyDecodeRule(endpoint.Request.Inline.Fields)
+		}
+	}
 
 	return resolved, nil
 }

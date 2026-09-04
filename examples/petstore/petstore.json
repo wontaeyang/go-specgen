@@ -383,8 +383,7 @@
         },
         "required": [
           "name",
-          "category",
-          "tags"
+          "category"
         ]
       },
       "Error": {
@@ -527,10 +526,7 @@
             "minimum": 0,
             "description": "Pet age in years"
           }
-        },
-        "required": [
-          "tags"
-        ]
+        }
       }
     },
     "securitySchemes": {
