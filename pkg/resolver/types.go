@@ -1,5 +1,7 @@
 package resolver
 
+import "github.com/wontaeyang/go-specgen/pkg/parser"
+
 // Package contains the fully resolved parsed package with type information
 type Package struct {
 	// Original parsed package
@@ -236,15 +238,13 @@ type Field struct {
 	ExclusiveMinimum *float64
 	ExclusiveMaximum *float64
 
-	// Decode-rule inputs, recorded by resolveField and consumed by
-	// applyDecodeRule in decode.go. Required and Nullable above hold the
-	// marshal rule's answer; an inline @request field is re-derived from
-	// these raw facts instead, because the decode rule cannot be recovered
-	// from the marshal result once overrides have been applied. Unexported:
+	// Required and Nullable above hold the marshal rule's answer. An inline
+	// @request field is re-derived by applyDecodeRule (decode.go) from these
+	// two raw facts instead, because once overrides are folded into the
+	// marshal result the decode rule cannot be recovered from it. Unexported:
 	// nothing outside the resolver needs them.
-	pointer          bool
-	overrideRequired *bool
-	overrideNullable *bool
+	pointer    bool
+	annotation *parser.Field
 }
 
 // Endpoint contains an endpoint with resolved types.

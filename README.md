@@ -255,8 +255,7 @@ rather than encoded as `null`, so the field is optional and non-nullable.
 
 **In-function `@request` structs** are the one exception. A named `@schema` is
 directionless and always uses the marshal rule above, but an inline `@request`
-struct exists only as a request body, so its own fields describe what
-`json.Unmarshal` tolerates instead:
+struct exists only as a request body, so its own fields follow a decode rule:
 
 | Type | Required | Nullable |
 |------|----------|----------|
@@ -264,11 +263,17 @@ struct exists only as a request body, so its own fields describe what
 | `*string` | No | No |
 | `string` with `omitempty`/`omitzero` | Yes | No |
 
-A pointer means the field may be absent, but decoding `null` into a non-pointer
-fails, so nothing is nullable by default. `omitempty`/`omitzero` only affect
-encoding and are ignored. `@required`/`@nullable` overrides still win. The rule
-applies only to the inline struct's own fields — a named schema referenced from
-one keeps the marshal rule.
+`json.Unmarshal` never rejects an absent field and never rejects `null` (it
+sets a pointer, slice or map to nil and silently ignores it elsewhere), so the
+rule is about what the handler can observe rather than what decoding tolerates.
+A pointer is the only way to tell an absent field apart from its zero value, so
+a pointer field is optional and everything else is required. Nothing is
+nullable: `null` is indistinguishable from absence on a pointer and invisible
+on anything else, so accepting it would promise something the handler cannot
+see. `omitempty`/`omitzero` only affect encoding and are ignored.
+`@required`/`@nullable` overrides still win. The rule applies only to the
+inline struct's own fields — a named schema referenced from one keeps the
+marshal rule.
 
 **Parameter fields** — determined by parameter type:
 

@@ -1300,3 +1300,100 @@ func TestResponseDescription(t *testing.T) {
 		})
 	}
 }
+
+// TestResolver_InlineRequestDecodeRule covers applyDecodeRule end to end: the
+// raw facts resolveField records, the recursion into anonymous objects and
+// container elements, override re-application, and the two places the rule
+// must not reach (a referenced named schema, an inline response).
+func TestResolver_InlineRequestDecodeRule(t *testing.T) {
+	resolver := newTestResolver(t, "testdata/decode")
+	resolved, err := resolver.Resolve()
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if len(resolved.Endpoints) != 1 {
+		t.Fatalf("got %d endpoints, want 1", len(resolved.Endpoints))
+	}
+	endpoint := resolved.Endpoints[0]
+	if endpoint.Request == nil || endpoint.Request.Inline == nil {
+		t.Fatal("Create should have an inline request")
+	}
+
+	byName := func(fields []*Field) map[string]*Field {
+		m := make(map[string]*Field, len(fields))
+		for _, f := range fields {
+			m[f.Name] = f
+		}
+		return m
+	}
+	check := func(t *testing.T, fields map[string]*Field, name string, wantRequired, wantNullable bool) {
+		t.Helper()
+		f, ok := fields[name]
+		if !ok {
+			t.Fatalf("field %q not found", name)
+		}
+		if f.Required != wantRequired || f.Nullable != wantNullable {
+			t.Errorf("field %q Required/Nullable = %v/%v, want %v/%v",
+				name, f.Required, f.Nullable, wantRequired, wantNullable)
+		}
+	}
+
+	req := byName(endpoint.Request.Inline.Fields)
+
+	t.Run("top level", func(t *testing.T) {
+		check(t, req, "plain", true, false)
+		check(t, req, "ptr", false, false)
+		check(t, req, "omit", true, false) // omitempty is an encoding fact
+		check(t, req, "ptr_omit", false, false)
+		check(t, req, "slice", true, false) // nil-able, but not a pointer
+		check(t, req, "slice_ptr", false, false)
+		check(t, req, "tag", true, false)
+	})
+
+	t.Run("overrides win", func(t *testing.T) {
+		check(t, req, "optional", false, false)
+		check(t, req, "nullable", false, true)
+		check(t, req, "forced", true, true)
+	})
+
+	t.Run("nested object", func(t *testing.T) {
+		nested := byName(req["nested"].Type.Fields)
+		check(t, nested, "inner", true, false)
+		check(t, nested, "inner_ptr", false, false)
+	})
+
+	t.Run("array element", func(t *testing.T) {
+		items := byName(req["items"].Type.Elem.Fields)
+		check(t, items, "item", true, false)
+		check(t, items, "item_ptr", false, false)
+	})
+
+	t.Run("map value", func(t *testing.T) {
+		vals := byName(req["by_key"].Type.Elem.Fields)
+		check(t, vals, "val", true, false)
+		check(t, vals, "val_ptr", false, false)
+	})
+
+	t.Run("referenced schema keeps marshal rule", func(t *testing.T) {
+		if req["tag"].Type.Shape != ShapeRef {
+			t.Fatalf("tag shape = %v, want ShapeRef", req["tag"].Type.Shape)
+		}
+		tag := byName(resolved.Schemas["Tag"].Fields)
+		check(t, tag, "label", true, true)
+	})
+
+	t.Run("inline response keeps marshal rule", func(t *testing.T) {
+		var body *InlineBody
+		for _, resp := range endpoint.Responses {
+			if resp.StatusCode == "201" {
+				body = resp.Inline
+			}
+		}
+		if body == nil {
+			t.Fatal("Create should have an inline 201 response")
+		}
+		created := byName(body.Fields)
+		check(t, created, "id", true, false)
+		check(t, created, "alias", true, true)
+	})
+}

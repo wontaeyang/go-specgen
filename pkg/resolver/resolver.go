@@ -568,21 +568,18 @@ func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser
 	// omitempty/omitzero drop a nil pointer rather than encoding null, so such
 	// a field can never appear as null on the wire.
 	omitted := omitsWhenEmpty(tag, field.Type())
+	pointer := isNullable(field.Type())
 
 	resolved := &Field{
-		Name:     fieldName,
-		GoName:   field.Name(),
-		GoType:   field.Type().String(),
-		Type:     typeRef,
-		Format:   typeRef.Format,
-		Required: !omitted,
-		Nullable: isNullable(field.Type()) && !omitted,
-		pointer:  isNullable(field.Type()),
-	}
-
-	if annotation != nil {
-		resolved.overrideRequired = annotation.Required
-		resolved.overrideNullable = annotation.Nullable
+		Name:       fieldName,
+		GoName:     field.Name(),
+		GoType:     field.Type().String(),
+		Type:       typeRef,
+		Format:     typeRef.Format,
+		Required:   !omitted,
+		Nullable:   pointer && !omitted,
+		pointer:    pointer,
+		annotation: annotation,
 	}
 
 	applyAnnotationOverrides(resolved, annotation)
@@ -835,12 +832,7 @@ func applyAnnotationOverrides(resolved *Field, annotation *parser.Field) {
 	if annotation.ExclusiveMaximum != nil {
 		resolved.ExclusiveMaximum = annotation.ExclusiveMaximum
 	}
-	if annotation.Required != nil {
-		resolved.Required = *annotation.Required
-	}
-	if annotation.Nullable != nil {
-		resolved.Nullable = *annotation.Nullable
-	}
+	overrideRequiredNullable(resolved, annotation)
 	if annotation.Deprecated {
 		resolved.Deprecated = true
 	}
@@ -849,6 +841,22 @@ func applyAnnotationOverrides(resolved *Field, annotation *parser.Field) {
 	}
 	if annotation.WriteOnly {
 		resolved.WriteOnly = true
+	}
+}
+
+// overrideRequiredNullable applies @required and @nullable on top of whatever
+// rule produced the field's current Required/Nullable. It is split out of
+// applyAnnotationOverrides because applyDecodeRule replaces those two values
+// and has to let the same overrides win again.
+func overrideRequiredNullable(resolved *Field, annotation *parser.Field) {
+	if annotation == nil {
+		return
+	}
+	if annotation.Required != nil {
+		resolved.Required = *annotation.Required
+	}
+	if annotation.Nullable != nil {
+		resolved.Nullable = *annotation.Nullable
 	}
 }
 
