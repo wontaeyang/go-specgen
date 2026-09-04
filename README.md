@@ -221,9 +221,36 @@ type StatusCode int     // -> type: integer
 type Tags []string      // -> type: array, items: string
 ```
 
+### Schema direction
+
+Every schema is either a **request** schema or a **response** schema — never
+both. Direction is not declared; it is inferred from the endpoints that
+reference the schema: anything reachable from a `@request` body — directly,
+through another schema's fields, or via a `@bind` wrapper — is a request
+schema, and anything reachable from a `@response` body is a response schema.
+In-function `@request`/`@response` structs seed the same walk, and their own
+fields follow their slot's direction.
+
+Direction decides which required/nullable rule applies (next section). Two
+situations are errors rather than guesses:
+
+- **Reachable from both directions.** What a request must contain and what a
+  response is guaranteed to contain are different facts about the same struct,
+  so a schema cannot serve both sides. The error shows one reference chain per
+  direction and asks for a split:
+
+  ```
+  validate: @schema[User]: used in both request and response bodies (request: @endpoint[POST /users].@request → User; response: @endpoint[GET /users/{id}].@response[200] → User); split it into User for responses and UserInput for requests
+  ```
+
+- **Reachable from neither.** An unreferenced schema has no direction to
+  infer, and would otherwise sit in the document silently — which is how a
+  typo in a `@body` name hides.
+
 ### Required vs Optional
 
-**Schema fields** — determined by Go types:
+**Response schema fields** describe what `encoding/json` actually puts on the
+wire, not what the tag text says:
 
 | Type | Required | Nullable |
 |------|----------|----------|
@@ -233,9 +260,6 @@ type Tags []string      // -> type: array, items: string
 | `*string` with `omitempty` | No | No |
 | struct (e.g. `time.Time`) with `omitempty` | Yes | No |
 | struct with `omitzero` | No | No |
-
-These defaults are outcome-oriented: they describe what `encoding/json`
-actually puts on the wire, not what the tag text says.
 
 A pointer alone makes a field nullable because `encoding/json` marshals a nil
 pointer as `null`. Adding `omitempty` changes that: a nil pointer is omitted
@@ -252,6 +276,20 @@ is still emitted on every response and stays required.
 field optional — including structs, where it omits the zero value `omitempty`
 cannot. On pointers it behaves like `omitempty`: the nil pointer is omitted
 rather than encoded as `null`, so the field is optional and non-nullable.
+
+**Request schema fields** describe what `json.Unmarshal` accepts. Decoding
+ignores `omitempty`/`omitzero` entirely, so the tag says nothing about what a
+request may leave out:
+
+| Type | Required | Nullable |
+|------|----------|----------|
+| `string` (any tag options) | Yes | No |
+| `*string` (any tag options) | No | No |
+
+A non-pointer field is required because absence just leaves the zero value —
+the handler cannot tell a missing field from a sent zero. A pointer field is
+optional for the same reason in reverse: nil is what absence looks like.
+Nothing is nullable unless `@nullable true` opts in.
 
 **Parameter fields** — determined by parameter type:
 
@@ -286,7 +324,7 @@ type CreatePromo struct {
 // @schema
 type UpdateUserPatch struct {
     // PATCH semantics: omit to leave unchanged, send null to clear.
-    // Pointer+omitempty defaults to non-nullable, so opt back in explicitly
+    // Request fields default to non-nullable, so opt in explicitly
     // @field { @description Replace email; omit to leave unchanged, null to clear @nullable true }
     Email *string `json:"email,omitempty"`
 }
@@ -495,6 +533,9 @@ The `@api` block can appear directly above the `package` keyword or as a standal
   @deprecated    Mark as deprecated
 }
 ```
+
+A schema must be reachable from at least one endpoint body, and only from one
+direction — see [Schema direction](#schema-direction).
 
 ### @endpoint
 
@@ -752,8 +793,9 @@ supported. A field tagged for a different kind than the struct it sits in
 
 ### Where the spec and `encoding/json` differ
 
-specgen describes what `encoding/json` puts on the wire, so most of the time the
-two agree by construction. These are the places they deliberately do not:
+specgen describes what `encoding/json` puts on the wire (response schemas) and
+what `json.Unmarshal` accepts (request schemas), so most of the time the two
+agree by construction. These are the places they deliberately do not:
 
 | | `encoding/json` | specgen |
 |---|---|---|
@@ -778,6 +820,8 @@ specgen fails rather than emitting a spec it cannot stand behind. The cases:
 - a parameter that is not a scalar or a list of scalars
 - a parameter field tagged for a different kind than its struct
 - a body naming a schema that does not exist
+- a schema reachable from both request and response bodies
+- a schema no request or response body references
 - an endpoint tag with no API-level `@tag`
 - the same parameter name twice in the same location
 - constraints that contradict each other, or apply to the wrong type

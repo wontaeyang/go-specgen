@@ -136,6 +136,7 @@ components:
                 - title
                 - status
                 - priority
+                - categories
         Task:
             type: object
             properties:

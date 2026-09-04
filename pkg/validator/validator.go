@@ -187,6 +187,37 @@ func (v *Validator) validateSchema(name string, schema *resolver.Schema) {
 		}
 		fieldNames[field.Name] = true
 	}
+
+	v.validateSchemaDirection(path, schema)
+}
+
+// validateSchemaDirection checks the schema's inferred direction, recorded by
+// the resolver as one reference chain per direction.
+//
+// A schema reachable from both directions has no single required/nullable
+// rule: what a request must contain and what a response is guaranteed to
+// contain are different facts about the same struct. Rather than pick one, the
+// error shows how each direction reaches the schema and asks for a split.
+//
+// A schema reachable from neither has no inferable direction at all, so it
+// cannot be emitted — and an annotation that silently did nothing would be a
+// bug wearing a declaration's clothes.
+//
+// Generic templates are exempt: they are never emitted (their instantiation
+// aliases are), so they legitimately have no direction of their own.
+func (v *Validator) validateSchemaDirection(path string, schema *resolver.Schema) {
+	if schema.IsGeneric {
+		return
+	}
+
+	switch {
+	case schema.RequestChain != "" && schema.ResponseChain != "":
+		v.addError(path, fmt.Sprintf(
+			"used in both request and response bodies (request: %s; response: %s); split it into %s for responses and %sInput for requests",
+			schema.RequestChain, schema.ResponseChain, schema.Name, schema.Name))
+	case schema.RequestChain == "" && schema.ResponseChain == "":
+		v.addError(path, "not referenced by any request or response body; reference it from an endpoint or remove the @schema annotation")
+	}
 }
 
 // validateParameter validates a parameter struct

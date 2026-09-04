@@ -93,6 +93,41 @@ type User struct {
 	BillingAddress *Address `json:"billing_address"`
 }
 
+// AddressInput is the request-side twin of Address. The split is transitive:
+// because User is response-only, everything it references is too, so the
+// request payload needs its own address type.
+// @schema
+type AddressInput struct {
+	// @field { @description Street address }
+	Street string `json:"street"`
+
+	// @field { @description City }
+	City string `json:"city"`
+
+	// @field { @description State or province }
+	State string `json:"state"`
+
+	// @field { @description ZIP or postal code }
+	ZIP string `json:"zip"`
+}
+
+// UserInput is the request-side twin of User: the server assigns the ID, and
+// the addresses reference AddressInput rather than Address.
+// @schema
+type UserInput struct {
+	// @field { @description User email @format email }
+	Email string `json:"email"`
+
+	// @field { @description User display name }
+	Name string `json:"name"`
+
+	// @field { @description Optional mailing address }
+	Address *AddressInput `json:"address,omitempty"`
+
+	// @field { @description Billing address }
+	BillingAddress AddressInput `json:"billing_address"`
+}
+
 // Product represents a product
 // @schema
 type Product struct {
@@ -260,7 +295,7 @@ func GetProduct(w http.ResponseWriter, r *http.Request) {}
 //	  @summary Create a user
 //	  @description Creates a user and returns it wrapped in the API response.
 //	  @request {
-//	    @body User
+//	    @body UserInput
 //	  }
 //	  @response 201 {
 //	    @body User

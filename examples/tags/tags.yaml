@@ -6,6 +6,16 @@ info:
         For different field names per content type, use separate structs.
     version: 1.0.0
 paths:
+    /user-edge-cases:
+        get:
+            summary: Get the tag-resolution edge cases
+            responses:
+                "200":
+                    description: Edge cases
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/UserEdgeCases'
     /users:
         post:
             summary: Create a user

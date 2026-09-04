@@ -45,7 +45,7 @@ paths:
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/User'
+                            $ref: '#/components/schemas/UserInput'
                 required: true
             responses:
                 "201":
@@ -105,7 +105,7 @@ paths:
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/User'
+                            $ref: '#/components/schemas/UserInput'
                 required: true
             responses:
                 "200":
@@ -198,3 +198,22 @@ components:
                 - name
                 - created_at
             description: User account information
+        UserInput:
+            type: object
+            properties:
+                email:
+                    type: string
+                    format: email
+                    description: User's email address
+                name:
+                    type: string
+                    maxLength: 100
+                    minLength: 1
+                    description: User's display name
+                bio:
+                    type: string
+                    description: Optional biography
+            required:
+                - email
+                - name
+            description: Payload for creating or updating a user

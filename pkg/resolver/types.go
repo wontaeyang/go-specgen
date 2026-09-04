@@ -90,6 +90,15 @@ type Schema struct {
 	// TypeArg is the resolved type argument for generic instantiations
 	// e.g., for "DataResponse[User]", this would be "User"
 	TypeArg string
+
+	// RequestChain and ResponseChain are set by the direction pass at the end
+	// of Resolve: one rendered reference chain from an endpoint body to this
+	// schema per direction, empty when the schema is unreachable from that
+	// direction. A non-empty chain is what marks the schema as having that
+	// direction; the text exists so the validator's errors can show how the
+	// schema got it.
+	RequestChain  string
+	ResponseChain string
 }
 
 // ParameterStruct contains a parameter struct with resolved type information
@@ -235,6 +244,16 @@ type Field struct {
 	Maximum          *float64
 	ExclusiveMinimum *float64
 	ExclusiveMaximum *float64
+
+	// Direction-pass inputs, recorded by resolveField and consumed by
+	// applyDecodeRule in direction.go. Required and Nullable above hold the
+	// marshal rule's answer; a request-direction field is re-derived from
+	// these raw facts instead, because the decode rule cannot be recovered
+	// from the marshal result once overrides have been applied. Unexported:
+	// nothing outside the resolver needs them.
+	pointer          bool
+	overrideRequired *bool
+	overrideNullable *bool
 }
 
 // Endpoint contains an endpoint with resolved types.

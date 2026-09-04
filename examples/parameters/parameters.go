@@ -25,6 +25,17 @@ type Resource struct {
 	Type string `json:"type"`
 }
 
+// ResourceInput is the request-side twin of Resource: the server assigns the
+// ID, so the create payload carries only the writable fields.
+// @schema
+type ResourceInput struct {
+	// @field { @description Resource name }
+	Name string `json:"name"`
+
+	// @field { @description Resource type }
+	Type string `json:"type"`
+}
+
 // -----------------------------------------------------------------------------
 // Path Parameters
 // -----------------------------------------------------------------------------
@@ -197,7 +208,7 @@ func GetNestedResource(w http.ResponseWriter, r *http.Request) {}
 //	  @header IdempotencyHeader
 //	  @cookie SessionCookie
 //	  @request {
-//	    @body Resource
+//	    @body ResourceInput
 //	  }
 //	  @response 201 {
 //	    @body Resource

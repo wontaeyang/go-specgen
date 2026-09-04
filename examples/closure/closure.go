@@ -8,18 +8,6 @@ package closure
 
 import "net/http"
 
-// @schema
-type User struct {
-	// @field { @description User ID @format uuid }
-	ID string `json:"id"`
-
-	// @field { @description User name }
-	Name string `json:"name"`
-
-	// @field { @description User email @format email }
-	Email string `json:"email"`
-}
-
 // HandleGreet demonstrates the closure handler pattern.
 // Request struct is in the outer function, response struct is in the returned handler.
 //

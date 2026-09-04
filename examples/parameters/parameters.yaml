@@ -191,7 +191,7 @@ paths:
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/Resource'
+                            $ref: '#/components/schemas/ResourceInput'
                 required: true
             responses:
                 "201":
@@ -257,5 +257,17 @@ components:
                     description: Resource type
             required:
                 - id
+                - name
+                - type
+        ResourceInput:
+            type: object
+            properties:
+                name:
+                    type: string
+                    description: Resource name
+                type:
+                    type: string
+                    description: Resource type
+            required:
                 - name
                 - type

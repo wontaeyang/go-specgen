@@ -141,3 +141,17 @@ func GetUserXML() {}
 //	  }
 //	}
 func CreateUser() {}
+
+// GetUserEdgeCases exists so UserEdgeCases is reachable: a schema's direction
+// is inferred from the endpoints that use it, and an unreferenced schema is an
+// error.
+//
+//	@endpoint GET /user-edge-cases {
+//	  @summary Get the tag-resolution edge cases
+//	  @response 200 {
+//	    @contentType json
+//	    @body UserEdgeCases
+//	    @description Edge cases
+//	  }
+//	}
+func GetUserEdgeCases() {}

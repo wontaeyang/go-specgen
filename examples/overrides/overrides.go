@@ -16,6 +16,12 @@ import (
 // Default behavior (no overrides) — for comparison
 // -----------------------------------------------------------------------------
 //
+// Defaults depend on a schema's direction, inferred from the endpoints that
+// reference it. Response schemas describe what encoding/json actually puts on
+// the wire; request schemas describe what json.Unmarshal accepts.
+//
+// Response direction:
+//
 //   Field declaration                | Required | Nullable
 //   ---------------------------------|----------|----------
 //   string                           | true     | false
@@ -31,9 +37,6 @@ import (
 //   time.Time,omitempty              | true     | false
 //   time.Time,omitzero               | false    | false
 //
-// Defaults are outcome-oriented: they describe what encoding/json actually
-// puts on the wire, not what the tag text says.
-//
 // A pointer with omitempty is optional but NOT nullable: encoding/json omits
 // a nil pointer instead of encoding null, so null never appears on the wire.
 //
@@ -45,12 +48,23 @@ import (
 // the zero value of any type, including structs, so it always makes the
 // field optional.
 //
-// `omitempty` only affects JSON encoding (response side), so using it to mark
-// a request field as optional conflates two concerns. The @required override
-// lets you mark a request field optional without touching the json tag.
+// Request direction: json.Unmarshal ignores omitempty/omitzero entirely, so
+// the tag says nothing about what a request may leave out. A non-pointer
+// field is required — absence leaves the zero value, indistinguishable from a
+// sent zero — a pointer field is optional, and nothing is nullable unless
+// @nullable opts in:
+//
+//   Field declaration                | Required | Nullable
+//   ---------------------------------|----------|----------
+//   string    (any tag options)      | true     | false
+//   *string   (any tag options)      | false    | false
+//
+// @required and @nullable override either direction's defaults.
 
-// TagDefaults exercises every row of the table above with no overrides, so the
-// generated output is golden-verified documentation of the defaults.
+// TagDefaults exercises every row of the response table above with no
+// overrides, so the generated output is golden-verified documentation of the
+// defaults. GetTagDefaults returns it, which is what makes it a response
+// schema.
 // @schema
 type TagDefaults struct {
 	// @field { @description string: required, not nullable }
@@ -97,7 +111,9 @@ type TagDefaults struct {
 // LoginRequest demonstrates @required false on a non-pointer optional input.
 //
 // TFACode is optional but uses `string` (not `*string`) so the zero value is
-// the empty string — avoids pointer noise in handler code.
+// the empty string — avoids pointer noise in handler code. Request-direction
+// non-pointer fields are required by default, so the optionality has to be
+// declared.
 // @schema
 type LoginRequest struct {
 	// @field { @description User email @format email }
@@ -113,8 +129,9 @@ type LoginRequest struct {
 // CreatePromo demonstrates @required true on a pointer field.
 //
 // Percent uses *int so the handler can distinguish "not sent" from "sent 0"
-// (0 is a valid discount). The API contract still requires the field to be
-// present in the request body.
+// (0 is a valid discount). Request-direction pointer fields are optional by
+// default, but the API contract still requires the field to be present in the
+// request body.
 // @schema
 type CreatePromo struct {
 	// @field { @description Promo code }
@@ -124,12 +141,11 @@ type CreatePromo struct {
 	Percent *int `json:"percent"`
 }
 
-// UpdateUserPatch demonstrates @nullable true on a pointer+omitempty field.
+// UpdateUserPatch demonstrates @nullable true on a pointer field.
 //
 // PATCH semantics: omit the field to leave it unchanged, send explicit `null`
-// to clear the value. Pointer+omitempty defaults to non-nullable (nil is
-// omitted, never encoded as null), so accepting null in requests requires
-// opting back in with @nullable true.
+// to clear the value. Request-direction fields default to non-nullable, so
+// accepting null requires opting in with @nullable true.
 // @schema
 type UpdateUserPatch struct {
 	// @field { @description Replace email; omit to leave unchanged, null to clear @format email @nullable true }
@@ -202,6 +218,18 @@ func PatchUser(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = path
 }
+
+// GetTagDefaults returns the defaults table (makes TagDefaults reachable, and
+// as a response schema)
+//
+//	@endpoint GET /tag-defaults {
+//	  @operationID getTagDefaults
+//	  @summary Get the tag defaults sample
+//	  @response 200 {
+//	    @body TagDefaults
+//	  }
+//	}
+func GetTagDefaults(w http.ResponseWriter, r *http.Request) {}
 
 // GetProfile returns a profile (demonstrates @nullable true on non-pointer)
 //

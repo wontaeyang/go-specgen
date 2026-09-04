@@ -262,6 +262,7 @@ components:
             required:
                 - name
                 - category
+                - tags
         Error:
             type: object
             properties:
@@ -373,6 +374,8 @@ components:
                     maximum: 100
                     minimum: 0
                     description: Pet age in years
+            required:
+                - tags
     securitySchemes:
         bearerAuth:
             type: http

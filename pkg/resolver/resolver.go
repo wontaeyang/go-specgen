@@ -176,6 +176,8 @@ func (r *Resolver) Resolve() (*Package, error) {
 		return nil, err
 	}
 
+	inferDirections(resolved)
+
 	return resolved, nil
 }
 
@@ -568,6 +570,12 @@ func (r *Resolver) resolveField(field *types.Var, tag string, annotation *parser
 		Format:   typeRef.Format,
 		Required: !omitted,
 		Nullable: isNullable(field.Type()) && !omitted,
+		pointer:  isNullable(field.Type()),
+	}
+
+	if annotation != nil {
+		resolved.overrideRequired = annotation.Required
+		resolved.overrideNullable = annotation.Nullable
 	}
 
 	applyAnnotationOverrides(resolved, annotation)

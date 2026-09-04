@@ -56,3 +56,15 @@ type Pattern struct {
 	// }
 	SpacedQuantifierBlock string `json:"spacedQuantifierBlock"`
 }
+
+// GetPatterns exists so Pattern is reachable: a schema's direction is inferred
+// from the endpoints that use it, and an unreferenced schema is an error.
+//
+//	@endpoint GET /patterns {
+//	  @summary Get the pattern samples
+//	  @response 200 {
+//	    @body Pattern
+//	    @description Pattern samples
+//	  }
+//	}
+func GetPatterns() {}

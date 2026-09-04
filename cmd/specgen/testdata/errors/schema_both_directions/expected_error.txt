@@ -1,0 +1,4 @@
+validate: 2 validation errors:
+  1. @schema[Author]: used in both request and response bodies (request: @endpoint[POST /users].@request → User → field Author → Author; response: @endpoint[GET /users/{id}].@response[200] → User → field Author → Author); split it into Author for responses and AuthorInput for requests
+  2. @schema[User]: used in both request and response bodies (request: @endpoint[POST /users].@request → User; response: @endpoint[GET /users/{id}].@response[200] → User); split it into User for responses and UserInput for requests
+
