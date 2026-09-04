@@ -70,6 +70,17 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 
 		// @field { @description User name }
 		Name string `json:"name"`
+
+		// Decode rule: a pointer is how the handler tells absence from the
+		// zero value, so the field is optional. Not nullable: null decodes
+		// the same as absence.
+		// @field { @description Display nickname }
+		Nickname *string `json:"nickname"`
+
+		// Decode rule: omitempty only affects encoding, so a non-pointer
+		// field stays required.
+		// @field { @description Preferred locale }
+		Locale string `json:"locale,omitempty"`
 	}
 
 	// @response 201

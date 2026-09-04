@@ -387,9 +387,16 @@ paths:
                                 name:
                                     type: string
                                     description: User name
+                                nickname:
+                                    type: string
+                                    description: Display nickname
+                                locale:
+                                    type: string
+                                    description: Preferred locale
                             required:
                                 - email
                                 - name
+                                - locale
                 required: true
             responses:
                 "201":
